@@ -1,7 +1,29 @@
 """Gwen AST node definitions."""
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Any
+from typing import List, Optional, Any, Union
+
+
+# --- Types ---
+
+TypeNode = Union["TypeName", "GenericType", "FuncType"]
+
+@dataclass
+class TypeName:
+    name: str
+    line: int = 0
+
+@dataclass
+class GenericType:
+    base: str
+    params: List[TypeNode] = field(default_factory=list)
+    line: int = 0
+
+@dataclass
+class FuncType:
+    param_types: List[TypeNode] = field(default_factory=list)
+    return_type: Optional[TypeNode] = None
+    line: int = 0
 
 
 # --- Expressions ---
@@ -95,7 +117,7 @@ class AsExpr:
 @dataclass
 class Param:
     name: str
-    type_name: Optional[str] = None
+    type_name: Optional[Any] = None
     default: Any = None
     line: int = 0
 
@@ -108,7 +130,7 @@ class Assignment:
 @dataclass
 class VarDecl:
     name: str
-    type_name: Optional[str] = None
+    type_name: Optional[Any] = None
     value: Any = None
     line: int = 0
 
@@ -165,7 +187,7 @@ class WhenClause:
 class FuncDef:
     name: str = ""
     params: List[Param] = field(default_factory=list)
-    return_type: Optional[str] = None
+    return_type: Optional[Any] = None
     body: List[Any] = field(default_factory=list)
     exported: bool = False
     line: int = 0

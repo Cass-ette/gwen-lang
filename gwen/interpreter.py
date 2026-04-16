@@ -357,7 +357,13 @@ class Interpreter:
             return left / right
         if op == "mod":
             return left % right
+        if op == "^":
+            result = left ** right
+            if isinstance(left, int) and isinstance(right, int) and isinstance(result, int):
+                return result
+            return float(result)
         if op == "=":
+            return left == right
             return left == right
         if op == "!=":
             return left != right

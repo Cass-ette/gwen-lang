@@ -70,7 +70,7 @@ class TokenType(Enum):
     MINUS = auto()         # -
     STAR = auto()          # *
     SLASH = auto()         # /
-    FLOORDIV = auto()      # //
+    CARET = auto()          # ^
 
     # Delimiters
     LPAREN = auto()        # (
@@ -335,6 +335,7 @@ class Lexer:
                 "-": TokenType.MINUS,
                 "*": TokenType.STAR,
                 "/": TokenType.SLASH,
+                "^": TokenType.CARET,
                 "(": TokenType.LPAREN,
                 ")": TokenType.RPAREN,
                 "[": TokenType.LBRACKET,

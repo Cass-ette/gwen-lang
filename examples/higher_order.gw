@@ -1,0 +1,48 @@
+-- Higher-order functions with generic types
+
+func map(f: (int) -> int, arr: list<int>) -> list<int>
+  result := []
+  for item in arr do
+    append(result, f(item))
+  endfor
+  return result
+endfunc
+
+func filter(f: (int) -> bool, arr: list<int>) -> list<int>
+  result := []
+  for item in arr do
+    if f(item) then
+      append(result, item)
+    endif
+  endfor
+  return result
+endfunc
+
+func reduce(f: (int, int) -> int, arr: list<int>, init: int) -> int
+  acc := init
+  for item in arr do
+    acc := f(acc, item)
+  endfor
+  return acc
+endfunc
+
+func main()
+  nums := [1, 2, 3, 4, 5]
+
+  write("Original:", nums)
+
+  @map
+  doubled := map((x: int) => x * 2, nums)
+  write("Doubled:", doubled)
+
+  @filter
+  evens := filter((x: int) => x mod 2 = 0, nums)
+  write("Evens:", evens)
+
+  @reduce
+  sum := reduce((a: int, b: int) => a + b, nums, 0)
+  write("Sum:", sum)
+
+  product := reduce((a: int, b: int) => a * b, nums, 1)
+  write("Product:", product)
+endfunc

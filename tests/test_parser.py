@@ -20,7 +20,8 @@ def test_typed_var():
     stmt = prog.statements[0]
     assert isinstance(stmt, ast.VarDecl)
     assert stmt.name == "x"
-    assert stmt.type_name == "int"
+    assert isinstance(stmt.type_name, ast.TypeName)
+    assert stmt.type_name.name == "int"
 
 
 def test_multi_assignment():
@@ -39,7 +40,8 @@ endfunc""")
     assert isinstance(stmt, ast.FuncDef)
     assert stmt.name == "gcd"
     assert len(stmt.params) == 2
-    assert stmt.return_type == "int"
+    assert isinstance(stmt.return_type, ast.TypeName)
+    assert stmt.return_type.name == "int"
 
 
 def test_func_def_named_end():
@@ -230,6 +232,33 @@ endfunc"""
     assert isinstance(func, ast.FuncDef)
     assert func.name == "gcd"
     assert len(func.body) == 2  # while + return
+
+
+def test_generic_list():
+    prog = parse('x: list<int> := [1, 2, 3]')
+    stmt = prog.statements[0]
+    assert isinstance(stmt, ast.VarDecl)
+    assert isinstance(stmt.type_name, ast.GenericType)
+    assert stmt.type_name.base == "list"
+    assert len(stmt.type_name.params) == 1
+    assert stmt.type_name.params[0].name == "int"
+
+
+def test_generic_dict():
+    prog = parse('x: dict<string, int> := []')
+    stmt = prog.statements[0]
+    assert isinstance(stmt.type_name, ast.GenericType)
+    assert stmt.type_name.base == "dict"
+    assert len(stmt.type_name.params) == 2
+
+
+def test_func_type_param():
+    prog = parse('func map(f: (int) -> int, arr: list<int>) -> list<int>\n  return arr\nendfunc')
+    func = prog.statements[0]
+    assert isinstance(func, ast.FuncDef)
+    assert isinstance(func.params[0].type_name, ast.FuncType)
+    assert len(func.params[0].type_name.param_types) == 1
+    assert isinstance(func.return_type, ast.GenericType)
 
 
 if __name__ == "__main__":

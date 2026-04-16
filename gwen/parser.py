@@ -119,12 +119,12 @@ class Parser:
         # Check for typed var decl: x: int := 42
         if self.at(TokenType.COLON) and isinstance(expr, ast.Identifier):
             self.advance()
-            type_tok = self.expect(TokenType.IDENTIFIER)
+            type_node = self.parse_type()
             value = None
             if self.at(TokenType.ASSIGN):
                 self.advance()
                 value = self.parse_expr()
-            return ast.VarDecl(name=expr.name, type_name=type_tok.value, value=value, line=tok.line)
+            return ast.VarDecl(name=expr.name, type_name=type_node, value=value, line=tok.line)
 
         return ast.ExprStmt(expr=expr, line=tok.line)
 
@@ -171,16 +171,21 @@ class Parser:
         return left
 
     def parse_multiplication(self) -> Any:
-        left = self.parse_unary()
-        while self.at(TokenType.STAR, TokenType.SLASH, TokenType.FLOORDIV, TokenType.MOD):
+        left = self.parse_power()
+        while self.at(TokenType.STAR, TokenType.SLASH, TokenType.MOD):
             op = self.advance().value
-            if op == "mod":
-                op = "mod"
-            elif op == "//":
-                op = "//"
-            right = self.parse_unary()
+            right = self.parse_power()
             left = ast.BinaryOp(left, op, right, line=left.line)
         return left
+
+    def parse_power(self) -> Any:
+        # Right-associative: 2^3^2 = 2^(3^2)
+        base = self.parse_unary()
+        if self.at(TokenType.CARET):
+            self.advance()
+            exponent = self.parse_power()  # Right recursion
+            return ast.BinaryOp(base, "^", exponent, line=base.line)
+        return base
 
     def parse_unary(self) -> Any:
         if self.at(TokenType.MINUS):
@@ -351,7 +356,7 @@ class Parser:
         return_type = None
         if self.at(TokenType.ARROW):
             self.advance()
-            return_type = self.expect(TokenType.IDENTIFIER).value
+            return_type = self.parse_type()
 
         body = self.parse_block_until(TokenType.ENDFUNC)
         self.expect(TokenType.ENDFUNC)
@@ -362,6 +367,35 @@ class Parser:
         return ast.FuncDef(name=name, params=params, return_type=return_type,
                            body=body, exported=exported, line=tok.line)
 
+    def parse_type(self) -> Any:
+        line, col = self.peek().line, self.peek().column
+
+        # Function type: (int, int) -> int
+        if self.at(TokenType.LPAREN):
+            self.advance()
+            param_types = []
+            if not self.at(TokenType.RPAREN):
+                param_types.append(self.parse_type())
+                while self.at(TokenType.COMMA):
+                    self.advance()
+                    param_types.append(self.parse_type())
+            self.expect(TokenType.RPAREN)
+            self.expect(TokenType.ARROW)
+            return_type = self.parse_type()
+            return ast.FuncType(param_types=param_types, return_type=return_type, line=line)
+
+        # Base type or generic type
+        base = self.expect(TokenType.IDENTIFIER).value
+        if self.at(TokenType.LT):
+            self.advance()
+            params = [self.parse_type()]
+            while self.at(TokenType.COMMA):
+                self.advance()
+                params.append(self.parse_type())
+            self.expect(TokenType.GT)
+            return ast.GenericType(base=base, params=params, line=line)
+        return ast.TypeName(name=base, line=line)
+
     def _parse_param(self) -> ast.Param:
         if self.at(TokenType.IDENTIFIER, TokenType.INDEX):
             name_tok = self.advance()
@@ -371,7 +405,7 @@ class Parser:
         default = None
         if self.at(TokenType.COLON):
             self.advance()
-            type_name = self.expect(TokenType.IDENTIFIER).value
+            type_name = self.parse_type()
         if self.at(TokenType.EQ):
             self.advance()
             default = self.parse_expr()
