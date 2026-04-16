@@ -1,0 +1,75 @@
+-- QuickSort implementation in Gwen
+
+-- Partition function: move elements smaller than pivot to left
+func partition(arr: list<int>, low: int, high: int) -> int
+  pivot := arr[high]
+  i := low - 1
+
+  for j in low to high - 1 do
+    if arr[j] <= pivot then
+      i := i + 1
+      -- swap arr[i] and arr[j]
+      temp := arr[i]
+      arr[i] := arr[j]
+      arr[j] := temp
+    endif
+  endfor
+
+  -- swap arr[i+1] and arr[high] (pivot)
+  temp := arr[i + 1]
+  arr[i + 1] := arr[high]
+  arr[high] := temp
+
+  return i + 1
+endfunc
+
+-- Recursive quicksort
+func quicksort(arr: list<int>, low: int, high: int)
+  if low < high then
+    pi := partition(arr, low, high)
+    quicksort(arr, low, pi - 1)
+    quicksort(arr, pi + 1, high)
+  endif
+endfunc
+
+-- Wrapper for easier use
+func sort(arr: list<int>) -> list<int>
+  if len(arr) > 1 then
+    quicksort(arr, 0, len(arr) - 1)
+  endif
+  return arr
+endfunc
+
+func main()
+  @test1
+  arr1 := [64, 34, 25, 12, 22, 11, 90]
+  write("Original:", arr1)
+  sort(arr1)
+  write("Sorted:", arr1)
+
+  @test2
+  arr2 := [3, -1, 0, 5, -2]
+  write("\nOriginal:", arr2)
+  sort(arr2)
+  write("Sorted:", arr2)
+
+  @test3
+  arr3 := [5, 5, 5, 1]
+  write("\nOriginal:", arr3)
+  sort(arr3)
+  write("Sorted:", arr3)
+
+  @test4
+  arr4 := []
+  write("\nEmpty:", arr4)
+  sort(arr4)
+  write("Sorted:", arr4)
+
+  @test5
+  arr5 := [42]
+  write("\nSingle:", arr5)
+  sort(arr5)
+  write("Sorted:", arr5)
+
+  write("\nAll tests passed!")
+endfunc
