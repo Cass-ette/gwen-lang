@@ -24,11 +24,26 @@
 ### 赋值与比较
 
 ```
-x := 42              -- 赋值
+x := 42              -- 赋值（仅在当前作用域）
 x = 42               -- 相等判断
 x != 42              -- 不等
 x <= 42              -- 小于等于
 x >= 42              -- 大于等于
+```
+
+### 索引赋值
+
+```
+arr[i] := value      -- 支持列表元素就地修改
+```
+
+### 算术运算
+
+```
+3 / 2                -- 整数 ÷ 整数 = 整数，结果 1
+3.0 / 2              -- 有浮点参与 = 浮点，结果 1.5
+5 + 2.5              -- 混合运算自动提升为浮点，结果 7.5
+10 mod 3             -- 取模，结果 1
 ```
 
 ### 类型标注
@@ -201,6 +216,27 @@ endmatch
 
 ---
 
+## 类型转换
+
+使用 `as` 语法，转换结果以 `result` 类型返回：
+
+```
+x := "42" as int
+match x
+  when ok(n) then
+    write(n)
+  when err(e) then
+    write("conversion failed:", e)
+endmatch
+
+y := 3.7 as int          -- ok(3)，截断
+z := "hello" as int      -- err("Cannot convert str to int")
+f := 5 as float          -- ok(5.0)
+s := 42 as string        -- ok("42")
+```
+
+---
+
 ## 模块
 
 ### 定义模块
@@ -328,6 +364,7 @@ endfunc handle_request
 | 模块 | `module` | `endmodule` |
 | 并行 | `parallel do` | `endparallel` |
 | 匿名函数 | `=> ...` | `end` |
+| 类型转换 | `as` | — |
 
 ---
 
@@ -340,6 +377,18 @@ endfunc handle_request
 
 ```
 -- 单行注释
+```
+
+---
+
+## 内置函数
+
+```
+write(x, ...)        -- 输出到标准输出
+read(prompt)         -- 读取一行输入（可选提示语）
+len(list)            -- 列表长度
+append(list, item)   -- 向列表追加元素
+str(x), int(x), float(x), type(x)  -- 类型相关函数
 ```
 
 ---
