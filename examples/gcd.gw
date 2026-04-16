@@ -1,0 +1,13 @@
+-- Greatest Common Divisor
+
+func gcd(a: int, b: int) -> int
+  while b != 0 do
+    a, b := b, a mod b
+  endwhile
+  return a
+endfunc
+
+func main()
+  result := gcd(48, 18)
+  print("GCD of 48 and 18 is", result)
+endfunc
