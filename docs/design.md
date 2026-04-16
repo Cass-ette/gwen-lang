@@ -216,6 +216,48 @@ endmatch
 
 ---
 
+## 类型系统
+
+### 基础类型
+
+```
+int, float, string, bool
+```
+
+### 泛型类型
+
+```
+list<int>                    -- 整数列表
+dict<string, int>            -- 字符串键，整数值
+result<int, string>          -- 成功时 int，错误时 string
+```
+
+### 函数类型
+
+```
+(int) -> int                 -- 接受 int，返回 int
+(int, int) -> int            -- 接受两个 int，返回 int
+() -> string                 -- 无参数，返回 string
+(int) -> bool                -- 常用于过滤函数
+```
+
+### 高阶函数示例
+
+```
+func map(f: (int) -> int, arr: list<int>) -> list<int>
+  result := []
+  for item in arr do
+    append(result, f(item))
+  endfor
+  return result
+endfunc
+
+doubled := map((x: int) => x * 2, [1, 2, 3])
+-- doubled = [2, 4, 6]
+```
+
+---
+
 ## 类型转换
 
 使用 `as` 语法，转换结果以 `result` 类型返回：
@@ -365,6 +407,17 @@ endfunc handle_request
 | 并行 | `parallel do` | `endparallel` |
 | 匿名函数 | `=> ...` | `end` |
 | 类型转换 | `as` | — |
+
+### 运算符
+
+| 优先级 | 运算符 | 说明 |
+|--------|--------|------|
+| 1 | `^` | 幂运算（右结合） |
+| 2 | `*`, `/`, `mod` | 乘除取模 |
+| 3 | `+`, `-` | 加减 |
+| 4 | `=`, `!=`, `<`, `>`, `<=`, `>=` | 比较 |
+| 5 | `and` | 逻辑与 |
+| 6 | `or` | 逻辑或 |
 
 ---
 
