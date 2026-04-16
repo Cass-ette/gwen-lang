@@ -83,6 +83,12 @@ class ListLiteral:
     elements: List[Any] = field(default_factory=list)
     line: int = 0
 
+@dataclass
+class AsExpr:
+    expr: Any
+    type_name: str
+    line: int = 0
+
 
 # --- Statements ---
 
@@ -95,7 +101,7 @@ class Param:
 
 @dataclass
 class Assignment:
-    targets: List[str]
+    targets: List[Any]  # str or IndexAccess
     values: List[Any]
     line: int = 0
 

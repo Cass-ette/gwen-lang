@@ -23,39 +23,39 @@ def run(source: str) -> str:
 
 
 def test_hello():
-    out = run('print("Hello, Gwen!")')
+    out = run('write("Hello, Gwen!")')
     assert out == "Hello, Gwen!"
 
 
 def test_variables():
     out = run("""x := 42
-print(x)""")
+write(x)""")
     assert out == "42"
 
 
 def test_typed_var():
     out = run("""x: int := 10
-print(x)""")
+write(x)""")
     assert out == "10"
 
 
 def test_arithmetic():
-    out = run('print(2 + 3 * 4)')
+    out = run('write(2 + 3 * 4)')
     assert out == "14"
 
 
 def test_mod():
-    out = run('print(10 mod 3)')
+    out = run('write(10 mod 3)')
     assert out == "1"
 
 
 def test_string_concat():
-    out = run('print("hello" + " " + "world")')
+    out = run('write("hello" + " " + "world")')
     assert out == "hello world"
 
 
 def test_comparison():
-    out = run('print(3 = 3)')
+    out = run('write(3 = 3)')
     assert out == "True"
 
 
@@ -63,20 +63,20 @@ def test_func():
     out = run("""func double(x: int) -> int
   return x * 2
 endfunc
-print(double(21))""")
+write(double(21))""")
     assert out == "42"
 
 
 def test_func_auto_main():
     out = run("""func main()
-  print("from main")
+  write("from main")
 endfunc""")
     assert out == "from main"
 
 
 def test_default_param():
     out = run("""func greet(name: string, greeting: string = "Hello")
-  print(greeting + ", " + name)
+  write(greeting + ", " + name)
 endfunc
 greet("Gwen")""")
     assert out == "Hello, Gwen"
@@ -85,9 +85,9 @@ greet("Gwen")""")
 def test_if():
     out = run("""x := 10
 if x > 5 then
-  print("big")
+  write("big")
 else
-  print("small")
+  write("small")
 endif""")
     assert out == "big"
 
@@ -95,11 +95,11 @@ endif""")
 def test_elif():
     out = run("""x := 0
 if x > 0 then
-  print("positive")
+  write("positive")
 elif x = 0 then
-  print("zero")
+  write("zero")
 else
-  print("negative")
+  write("negative")
 endif""")
     assert out == "zero"
 
@@ -109,7 +109,7 @@ def test_while():
 while x < 5 do
   x := x + 1
 endwhile
-print(x)""")
+write(x)""")
     assert out == "5"
 
 
@@ -118,7 +118,7 @@ def test_for_range():
 for i in 1 to 5 do
   sum := sum + i
 endfor
-print(sum)""")
+write(sum)""")
     assert out == "15"
 
 
@@ -127,7 +127,7 @@ def test_for_range_reverse():
 for i in 3 to 1 do
   result := result + str(i)
 endfor
-print(result)""")
+write(result)""")
     assert out == "321"
 
 
@@ -136,7 +136,7 @@ def test_for_range_step():
 for i in 1 to 10 step 3 do
   result := result + str(i) + " "
 endfor
-print(result)""")
+write(result)""")
     assert out == "1 4 7 10"
 
 
@@ -146,7 +146,7 @@ sum := 0
 for item in items do
   sum := sum + item
 endfor
-print(sum)""")
+write(sum)""")
     assert out == "60"
 
 
@@ -154,11 +154,11 @@ def test_match():
     out = run("""x := 2
 match x
   when 1 then
-    print("one")
+    write("one")
   when 2, 3 then
-    print("two or three")
+    write("two or three")
   else
-    print("other")
+    write("other")
 endmatch""")
     assert out == "two or three"
 
@@ -167,11 +167,11 @@ def test_match_range():
     out = run("""x := 5
 match x
   when 1 to 3 then
-    print("low")
+    write("low")
   when 4 to 6 then
-    print("mid")
+    write("mid")
   else
-    print("high")
+    write("high")
 endmatch""")
     assert out == "mid"
 
@@ -186,11 +186,11 @@ endfunc
 
 match safe_div(10, 2)
   when ok(result) then
-    print(result)
+    write(result)
   when err(e) then
-    print(e)
+    write(e)
 endmatch""")
-    assert out == "5.0"
+    assert out == "5"
 
 
 def test_ok_err_error_case():
@@ -203,9 +203,9 @@ endfunc
 
 match safe_div(10, 0)
   when ok(result) then
-    print(result)
+    write(result)
   when err(e) then
-    print(e)
+    write(e)
 endmatch""")
     assert out == "division by zero"
 
@@ -217,7 +217,7 @@ def test_gcd():
   endwhile
   return a
 endfunc
-print(gcd(48, 18))""")
+write(gcd(48, 18))""")
     assert out == "6"
 
 
@@ -229,7 +229,7 @@ def test_module():
 endmodule
 
 use square from math_utils
-print(square(7))""")
+write(square(7))""")
     assert out == "49"
 
 
@@ -238,7 +238,7 @@ def test_nested_if():
 y := 20
 if x > 5 then
   if y > 15 then
-    print("both")
+    write("both")
   endif
 endif""")
     assert out == "both"
@@ -246,20 +246,20 @@ endif""")
 
 def test_lambda():
     out = run("""double := (x: int) => x * 2
-print(double(5))""")
+write(double(5))""")
     assert out == "10"
 
 
 def test_list():
     out = run("""nums := [1, 2, 3]
-print(len(nums))""")
+write(len(nums))""")
     assert out == "3"
 
 
 def test_tag_no_effect():
     out = run("""@setup
 x := 42
-print(x)""")
+write(x)""")
     assert out == "42"
 
 
@@ -267,8 +267,8 @@ def test_multi_assign_swap():
     out = run("""a := 1
 b := 2
 a, b := b, a
-print(a)
-print(b)""")
+write(a)
+write(b)""")
     assert out == "2\n1"
 
 

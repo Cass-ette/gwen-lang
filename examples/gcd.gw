@@ -9,5 +9,5 @@ endfunc
 
 func main()
   result := gcd(48, 18)
-  print("GCD of 48 and 18 is", result)
+  write("GCD of 48 and 18 is", result)
 endfunc

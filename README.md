@@ -52,15 +52,15 @@ while b != 0 do
 endwhile
 
 for i in 1 to 10 do
-  print(i)
+  write(i)
 endfor
 
 for i in 1 to 10 step 2 do
-  print(i)
+  write(i)
 endfor
 
 for item in list with index i do
-  print(i, item)
+  write(i, item)
 endfor
 ```
 
@@ -88,9 +88,9 @@ endfunc
 
 match read_file("/etc/config")
   when ok(data) then
-    print(data)
+    write(data)
   when err(e) then
-    print("Error:", e)
+    write("Error:", e)
 endmatch
 ```
 

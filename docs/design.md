@@ -79,17 +79,17 @@ endwhile
 ```
 -- 范围遍历（包含两端）
 for i in 1 to 10 do
-  print(i)
+  write(i)
 endfor
 
 -- 带步长
 for i in 1 to 10 step 2 do
-  print(i)
+  write(i)
 endfor
 
 -- 倒序（自动识别）
 for i in 10 to 1 do
-  print(i)
+  write(i)
 endfor
 
 -- 集合遍历
@@ -99,7 +99,7 @@ endfor
 
 -- 带下标
 for item in list with index i do
-  print(i, item)
+  write(i, item)
 endfor
 ```
 
@@ -193,9 +193,9 @@ endfunc
 ```
 match read_file("/etc/config")
   when ok(data) then
-    print(data)
+    write(data)
   when err(e) then
-    print("error: ", e)
+    write("error: ", e)
 endmatch
 ```
 

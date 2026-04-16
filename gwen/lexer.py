@@ -12,6 +12,7 @@ class TokenType(Enum):
     STRING = auto()
     IDENTIFIER = auto()
     TAG = auto()           # @name
+    AS = auto()            # as
 
     # Keywords
     FUNC = auto()
@@ -69,6 +70,7 @@ class TokenType(Enum):
     MINUS = auto()         # -
     STAR = auto()          # *
     SLASH = auto()         # /
+    FLOORDIV = auto()      # //
 
     # Delimiters
     LPAREN = auto()        # (
@@ -119,6 +121,7 @@ KEYWORDS = {
     # "result" is not a keyword - it's used as a regular identifier
     "ok": TokenType.OK,
     "err": TokenType.ERR,
+    "as": TokenType.AS,
     "and": TokenType.AND,
     "or": TokenType.OR,
     "not": TokenType.NOT,
@@ -316,6 +319,11 @@ class Lexer:
                 self.advance()
                 self.advance()
                 self.add_token(TokenType.GTE, ">=", line, col)
+                continue
+            if ch == "/" and self.peek_next() == "/":
+                self.advance()
+                self.advance()
+                self.add_token(TokenType.FLOORDIV, "//", line, col)
                 continue
 
             # Single-character operators/delimiters

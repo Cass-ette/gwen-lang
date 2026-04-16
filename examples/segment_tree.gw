@@ -1,0 +1,141 @@
+-- Segment Tree implementation in Gwen
+-- Supports range sum queries and point updates
+
+module segment_tree
+
+-- Build segment tree from array
+export func build(tree: list, arr: list, node: int, start: int, end: int)
+  write("build", node, start, end)
+  if start = end then
+    tree[node] := arr[start]
+  else
+    mid := (start + end) / 2
+    left_child := node * 2
+    right_child := node * 2 + 1
+
+    build(tree, arr, left_child, start, mid)
+    build(tree, arr, right_child, mid + 1, end)
+
+    tree[node] := tree[left_child] + tree[right_child]
+  endif
+endfunc
+
+-- Query sum in range [left, right]
+export func query(tree: list, node: int, start: int, end: int, left: int, right: int)
+  -- Out of range
+  if right < start or end < left then
+    return ok(0)
+  endif
+
+  -- Fully within range
+  if left <= start and end <= right then
+    return ok(tree[node])
+  endif
+
+  -- Partial overlap - query both children
+  mid := (start + end) / 2
+  left_child := node * 2
+  right_child := node * 2 + 1
+
+  left_result := query(tree, left_child, start, mid, left, right)
+  right_result := query(tree, right_child, mid + 1, end, left, right)
+
+  match left_result
+    when ok(lval) then
+      match right_result
+        when ok(rval) then
+          return ok(lval + rval)
+        when err(e) then
+          return err(e)
+      endmatch
+    when err(e) then
+      return err(e)
+  endmatch
+endfunc
+
+-- Update element at index to new value
+export func update(tree: list, node: int, start: int, end: int, index: int, value: int)
+  if start = end then
+    tree[node] := value
+  else
+    mid := (start + end) / 2
+    left_child := node * 2
+    right_child := node * 2 + 1
+
+    if index <= mid then
+      update(tree, left_child, start, mid, index, value)
+    else
+      update(tree, right_child, mid + 1, end, index, value)
+    endif
+
+    tree[node] := tree[left_child] + tree[right_child]
+  endif
+endfunc
+
+-- Helper: create tree array with size 4*n initialized to 0
+export func create_tree(n: int)
+  tree := []
+  for i in 1 to n * 4 do
+    append(tree, 0)
+  endfor
+  return tree
+endfunc
+
+endmodule
+
+-- Example usage
+func main()
+  use build, query, update, create_tree from segment_tree
+
+  @setup
+  arr := [1, 3, 5, 7, 9, 11]
+  n := len(arr)
+  tree := create_tree(n)
+
+  write("Original array:", arr)
+
+  @build
+  build(tree, arr, 1, 0, n - 1)
+  write("Segment tree built")
+
+  @query
+  write("")
+  write("Query tests:")
+
+  match query(tree, 1, 0, n - 1, 0, 2)
+    when ok(sum) then
+      write("Sum of range [0, 2]:", sum)
+    when err(e) then
+      write("Query error:", e)
+  endmatch
+
+  match query(tree, 1, 0, n - 1, 1, 4)
+    when ok(sum) then
+      write("Sum of range [1, 4]:", sum)
+    when err(e) then
+      write("Query error:", e)
+  endmatch
+
+  match query(tree, 1, 0, n - 1, 0, 5)
+    when ok(sum) then
+      write("Sum of range [0, 5]:", sum)
+    when err(e) then
+      write("Query error:", e)
+  endmatch
+
+  @update
+  write("")
+  write("Update test:")
+  write("Update index 2 from 5 to 10")
+  update(tree, 1, 0, n - 1, 2, 10)
+
+  match query(tree, 1, 0, n - 1, 0, 5)
+    when ok(sum) then
+      write("New sum of range [0, 5]:", sum)
+    when err(e) then
+      write("Query error:", e)
+  endmatch
+
+  write("")
+  write("All tests completed!")
+endfunc

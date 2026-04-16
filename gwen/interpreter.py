@@ -60,15 +60,8 @@ class Environment:
     def set(self, name: str, value: Any):
         self.vars[name] = value
 
-    def update(self, name: str, value: Any):
-        """Update existing variable, searching up the scope chain."""
-        if name in self.vars:
-            self.vars[name] = value
-            return
-        if self.parent:
-            self.parent.update(name, value)
-            return
-        # If not found, create in current scope
+    def update_local(self, name: str, value: Any):
+        """Update or create variable in current scope only."""
         self.vars[name] = value
 
 
@@ -79,7 +72,8 @@ class Interpreter:
         self._setup_builtins()
 
     def _setup_builtins(self):
-        self.global_env.set("print", self._builtin_print)
+        self.global_env.set("write", self._builtin_write)
+        self.global_env.set("read", self._builtin_read)
         self.global_env.set("len", self._builtin_len)
         self.global_env.set("str", self._builtin_str)
         self.global_env.set("int", self._builtin_int)
@@ -87,9 +81,14 @@ class Interpreter:
         self.global_env.set("append", self._builtin_append)
         self.global_env.set("type", self._builtin_type)
 
-    def _builtin_print(self, *args):
+    def _builtin_write(self, *args):
         print(*args)
         return None
+
+    def _builtin_read(self, prompt: str = ""):
+        if prompt:
+            return input(prompt)
+        return input()
 
     def _builtin_len(self, obj):
         return len(obj)
@@ -148,11 +147,26 @@ class Interpreter:
         elif isinstance(stmt, ast.Assignment):
             values = [self.eval_expr(v, env) for v in stmt.values]
             if len(stmt.targets) == 1 and len(values) == 1:
-                env.update(stmt.targets[0], values[0])
+                target = stmt.targets[0]
+                if isinstance(target, str):
+                    env.update_local(target, values[0])
+                elif isinstance(target, ast.IndexAccess):
+                    obj = self.eval_expr(target.obj, env)
+                    index = self.eval_expr(target.index, env)
+                    obj[index] = values[0]
+                else:
+                    raise GwenError("Invalid assignment target", stmt.line)
             elif len(stmt.targets) == len(values):
                 # Evaluate all values first (for swap: a, b := b, a)
-                for name, val in zip(stmt.targets, values):
-                    env.update(name, val)
+                for target, val in zip(stmt.targets, values):
+                    if isinstance(target, str):
+                        env.update_local(target, val)
+                    elif isinstance(target, ast.IndexAccess):
+                        obj = self.eval_expr(target.obj, env)
+                        index = self.eval_expr(target.index, env)
+                        obj[index] = val
+                    else:
+                        raise GwenError("Invalid assignment target", stmt.line)
             else:
                 raise GwenError(f"Assignment count mismatch: {len(stmt.targets)} targets, {len(values)} values", stmt.line)
 
@@ -189,16 +203,16 @@ class Interpreter:
                 step = 1 if start <= end else -1
             i = start
             while (step > 0 and i <= end) or (step < 0 and i >= end):
-                env.update(stmt.var, i)
+                env.update_local(stmt.var, i)
                 self.exec_block(stmt.body, env)
                 i += step
 
         elif isinstance(stmt, ast.ForEachStmt):
             iterable = self.eval_expr(stmt.iterable, env)
             for idx, item in enumerate(iterable):
-                env.update(stmt.var, item)
+                env.update_local(stmt.var, item)
                 if stmt.index_var:
-                    env.update(stmt.index_var, idx)
+                    env.update_local(stmt.index_var, idx)
                 self.exec_block(stmt.body, env)
 
         elif isinstance(stmt, ast.MatchStmt):
@@ -256,7 +270,7 @@ class Interpreter:
                     else:
                         raise
             if stmt.result_var:
-                env.update(stmt.result_var, results)
+                env.update_local(stmt.result_var, results)
 
         elif isinstance(stmt, ast.TagStmt):
             pass  # Tags are decorative, no runtime effect
@@ -316,9 +330,19 @@ class Interpreter:
         if isinstance(expr, ast.ErrExpr):
             return ErrValue(self.eval_expr(expr.value, env))
 
+        if isinstance(expr, ast.AsExpr):
+            return self.eval_as(expr, env)
+
         raise GwenError(f"Unknown expression type: {type(expr).__name__}")
 
     def eval_binary(self, op: str, left: Any, right: Any, line: int) -> Any:
+        # Type promotion: if one side is float, promote the other to float
+        if op in ("+", "-", "*", "/"):
+            if isinstance(left, int) and isinstance(right, float):
+                left = float(left)
+            elif isinstance(left, float) and isinstance(right, int):
+                right = float(right)
+
         if op == "+":
             return left + right
         if op == "-":
@@ -328,6 +352,8 @@ class Interpreter:
         if op == "/":
             if right == 0:
                 raise GwenError("Division by zero", line)
+            if isinstance(left, int) and isinstance(right, int):
+                return int(left / right)
             return left / right
         if op == "mod":
             return left % right
@@ -348,6 +374,22 @@ class Interpreter:
         if op == "or":
             return self.is_truthy(left) or self.is_truthy(right)
         raise GwenError(f"Unknown operator: {op}", line)
+
+    def eval_as(self, expr: ast.AsExpr, env: Environment) -> Any:
+        value = self.eval_expr(expr.expr, env)
+        target = expr.type_name
+        try:
+            if target == "int":
+                return OkValue(int(value))
+            if target == "float":
+                return OkValue(float(value))
+            if target == "string":
+                return OkValue(str(value))
+            if target == "bool":
+                return OkValue(self.is_truthy(value))
+            return ErrValue(f"Unknown type: {target}")
+        except (ValueError, TypeError):
+            return ErrValue(f"Cannot convert {type(value).__name__} to {target}")
 
     def eval_call(self, call: ast.FuncCall, env: Environment) -> Any:
         callee = self.eval_expr(call.name, env)

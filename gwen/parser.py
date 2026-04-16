@@ -93,12 +93,12 @@ class Parser:
         # Check for := assignment
         if self.at(TokenType.ASSIGN):
             self.advance()
-            # Single or multi assignment
-            targets = [self._expr_to_name(expr)]
-            while self.at(TokenType.COMMA):
-                # Actually we need to re-check: a, b := ...
-                # The first expr might have been just 'a', but we need to handle a, b
-                break
+            if isinstance(expr, ast.Identifier):
+                targets = [expr.name]
+            elif isinstance(expr, ast.IndexAccess):
+                targets = [expr]
+            else:
+                raise ParseError("Expected identifier or index access in assignment", self.peek())
             values = [self.parse_expr()]
             return ast.Assignment(targets=targets, values=values, line=tok.line)
 
@@ -172,10 +172,12 @@ class Parser:
 
     def parse_multiplication(self) -> Any:
         left = self.parse_unary()
-        while self.at(TokenType.STAR, TokenType.SLASH, TokenType.MOD):
+        while self.at(TokenType.STAR, TokenType.SLASH, TokenType.FLOORDIV, TokenType.MOD):
             op = self.advance().value
             if op == "mod":
                 op = "mod"
+            elif op == "//":
+                op = "//"
             right = self.parse_unary()
             left = ast.BinaryOp(left, op, right, line=left.line)
         return left
@@ -189,7 +191,12 @@ class Parser:
             tok = self.advance()
             operand = self.parse_unary()
             return ast.UnaryOp("not", operand, line=tok.line)
-        return self.parse_postfix()
+        expr = self.parse_postfix()
+        while self.at(TokenType.AS):
+            self.advance()
+            type_tok = self.expect(TokenType.IDENTIFIER)
+            expr = ast.AsExpr(expr, type_tok.value, line=expr.line)
+        return expr
 
     def parse_postfix(self) -> Any:
         expr = self.parse_primary()
@@ -257,7 +264,7 @@ class Parser:
             self.expect(TokenType.RPAREN)
             return ast.ErrExpr(value, line=tok.line)
 
-        if tok.type == TokenType.IDENTIFIER:
+        if tok.type in (TokenType.IDENTIFIER, TokenType.INDEX):
             self.advance()
             return ast.Identifier(tok.value, line=tok.line)
 
@@ -356,7 +363,10 @@ class Parser:
                            body=body, exported=exported, line=tok.line)
 
     def _parse_param(self) -> ast.Param:
-        name_tok = self.expect(TokenType.IDENTIFIER)
+        if self.at(TokenType.IDENTIFIER, TokenType.INDEX):
+            name_tok = self.advance()
+        else:
+            raise ParseError("Expected parameter name", self.peek())
         type_name = None
         default = None
         if self.at(TokenType.COLON):

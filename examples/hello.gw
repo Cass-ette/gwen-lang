@@ -1,5 +1,5 @@
 -- Hello World in Gwen
 
 func main()
-  print("Hello, Gwen!")
+  write("Hello, Gwen!")
 endfunc
