@@ -46,9 +46,6 @@ class TokenType(Enum):
     PARALLEL = auto()
     ENDPARALLEL = auto()
     ALLOW_FAIL = auto()
-    SECTION = auto()
-    ENDSECTION = auto()
-    RESULT = auto()
     OK = auto()
     ERR = auto()
     AND = auto()
@@ -121,9 +118,6 @@ KEYWORDS = {
     "parallel": TokenType.PARALLEL,
     "endparallel": TokenType.ENDPARALLEL,
     "allow_fail": TokenType.ALLOW_FAIL,
-    "section": TokenType.SECTION,
-    "endsection": TokenType.ENDSECTION,
-    # "result" is not a keyword - it's used as a regular identifier
     "ok": TokenType.OK,
     "err": TokenType.ERR,
     "as": TokenType.AS,
@@ -330,11 +324,7 @@ class Lexer:
                 self.advance()
                 self.add_token(TokenType.GTE, ">=", line, col)
                 continue
-            if ch == "/" and self.peek_next() == "/":
-                self.advance()
-                self.advance()
-                self.add_token(TokenType.FLOORDIV, "//", line, col)
-                continue
+
 
             # Single-character operators/delimiters
             single_chars = {
