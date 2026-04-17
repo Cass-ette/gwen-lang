@@ -33,6 +33,8 @@
 | [memory.md](./memory.md) | 内存管理：GC + 显式区域 |
 | [appendix.md](./appendix.md) | 附录：关键字、运算符、内置函数、完整示例 |
 | [tracking.md](./tracking.md) | **实现跟踪表**：文档与代码对齐状态 |
+| [stdlib.md](./stdlib.md) | 标准库设计：模块化扩展方案 |
+| [oop.md](./oop.md) | 受限对象系统：审计友好的 OOP |
 
 ---
 

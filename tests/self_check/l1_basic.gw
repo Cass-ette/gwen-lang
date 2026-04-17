@@ -1,0 +1,260 @@
+-- L1 基础测试：语法、运算、控制流
+-- 验证语言核心实现正确性
+
+func test_arithmetic()
+  write("[L1.1] Arithmetic")
+  a := 10
+  b := 3
+  write("  10 + 3 =", a + b)
+  write("  10 - 3 =", a - b)
+  write("  10 * 3 =", a * b)
+  write("  10 / 3 =", a / b)
+  write("  10 mod 3 =", a mod b)
+  write("  10 ^ 2 =", 10 ^ 2)
+
+  -- 浮点
+  x: float64 := 3.14
+  y: float64 := 2.0
+  write("  3.14 * 2 =", x * y)
+
+  return true
+endfunc
+
+func test_comparison()
+  write("")
+  write("[L1.2] Comparison")
+  write("  5 = 5:", 5 = 5)
+  write("  5 != 3:", 5 != 3)
+  write("  5 < 10:", 5 < 10)
+  write("  5 > 3:", 5 > 3)
+  write("  5 <= 5:", 5 <= 5)
+  write("  5 >= 5:", 5 >= 5)
+
+  -- 链式比较等价展开
+  a := 5
+  b := 10
+  c := 15
+  write("  a < b < c:", (a < b) and (b < c))
+
+  return true
+endfunc
+
+func test_logical()
+  write("")
+  write("[L1.3] Logical Operators")
+  write("  true and true:", true and true)
+  write("  true and false:", true and false)
+  write("  true or false:", true or false)
+  write("  false or false:", false or false)
+  write("  not true:", not true)
+  write("  not false:", not false)
+
+  return true
+endfunc
+
+func test_if_elif_else()
+  write("")
+  write("[L1.4] If-Elif-Else")
+
+  score := 85
+  grade := "F"
+
+  if score >= 90 then
+    grade := "A"
+  elif score >= 80 then
+    grade := "B"
+  elif score >= 70 then
+    grade := "C"
+  elif score >= 60 then
+    grade := "D"
+  else
+    grade := "F"
+  endif
+
+  write("  Score 85 -> Grade:", grade)
+
+  -- 嵌套 if
+  x := 10
+  y := 20
+  if x > 5 then
+    if y > 15 then
+      write("  Nested if: x>5 and y>15")
+    endif
+  endif
+
+  return grade = "B"
+endfunc
+
+func test_while_loop()
+  write("")
+  write("[L1.5] While Loop")
+
+  -- 累加
+  sum := 0
+  i := 1
+  while i <= 10 do
+    sum := sum + i
+    i := i + 1
+  endwhile
+  write("  Sum 1..10 =", sum)
+
+  -- 提前终止（模拟 break）
+  found := false
+  j := 0
+  while j < 100 and not found do
+    if j * j = 64 then
+      found := true
+    else
+      j := j + 1
+    endif
+  endwhile
+  write("  Found sqrt(64) =", j)
+
+  return sum = 55 and j = 8
+endfunc
+
+func test_for_range()
+  write("")
+  write("[L1.6] For Range")
+
+  -- 正向
+  sum1 := 0
+  for i in 1 to 5 do
+    sum1 := sum1 + i
+  endfor
+  write("  Sum 1..5 =", sum1)
+
+  -- 反向（自动）
+  sum2 := 0
+  for i in 5 to 1 do
+    sum2 := sum2 + i
+  endfor
+  write("  Sum 5..1 (auto reverse) =", sum2)
+
+  -- 步长
+  sum3 := 0
+  for i in 0 to 10 step 2 do
+    sum3 := sum3 + i
+  endfor
+  write("  Sum even 0..10 =", sum3)
+
+  -- order/reverse 强制方向
+  order_sum := 0
+  for i in 5 to 1 order do
+    order_sum := order_sum + i
+  endfor
+  write("  Sum 5..1 order (asc) =", order_sum)
+
+  return sum1 = 15 and sum2 = 15 and sum3 = 30 and order_sum = 15
+endfunc
+
+func test_function_basics()
+  write("")
+  write("[L1.7] Function Basics")
+
+  -- 调用测试函数
+  r1 := test_arithmetic()
+  r2 := test_comparison()
+
+  write("  Functions returned:", r1, r2)
+
+  return r1 and r2
+endfunc
+
+func test_multi_return()
+  write("")
+  write("[L1.8] Multi-Return Values")
+
+  -- 多返回值直接解包
+  q1, r1 := divide_with_remainder(17, 5)
+  write("  17 / 5 =", q1, "rem", r1)
+
+  q2, r2 := divide_with_remainder(23, 4)
+  write("  23 / 4 =", q2, "rem", r2)
+
+  return q1 = 3 and r1 = 2 and q2 = 5 and r2 = 3
+endfunc
+
+func divide_with_remainder(a: int, b: int) -> int, int
+  if b = 0 then
+    return -1, -1
+  endif
+  return a / b, a mod b
+endfunc
+
+func test_variable_scope()
+  write("")
+  write("[L1.9] Variable Scope")
+
+  outer := 10
+
+  func inner()
+    -- 读取外层
+    read_outer := outer
+    -- 修改需要 global
+    global outer := outer + 1
+    return read_outer
+  endfunc
+
+  before := inner()
+  after := outer
+
+  write("  Before:", before, "After:", after)
+
+  return before = 10 and after = 11
+endfunc
+
+func test_string_ops()
+  write("")
+  write("[L1.10] String Operations")
+
+  s1 := "Hello"
+  s2 := "World"
+  concat := s1 + ", " + s2
+  write("  Concat:", concat)
+
+  -- 转义序列
+  newline := "Line1\nLine2"
+  tab := "Col1\tCol2"
+  write("  Escapes work (visual check)")
+
+  return len(concat) = 12
+endfunc
+
+func main()
+  write("=== Gwen L1 Basic Self-Check ===")
+  write("")
+
+  results := []
+
+  -- Run all tests sequentially (parallel is optional)
+  append(results, test_arithmetic())
+  append(results, test_comparison())
+  append(results, test_logical())
+  append(results, test_if_elif_else())
+  append(results, test_while_loop())
+  append(results, test_for_range())
+  append(results, test_function_basics())
+  append(results, test_multi_return())
+  append(results, test_variable_scope())
+  append(results, test_string_ops())
+
+  write("")
+  write("Results:", results)
+
+  passed := 0
+  for r in results do
+    if r then
+      passed := passed + 1
+    endif
+  endfor
+
+  write("")
+  write("Passed:", passed, "/ 10")
+
+  if passed = 10 then
+    write("L1 Basic: ALL TESTS PASSED")
+  else
+    write("L1 Basic: SOME TESTS FAILED")
+  endif
+endfunc

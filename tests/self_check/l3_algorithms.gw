@@ -1,0 +1,396 @@
+-- L3 算法测试：标准算法实现
+-- 业界常见的语言自检算法
+
+-- 1. 经典排序：冒泡排序
+func bubble_sort(arr: list<int>) -> list<int>
+  n := len(arr)
+  for i in 0 to n - 2 do
+    for j in 0 to n - i - 2 do
+      if arr[j] > arr[j + 1] then
+        arr[j], arr[j + 1] := arr[j + 1], arr[j]
+      endif
+    endfor
+  endfor
+  return arr
+endfunc
+
+-- 2. 快速选择：第 k 小元素
+func quickselect(arr: list<int>, k: int) -> int
+  if len(arr) = 1 then
+    return arr[0]
+  endif
+
+  pivot := arr[len(arr) / 2]
+  lows := []
+  highs := []
+  pivots := []
+
+  for x in arr do
+    if x < pivot then
+      append(lows, x)
+    elif x > pivot then
+      append(highs, x)
+    else
+      append(pivots, x)
+    endif
+  endfor
+
+  if k < len(lows) then
+    return quickselect(lows, k)
+  elif k < len(lows) + len(pivots) then
+    return pivot
+  else
+    return quickselect(highs, k - len(lows) - len(pivots))
+  endif
+endfunc
+
+-- 3. 线性搜索
+func linear_search(arr: list<int>, target: int) -> int, bool
+  for i in 0 to len(arr) - 1 do
+    if arr[i] = target then
+      return i, true
+    endif
+  endfor
+  return -1, false
+endfunc
+
+-- 4. 斐波那契（迭代+缓存）
+fib_cache := {}
+func fibonacci(n: int) -> int
+  if n <= 1 then
+    return n
+  endif
+
+  -- 检查缓存
+  key := n
+  match fib_cache[key]
+    when ok(val) then
+      return val
+    when err(_) then
+      -- 计算并缓存
+      val := fibonacci(n - 1) + fibonacci(n - 2)
+      fib_cache[key] := val
+      return val
+  endmatch
+endfunc
+
+-- 5. 素数筛
+func sieve_of_eratosthenes(limit: int) -> list<int>
+  if limit < 2 then
+    return []
+  endif
+
+  -- 标记数组
+  is_prime := []
+  for i in 0 to limit do
+    append(is_prime, true)
+  endfor
+  is_prime[0] := false
+  is_prime[1] := false
+
+  p := 2
+  while p * p <= limit do
+    if is_prime[p] then
+      i := p * p
+      while i <= limit do
+        is_prime[i] := false
+        i := i + p
+      endwhile
+    endif
+    p := p + 1
+  endwhile
+
+  -- 收集素数
+  primes := []
+  for i in 2 to limit do
+    if is_prime[i] then
+      append(primes, i)
+    endif
+  endfor
+
+  return primes
+endfunc
+
+-- 6. 最大公约数
+func gcd(a: int, b: int) -> int
+  while b != 0 do
+    a, b := b, a mod b
+  endfor
+  return a
+endfunc
+
+-- 7. 幂运算（快速幂）
+func fast_power(base: int, exp: int) -> int
+  if exp = 0 then
+    return 1
+  endif
+  if exp < 0 then
+    return 0  -- Gwen int 不支持小数
+  endif
+
+  result := 1
+  b := base
+  e := exp
+
+  while e > 0 do
+    if e mod 2 = 1 then
+      result := result * b
+    endif
+    b := b * b
+    e := e / 2
+  endwhile
+
+  return result
+endfunc
+
+-- 8. 回文检查
+func is_palindrome(s: string) -> bool
+  left := 0
+  right := len(s) - 1
+
+  while left < right do
+    if s[left] != s[right] then
+      return false
+    endif
+    left := left + 1
+    right := right - 1
+  endwhile
+
+  return true
+endfunc
+
+-- 9. 数组旋转
+func rotate_array(arr: list<int>, k: int) -> list<int>
+  n := len(arr)
+  if n = 0 then
+    return arr
+  endif
+
+  k := k mod n
+  if k < 0 then
+    k := k + n
+  endif
+
+  result := []
+  for i in 0 to n - 1 do
+    new_pos := (i + k) mod n
+    -- 实际上要按新位置放，这里简化：先取后k个，再取前n-k个
+  endfor
+
+  -- 简化实现：使用临时数组
+  temp := []
+  for i in n - k to n - 1 do
+    append(temp, arr[i])
+  endfor
+  for i in 0 to n - k - 1 do
+    append(temp, arr[i])
+  endfor
+
+  return temp
+endfunc
+
+-- 10. 两数之和
+func two_sum(nums: list<int>, target: int) -> int, int, bool
+  n := len(nums)
+  for i in 0 to n - 2 do
+    for j in i + 1 to n - 1 do
+      if nums[i] + nums[j] = target then
+        return i, j, true
+      endif
+    endfor
+  endfor
+  return -1, -1, false
+endfunc
+
+-- 11. 合并区间
+func merge_intervals(intervals: list<list<int>>) -> list<list<int>>
+  if len(intervals) = 0 then
+    return []
+  endif
+
+  -- 按开始排序
+  sorted := bubble_sort_intervals(intervals)
+
+  result := [sorted[0]]
+  for i in 1 to len(sorted) - 1 do
+    current := sorted[i]
+    last := result[len(result) - 1]
+
+    if current[0] <= last[1] then
+      -- 重叠，合并
+      if current[1] > last[1] then
+        last[1] := current[1]
+      endif
+    else
+      -- 不重叠，添加新区间
+      append(result, current)
+    endif
+  endfor
+
+  return result
+endfunc
+
+-- 辅助：区间按开始排序
+func bubble_sort_intervals(intervals: list<list<int>>) -> list<list<int>>
+  n := len(intervals)
+  for i in 0 to n - 2 do
+    for j in 0 to n - i - 2 do
+      if intervals[j][0] > intervals[j + 1][0] then
+        intervals[j], intervals[j + 1] := intervals[j + 1], intervals[j]
+      endif
+    endfor
+  endfor
+  return intervals
+endfunc
+
+-- 12. 稀疏矩阵乘法
+func sparse_matrix_multiply(A: list<list<int>>, B: list<list<int>>) -> list<list<int>>
+  rows_A := len(A)
+  cols_A := len(A[0])
+  cols_B := len(B[0])
+
+  result := []
+  for i in 0 to rows_A - 1 do
+    row := []
+    for j in 0 to cols_B - 1 do
+      sum := 0
+      for k in 0 to cols_A - 1 do
+        sum := sum + A[i][k] * B[k][j]
+      endfor
+      append(row, sum)
+    endfor
+    append(result, row)
+  endfor
+
+  return result
+endfunc
+
+-- ============ 测试主程序 ============
+
+func main()
+  write("=== Gwen L3 Algorithms Self-Check ===")
+  write("")
+
+  -- Test 1: Bubble Sort
+  write("[A1] Bubble Sort")
+  arr1 := [64, 34, 25, 12, 22, 11, 90]
+  sorted1 := bubble_sort(arr1)
+  write("  Input:", arr1)
+  write("  Sorted:", sorted1)
+  t1 := sorted1[0] = 11 and sorted1[len(sorted1) - 1] = 90
+
+  -- Test 2: Quickselect
+  write("")
+  write("[A2] Quickselect (k-th smallest)")
+  arr2 := [9, 1, 5, 3, 7, 2, 8, 4, 6]
+  kth := quickselect(arr2, 3)  -- 第4小 = 4
+  write("  Array:", arr2)
+  write("  4th smallest:", kth)
+  t2 := kth = 4
+
+  -- Test 3: Linear Search
+  write("")
+  write("[A3] Linear Search")
+  arr3 := [10, 20, 30, 40, 50]
+  idx, found := linear_search(arr3, 30)
+  write("  Search 30 in", arr3)
+  write("  Found at:", idx, "Found:", found)
+  t3 := found and idx = 2
+
+  -- Test 4: Fibonacci
+  write("")
+  write("[A4] Fibonacci (cached)")
+  fibs := []
+  for i in 0 to 10 do
+    append(fibs, fibonacci(i))
+  endfor
+  write("  F(0..10):", fibs)
+  t4 := fibs[10] = 55
+
+  -- Test 5: Sieve
+  write("")
+  write("[A5] Sieve of Eratosthenes")
+  primes := sieve_of_eratosthenes(50)
+  write("  Primes <= 50:", primes)
+  write("  Count:", len(primes))
+  t5 := len(primes) = 15
+
+  -- Test 6: GCD
+  write("")
+  write("[A6] GCD (Euclidean)")
+  g := gcd(48, 18)
+  write("  gcd(48, 18) =", g)
+  t6 := g = 6
+
+  -- Test 7: Fast Power
+  write("")
+  write("[A7] Fast Power")
+  p := fast_power(2, 10)
+  write("  2^10 =", p)
+  t7 := p = 1024
+
+  -- Test 8: Palindrome
+  write("")
+  write("[A8] Palindrome Check")
+  p1 := is_palindrome("racecar")
+  p2 := is_palindrome("hello")
+  write("  'racecar':", p1, "'hello':", p2)
+  t8 := p1 and not p2
+
+  -- Test 9: Rotate Array
+  write("")
+  write("[A9] Rotate Array")
+  arr9 := [1, 2, 3, 4, 5]
+  rotated := rotate_array(arr9, 2)
+  write("  Original:", arr9)
+  write("  Rotate by 2:", rotated)
+  t9 := rotated[0] = 4 and rotated[len(rotated) - 1] = 3
+
+  -- Test 10: Two Sum
+  write("")
+  write("[A10] Two Sum")
+  nums := [2, 7, 11, 15]
+  i, j, ok := two_sum(nums, 9)
+  write("  nums:", nums, "target: 9")
+  write("  indices:", i, j, "found:", ok)
+  t10 := ok and nums[i] + nums[j] = 9
+
+  -- Test 11: Merge Intervals
+  write("")
+  write("[A11] Merge Intervals")
+  intervals := [[1, 3], [2, 6], [8, 10], [15, 18]]
+  merged := merge_intervals(intervals)
+  write("  Input:", intervals)
+  write("  Merged:", merged)
+  t11 := len(merged) = 3
+
+  -- Test 12: Matrix Multiply
+  write("")
+  write("[A12] Matrix Multiply")
+  A := [[1, 2], [3, 4]]
+  B := [[5, 6], [7, 8]]
+  C := sparse_matrix_multiply(A, B)
+  write("  A:", A)
+  write("  B:", B)
+  write("  A * B:", C)
+  t12 := C[0][0] = 19 and C[0][1] = 22
+
+  -- Summary
+  write("")
+  write("=== Summary ===")
+  results := [t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12]
+  passed := 0
+  for r in results do
+    if r then
+      passed := passed + 1
+    endif
+  endfor
+
+  write("Passed:", passed, "/ 12")
+
+  if passed = 12 then
+    write("L3 Algorithms: ALL TESTS PASSED")
+  else
+    write("L3 Algorithms: SOME TESTS FAILED")
+  endif
+endfunc
