@@ -1,6 +1,19 @@
-// Gwen 语法特性展示
-// 特点：审计优先、显式类型、强制错误处理、直观的控制流
+/*
+  Gwen 语法特性展示
+  ------------------
+  覆盖点：
+    - 常量 const
+    - 显式精度类型（int8 / float32）
+    - 多返回值 + 解构
+    - ok/err 强制解构的错误处理
+    - 审计导航标记 @tag
+    - for 显式方向 reverse
+*/
 
+const MAX_SCORE: int := 100
+const PI: float32 := 3.14159
+
+// 多返回值：商 + 是否成功
 func safe_divide(a: int, b: int) -> int, bool
   if b = 0 then
     return 0, false
@@ -11,13 +24,14 @@ endfunc
 func main()
   @setup
   scores: list<int> := [88, 72, 95, 64, 100]
-  total: int8 := 0           // int8 范围 [-128, 127]，超出会报错
+  total: int8 := 0   // int8 范围 [-128, 127]
 
-  @sum_scores
+  @sum_scaled
+  /* 累加时先除以 5，避免 int8 溢出 */
   for s in scores do
-    total := total + s / 5    // 平均到 int8 范围内
+    total := total + s / 5
   endfor
-  write("总分/5 累加:", total)
+  write("总分/5 =", total, " / 上限", MAX_SCORE)
 
   @safe_math
   result, ok_flag := safe_divide(100, 0)
@@ -27,14 +41,17 @@ func main()
     write("拒绝除零")
   endif
 
-  @precision_trap
-  match 3.14159265 as float32
-    when ok(v) then write("float32 π:", v)     // 精度会丢失
+  @precision_demo
+  // 强制解构：as 转换可能失败，必须 match 拿结果
+  match 3.14159265358979 as float32
+    when ok(v) then write("float32 π:", v, " (精度已截断)")
     else write("转换失败")
   endmatch
 
-  @reverse_loop
+  @reverse_countdown
   for i in 1 to 3 reverse do
     write("倒数:", i)
   endfor
+
+  // const PI := 0  // 取消注释会报错：Cannot redeclare const
 endfunc
