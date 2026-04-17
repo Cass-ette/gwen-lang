@@ -71,3 +71,46 @@ func factorial(n: int) -> int
   return result
 endfunc
 ```
+
+## 控制流块不创建新作用域
+
+`if`、`while`、`for`、`match` 等控制流块**共享所在函数的作用域**，不会创建新的局部作用域：
+
+```
+func example()
+  found := false
+
+  -- if 内 := 修改的是同一个 found
+  if true then
+    found := true
+  endif
+  write(found)  -- true
+
+  -- match 同理
+  result := 0
+  match ok(42)
+    when ok(v) then
+      result := v  -- 修改外部 result
+  endmatch
+  write(result)  -- 42
+  write(v)       -- 42，模式变量也注入到当前作用域
+endfunc
+```
+
+### 作用域边界总结
+
+| 结构 | 创建新作用域？ | 说明 |
+|------|---------------|------|
+| `func` / `endfunc` | 是 | 函数独立作用域 |
+| `module` / `endmodule` | 是 | 模块独立作用域 |
+| `if` / `endif` | 否 | 共享父函数作用域 |
+| `while` / `endwhile` | 否 | 共享父函数作用域 |
+| `for` / `endfor` | 否 | 共享父函数作用域（循环变量也在父作用域） |
+| `match` / `endmatch` | 否 | 共享父函数作用域，模式变量注入父作用域 |
+| `arena` / `endarena` | 否 | 共享父函数作用域 |
+
+### 设计理由
+
+1. **与审计目标一致**：作用域边界少 → 推理简单。审计者只需关注函数边界。
+2. **行为统一**：所有控制流块（if/while/for/match）行为一致，没有例外。
+3. **match 模式变量外泄是有意为之**：`when ok(v)` 中的 `v` 在 match 之后仍可用。如果需要隔离，请封装为函数。

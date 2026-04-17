@@ -343,7 +343,10 @@ class Interpreter:
             for case in stmt.cases:
                 case_env = Environment(parent=env)
                 if self.match_patterns(subject, case.patterns, case_env, stmt.line):
-                    self.exec_block(case.body, case_env)
+                    # Inject pattern-bound variables into parent scope
+                    for name, value in case_env.vars.items():
+                        env.set(name, value)
+                    self.exec_block(case.body, env)
                     matched = True
                     break
             if not matched:
