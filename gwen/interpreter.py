@@ -99,6 +99,7 @@ class GwenLambda:
 class Environment:
     def __init__(self, parent: Optional['Environment'] = None, is_call_frame: bool = False, func_name: Optional[str] = None):
         self.vars: Dict[str, Any] = {}
+        self.types: Dict[str, str] = {}  # variable name -> type name (e.g. "int8")
         self.parent = parent
         self.is_call_frame = is_call_frame  # True for function call environments
         self.func_name = func_name  # Function name for this call frame
@@ -110,9 +111,26 @@ class Environment:
             return self.parent.get(name)
         raise GwenError(f"Undefined variable: {name}")
 
+    def get_type(self, name: str) -> Optional[str]:
+        """Look up type annotation for variable across scope chain."""
+        if name in self.types:
+            return self.types[name]
+        if self.parent:
+            return self.parent.get_type(name)
+        return None
+
+    def get_local_type(self, name: str) -> Optional[str]:
+        """Look up type annotation for variable in current scope only."""
+        return self.types.get(name)
+
     def set(self, name: str, value: Any):
         """Create new variable in current scope."""
         self.vars[name] = value
+
+    def set_type(self, name: str, type_name: Optional[str]):
+        """Record type annotation for a variable."""
+        if type_name:
+            self.types[name] = type_name
 
     def update_local(self, name: str, value: Any):
         """Update or create variable in current scope only."""
@@ -216,7 +234,7 @@ class Interpreter:
                     raise GwenError(f"Assignment count mismatch: {len(stmt.targets)} targets, {len(unpacked)} values", stmt.line)
                 for target, val in zip(stmt.targets, unpacked):
                     if isinstance(target, str):
-                        env.update(target, val, current_func)
+                        env.update(target, self._coerce_if_typed(target, val, stmt.line, env), current_func)
                     elif isinstance(target, ast.IndexAccess):
                         obj = self.eval_expr(target.obj, env)
                         index = self.eval_expr(target.index, env)
@@ -226,7 +244,7 @@ class Interpreter:
             elif len(stmt.targets) == 1 and len(values) == 1:
                 target = stmt.targets[0]
                 if isinstance(target, str):
-                    env.update(target, values[0], current_func)
+                    env.update(target, self._coerce_if_typed(target, values[0], stmt.line, env), current_func)
                 elif isinstance(target, ast.IndexAccess):
                     obj = self.eval_expr(target.obj, env)
                     index = self.eval_expr(target.index, env)
@@ -237,7 +255,7 @@ class Interpreter:
                 # Multi-assignment: a, b := x, y
                 for target, val in zip(stmt.targets, values):
                     if isinstance(target, str):
-                        env.update(target, val, current_func)
+                        env.update(target, self._coerce_if_typed(target, val, stmt.line, env), current_func)
                     elif isinstance(target, ast.IndexAccess):
                         obj = self.eval_expr(target.obj, env)
                         index = self.eval_expr(target.index, env)
@@ -253,6 +271,7 @@ class Interpreter:
             if value is not None and type_name and type_name in PRECISION_TYPES:
                 value = coerce_to_type(value, type_name, stmt.line)
             env.set(stmt.name, value)
+            env.set_type(stmt.name, type_name)
 
         elif isinstance(stmt, ast.ReturnStmt):
             if stmt.value is None:
@@ -394,12 +413,19 @@ class Interpreter:
             found = False
             while search_env:
                 if stmt.name in search_env.vars:
+                    # Check type annotation and coerce if needed
+                    type_name = search_env.get_type(stmt.name)
+                    if type_name and type_name in PRECISION_TYPES:
+                        value = coerce_to_type(value, type_name, stmt.line)
                     search_env.vars[stmt.name] = value
                     found = True
                     break
                 if search_env.is_call_frame:
                     # Found a call frame - check if it has the variable
                     if stmt.name in search_env.vars:
+                        type_name = search_env.get_type(stmt.name)
+                        if type_name and type_name in PRECISION_TYPES:
+                            value = coerce_to_type(value, type_name, stmt.line)
                         search_env.vars[stmt.name] = value
                         found = True
                         break
@@ -443,6 +469,13 @@ class Interpreter:
 
         else:
             raise GwenError(f"Unknown statement type: {type(stmt).__name__}")
+
+    def _coerce_if_typed(self, name: str, value: Any, line: int, env: Environment) -> Any:
+        """If variable has a precision type annotation, coerce value to it."""
+        type_name = env.get_local_type(name)
+        if type_name and type_name in PRECISION_TYPES:
+            return coerce_to_type(value, type_name, line)
+        return value
 
     def eval_expr(self, expr: Any, env: Environment) -> Any:
         if isinstance(expr, ast.IntLiteral):
