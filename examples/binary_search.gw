@@ -1,0 +1,50 @@
+-- 二分查找算法
+-- 测试：循环、条件、索引、多返回值
+
+-- 返回 (index, found)
+func binary_search(arr: list<int>, target: int) -> int, bool
+  left := 0
+  right := len(arr) - 1
+
+  while left <= right do
+    mid := int((left + right) / 2)
+
+    if arr[mid] = target then
+      return mid, true
+    elif arr[mid] < target then
+      left := mid + 1
+    else
+      right := mid - 1
+    endif
+  endwhile
+
+  return -1, false
+endfunc
+
+func main()
+  @test_found
+  arr := [1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
+  idx, found := binary_search(arr, 7)
+  write("Search 7 in", arr)
+  write("Result: index =", idx, "found =", found)
+  -- Expected: index = 3, found = true
+
+  @test_not_found
+  idx2, found2 := binary_search(arr, 6)
+  write("\nSearch 6 in", arr)
+  write("Result: index =", idx2, "found =", found2)
+  -- Expected: index = -1, found = false
+
+  @test_edge
+  idx3, found3 := binary_search(arr, 1)
+  idx4, found4 := binary_search(arr, 19)
+  write("\nEdge cases:")
+  write("Search 1: index =", idx3, "found =", found3)  -- 0, true
+  write("Search 19: index =", idx4, "found =", found4)  -- 9, true
+
+  if found and not found2 and found3 and found4 then
+    write("\nBinary search: ALL TESTS PASSED")
+  else
+    write("\nBinary search: FAILED")
+  endif
+endfunc

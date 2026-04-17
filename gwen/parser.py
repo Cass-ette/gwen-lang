@@ -75,6 +75,10 @@ class Parser:
             return self.parse_return()
         if tok.type == TokenType.PARALLEL:
             return self.parse_parallel()
+        if tok.type == TokenType.GLOBAL:
+            return self.parse_global()
+        if tok.type == TokenType.ARENA:
+            return self.parse_arena()
         if tok.type == TokenType.TAG:
             name = tok.value
             self.advance()
@@ -356,7 +360,12 @@ class Parser:
         return_type = None
         if self.at(TokenType.ARROW):
             self.advance()
-            return_type = self.parse_type()
+            # Support multiple return types: -> int, bool
+            types = [self.parse_type()]
+            while self.at(TokenType.COMMA):
+                self.advance()
+                types.append(self.parse_type())
+            return_type = types if len(types) > 1 else types[0]
 
         body = self.parse_block_until(TokenType.ENDFUNC)
         self.expect(TokenType.ENDFUNC)
@@ -455,14 +464,25 @@ class Parser:
             self.advance()
             end = self.parse_expr()
             step = None
+            direction = "auto"
+
+            # Parse optional modifiers: order, reverse, step
+            if self.at(TokenType.ORDER):
+                self.advance()
+                direction = "asc"
+            elif self.at(TokenType.REVERSE):
+                self.advance()
+                direction = "desc"
+
             if self.at(TokenType.STEP):
                 self.advance()
                 step = self.parse_expr()
+
             self.expect(TokenType.DO)
             body = self.parse_block_until(TokenType.ENDFOR)
             self.expect(TokenType.ENDFOR)
             return ast.ForRangeStmt(var=var, start=start, end=end, step=step,
-                                     body=body, line=tok.line)
+                                     direction=direction, body=body, line=tok.line)
         else:
             # For-each
             self.expect(TokenType.DO) if not self.at(TokenType.WITH) else None
@@ -552,12 +572,25 @@ class Parser:
 
     def parse_return(self) -> ast.ReturnStmt:
         tok = self.expect(TokenType.RETURN)
-        value = None
+        values = []
         if not self.at(TokenType.NEWLINE, TokenType.EOF, TokenType.ENDFUNC,
                        TokenType.ENDIF, TokenType.ENDWHILE, TokenType.ENDFOR,
                        TokenType.ENDMATCH, TokenType.ENDMODULE, TokenType.ENDPARALLEL):
-            value = self.parse_expr()
+            values.append(self.parse_expr())
+            # Support multiple return values: return a, b, c
+            while self.at(TokenType.COMMA):
+                self.advance()
+                values.append(self.parse_expr())
+        value = values if len(values) > 1 else (values[0] if values else None)
         return ast.ReturnStmt(value=value, line=tok.line)
+
+    def parse_global(self) -> ast.GlobalStmt:
+        """Parse global x := value - force assignment to module/global scope."""
+        tok = self.expect(TokenType.GLOBAL)
+        name = self.expect(TokenType.IDENTIFIER).value
+        self.expect(TokenType.ASSIGN)
+        value = self.parse_expr()
+        return ast.GlobalStmt(name=name, value=value, line=tok.line)
 
     def parse_parallel(self) -> ast.ParallelStmt:
         tok = self.expect(TokenType.PARALLEL)
@@ -577,6 +610,16 @@ class Parser:
         self.expect(TokenType.ENDPARALLEL)
         return ast.ParallelStmt(body=body, result_var=result_var,
                                  allow_fail=allow_fail, line=tok.line)
+
+
+    def parse_arena(self) -> ast.ArenaStmt:
+        """Parse arena name do ... endarena."""
+        tok = self.expect(TokenType.ARENA)
+        name = self.expect(TokenType.IDENTIFIER).value
+        self.expect(TokenType.DO)
+        body = self.parse_block_until(TokenType.ENDARENA)
+        self.expect(TokenType.ENDARENA)
+        return ast.ArenaStmt(name=name, body=body, line=tok.line)
 
 
 def parse(source: str) -> ast.Program:

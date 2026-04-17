@@ -1,0 +1,70 @@
+-- 斐波那契数列
+-- 测试：递归、迭代
+
+-- 递归实现
+func fib_recursive(n: int) -> int
+  if n <= 1 then
+    return n
+  endif
+  return fib_recursive(n - 1) + fib_recursive(n - 2)
+endfunc
+
+-- 迭代实现
+func fib_iterative(n: int) -> int
+  if n <= 1 then
+    return n
+  endif
+
+  prev := 0
+  curr := 1
+
+  for i in 2 to n do
+    next := prev + curr
+    prev := curr
+    curr := next
+  endfor
+
+  return curr
+endfunc
+
+func main()
+  @test_recursive
+  write("Fibonacci (recursive with cache):")
+  cache := []
+  for i in 0 to 20 do
+    append(cache, 0)
+  endfor
+
+  for i in 0 to 10 do
+    result := fib_recursive(i, cache)
+    write("fib(", i, ") =", result)
+  endfor
+
+  @test_iterative
+  write("\nFibonacci (iterative):")
+  for i in 0 to 10 do
+    result := fib_iterative(i)
+    write("fib(", i, ") =", result)
+  endfor
+
+  @verify_correctness
+  write("\nVerification:")
+  expected := [0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+  all_pass := true
+
+  for i in 0 to 10 do
+    actual := fib_iterative(i)
+    if actual = expected[i] then
+      write("fib(", i, ") =", actual, "✓")
+    else
+      write("fib(", i, ") =", actual, "expected", expected[i], "✗")
+      all_pass := false
+    endif
+  endfor
+
+  if all_pass then
+    write("\nFibonacci: ALL TESTS PASSED")
+  else
+    write("\nFibonacci: SOME TESTS FAILED")
+  endif
+endfunc

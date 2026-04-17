@@ -1,0 +1,63 @@
+-- Test global keyword: explicit outer scope modification
+
+-- Module-level counter
+call_count: int := 0
+
+func increment()
+  -- Without global: creates local variable (same name as module-level)
+  call_count := call_count + 1  -- local call_count = 0 + 1 = 1
+  return call_count
+endfunc
+
+func counter_maker()
+  -- Create a counter using global to modify shared state
+  global call_count := call_count + 1  -- modifies module-level
+  return call_count
+endfunc
+
+func outer()
+  -- Local variable shadowing module-level
+  shared: int := 10
+
+  func inner()
+    -- With global: modify outer's local variable
+    global shared := shared + 5  -- shared from outer = 10 + 5 = 15
+  endfunc
+
+  inner()
+  return shared  -- Should be 15
+endfunc
+
+func main()
+  @test_local
+  write("=== Local := vs Global ===")
+  write("Module call_count:", call_count)
+  increment()
+  write("After increment():", call_count)  -- Should be 0 (local)
+  increment()
+  write("After 2nd increment():", call_count)  -- Should be 0
+
+  @test_global_module
+  write("")
+  write("=== Global to Module ===")
+  write("Module call_count:", call_count)  -- 0
+  counter_maker()
+  write("After counter_maker():", call_count)  -- Should be 1
+  counter_maker()
+  write("After 2nd counter_maker():", call_count)  -- Should be 2
+
+  @test_global_nested
+  write("")
+  write("=== Global in Nested Function ===")
+  result := outer()
+  write("outer() returned:", result)  -- Should be 15
+  write("Module call_count still:", call_count)  -- Should be 2
+
+  -- Verify all behaviors
+  write("")
+  if call_count = 2 then
+    write("SUCCESS: global works correctly!")
+  else
+    write("FAIL: expected call_count=2, got", call_count)
+  endif
+endfunc

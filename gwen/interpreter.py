@@ -46,9 +46,11 @@ class GwenLambda:
 
 
 class Environment:
-    def __init__(self, parent: Optional['Environment'] = None):
+    def __init__(self, parent: Optional['Environment'] = None, is_call_frame: bool = False, func_name: Optional[str] = None):
         self.vars: Dict[str, Any] = {}
         self.parent = parent
+        self.is_call_frame = is_call_frame  # True for function call environments
+        self.func_name = func_name  # Function name for this call frame
 
     def get(self, name: str) -> Any:
         if name in self.vars:
@@ -58,10 +60,17 @@ class Environment:
         raise GwenError(f"Undefined variable: {name}")
 
     def set(self, name: str, value: Any):
+        """Create new variable in current scope."""
         self.vars[name] = value
 
     def update_local(self, name: str, value: Any):
         """Update or create variable in current scope only."""
+        self.vars[name] = value
+
+    def update(self, name: str, value: Any, current_func: Optional[str] = None):
+        """Local assignment: always create/update in current scope only.
+        Use global x := value to modify outer scope explicitly."""
+        # Always update/create in current scope (local behavior)
         self.vars[name] = value
 
 
@@ -146,10 +155,26 @@ class Interpreter:
 
         elif isinstance(stmt, ast.Assignment):
             values = [self.eval_expr(v, env) for v in stmt.values]
-            if len(stmt.targets) == 1 and len(values) == 1:
+            current_func = env.func_name
+            # Check for multi-value unpacking from function return
+            if len(stmt.targets) > 1 and len(values) == 1 and isinstance(values[0], list):
+                # Unpack function return values: a, b := func() where func returns [x, y]
+                unpacked = values[0]
+                if len(stmt.targets) != len(unpacked):
+                    raise GwenError(f"Assignment count mismatch: {len(stmt.targets)} targets, {len(unpacked)} values", stmt.line)
+                for target, val in zip(stmt.targets, unpacked):
+                    if isinstance(target, str):
+                        env.update(target, val, current_func)
+                    elif isinstance(target, ast.IndexAccess):
+                        obj = self.eval_expr(target.obj, env)
+                        index = self.eval_expr(target.index, env)
+                        obj[index] = val
+                    else:
+                        raise GwenError("Invalid assignment target", stmt.line)
+            elif len(stmt.targets) == 1 and len(values) == 1:
                 target = stmt.targets[0]
                 if isinstance(target, str):
-                    env.update_local(target, values[0])
+                    env.update(target, values[0], current_func)
                 elif isinstance(target, ast.IndexAccess):
                     obj = self.eval_expr(target.obj, env)
                     index = self.eval_expr(target.index, env)
@@ -157,10 +182,10 @@ class Interpreter:
                 else:
                     raise GwenError("Invalid assignment target", stmt.line)
             elif len(stmt.targets) == len(values):
-                # Evaluate all values first (for swap: a, b := b, a)
+                # Multi-assignment: a, b := x, y
                 for target, val in zip(stmt.targets, values):
                     if isinstance(target, str):
-                        env.update_local(target, val)
+                        env.update(target, val, current_func)
                     elif isinstance(target, ast.IndexAccess):
                         obj = self.eval_expr(target.obj, env)
                         index = self.eval_expr(target.index, env)
@@ -175,8 +200,15 @@ class Interpreter:
             env.set(stmt.name, value)
 
         elif isinstance(stmt, ast.ReturnStmt):
-            value = self.eval_expr(stmt.value, env) if stmt.value else None
-            raise ReturnSignal(value)
+            if stmt.value is None:
+                raise ReturnSignal(None)
+            # Support multiple return values
+            if isinstance(stmt.value, list):
+                values = [self.eval_expr(v, env) for v in stmt.value]
+                raise ReturnSignal(values)
+            else:
+                value = self.eval_expr(stmt.value, env)
+                raise ReturnSignal(value)
 
         elif isinstance(stmt, ast.IfStmt):
             if self.is_truthy(self.eval_expr(stmt.condition, env)):
@@ -199,10 +231,31 @@ class Interpreter:
             start = self.eval_expr(stmt.start, env)
             end = self.eval_expr(stmt.end, env)
             step = self.eval_expr(stmt.step, env) if stmt.step else None
-            if step is None:
-                step = 1 if start <= end else -1
+
+            # Determine direction based on direction field and auto-detection
+            if stmt.direction == "asc":
+                # Force ascending: always iterate small -> large
+                if start > end:
+                    start, end = end, start
+                step = 1 if step is None else abs(step)
+                compare = lambda i, end: i <= end
+            elif stmt.direction == "desc":
+                # Force descending: always iterate large -> small
+                if start < end:
+                    start, end = end, start
+                step = -1 if step is None else -abs(step)
+                compare = lambda i, end: i >= end
+            else:
+                # Auto mode: infer from start/end
+                if step is None:
+                    step = 1 if start <= end else -1
+                if step > 0:
+                    compare = lambda i, end: i <= end
+                else:
+                    compare = lambda i, end: i >= end
+
             i = start
-            while (step > 0 and i <= end) or (step < 0 and i >= end):
+            while compare(i, end):
                 env.update_local(stmt.var, i)
                 self.exec_block(stmt.body, env)
                 i += step
@@ -252,6 +305,38 @@ class Interpreter:
                     env.set(stmt.module, mod_ns)
             else:
                 raise GwenError(f"Module not found: {stmt.module}", stmt.line)
+
+        elif isinstance(stmt, ast.GlobalStmt):
+            # global x := value - force assignment to outer (non-local) scope
+            # Searches: 1) current call frame's parent (module/closure), 2) call stack
+            value = self.eval_expr(stmt.value, env)
+
+            # First try: search up env chain (module/closures)
+            search_env = env.parent if env.is_call_frame else env
+            found = False
+            while search_env:
+                if stmt.name in search_env.vars:
+                    search_env.vars[stmt.name] = value
+                    found = True
+                    break
+                if search_env.is_call_frame:
+                    # Found a call frame - check if it has the variable
+                    if stmt.name in search_env.vars:
+                        search_env.vars[stmt.name] = value
+                        found = True
+                        break
+                    # Otherwise continue up
+                search_env = search_env.parent
+
+            if not found:
+                # Variable doesn't exist in any accessible outer scope
+                raise GwenError(f"global variable '{stmt.name}' not found in any outer scope", stmt.line)
+
+        elif isinstance(stmt, ast.ArenaStmt):
+            # arena name do ... endarena - explicit memory region
+            # Current implementation: just execute the block (GC handles memory)
+            # Future: track arena allocations for batch release
+            self.exec_block(stmt.body, env)
 
         elif isinstance(stmt, ast.ParallelStmt):
             # In the interpreter, run sequentially (true parallelism needs async runtime)
@@ -413,7 +498,7 @@ class Interpreter:
         raise GwenError(f"'{callee}' is not callable", call.line)
 
     def call_function(self, fn: GwenFunction, args: List[Any]) -> Any:
-        call_env = Environment(parent=fn.closure)
+        call_env = Environment(parent=fn.closure, is_call_frame=True, func_name=fn.node.name)
         params = fn.node.params
         for i, param in enumerate(params):
             if i < len(args):
@@ -429,7 +514,7 @@ class Interpreter:
         return None
 
     def call_lambda(self, lam: GwenLambda, args: List[Any]) -> Any:
-        call_env = Environment(parent=lam.closure)
+        call_env = Environment(parent=lam.closure, is_call_frame=True, func_name=None)
         for i, param in enumerate(lam.node.params):
             if i < len(args):
                 call_env.set(param.name, args[i])

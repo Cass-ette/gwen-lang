@@ -5,11 +5,11 @@ module segment_tree
 
 -- Build segment tree from array
 export func build(tree: list, arr: list, node: int, start: int, end: int)
-  write("build", node, start, end)
+  -- write("build", node, start, end)
   if start = end then
     tree[node] := arr[start]
   else
-    mid := (start + end) / 2
+    mid := int((start + end) / 2)
     left_child := node * 2
     right_child := node * 2 + 1
 
@@ -58,7 +58,7 @@ export func update(tree: list, node: int, start: int, end: int, index: int, valu
   if start = end then
     tree[node] := value
   else
-    mid := (start + end) / 2
+    mid := int((start + end) / 2)
     left_child := node * 2
     right_child := node * 2 + 1
 
@@ -75,7 +75,7 @@ endfunc
 -- Helper: create tree array with size 4*n initialized to 0
 export func create_tree(n: int)
   tree := []
-  for i in 1 to n * 4 do
+  for i in 1 to int(n * 4) do
     append(tree, 0)
   endfor
   return tree

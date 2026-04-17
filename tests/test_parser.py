@@ -261,6 +261,16 @@ def test_func_type_param():
     assert isinstance(func.return_type, ast.GenericType)
 
 
+def test_arena():
+    prog = parse("""arena test do
+  x := 42
+endarena""")
+    stmt = prog.statements[0]
+    assert isinstance(stmt, ast.ArenaStmt)
+    assert stmt.name == "test"
+    assert len(stmt.body) == 1
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = 0

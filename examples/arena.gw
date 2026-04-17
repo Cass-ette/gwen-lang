@@ -1,0 +1,25 @@
+-- Arena 语法测试
+
+func main()
+  @test_arena_basic
+  arena test do
+    x := 42
+    write("Inside arena, x =", x)
+  endarena
+  write("After arena")
+
+  @test_arena_nested
+  arena outer do
+    a := 1
+    write("Outer arena, a =", a)
+
+    arena inner do
+      b := 2
+      write("Inner arena, b =", b)
+    endarena
+
+    write("Back to outer, a =", a)
+  endarena
+
+  write("All arena tests passed!")
+endfunc

@@ -159,6 +159,7 @@ class ForRangeStmt:
     start: Any = None
     end: Any = None
     step: Any = None
+    direction: str = "auto"  # "auto", "asc", "desc"
     body: List[Any] = field(default_factory=list)
     line: int = 0
 
@@ -187,7 +188,7 @@ class WhenClause:
 class FuncDef:
     name: str = ""
     params: List[Param] = field(default_factory=list)
-    return_type: Optional[Any] = None
+    return_type: Any = None  # Single type or List of types for multiple returns
     body: List[Any] = field(default_factory=list)
     exported: bool = False
     line: int = 0
@@ -209,6 +210,20 @@ class ParallelStmt:
     body: List[Any] = field(default_factory=list)
     result_var: Optional[str] = None
     allow_fail: bool = False
+    line: int = 0
+
+@dataclass
+class GlobalStmt:
+    """global x := value - force assignment to module/global scope."""
+    name: str = ""
+    value: Any = None
+    line: int = 0
+
+@dataclass
+class ArenaStmt:
+    """arena name do ... endarena - explicit memory region."""
+    name: str = ""
+    body: List[Any] = field(default_factory=list)
     line: int = 0
 
 @dataclass

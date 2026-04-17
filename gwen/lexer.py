@@ -29,6 +29,8 @@ class TokenType(Enum):
     IN = auto()
     TO = auto()
     STEP = auto()
+    ORDER = auto()       # order (强制正序)
+    REVERSE = auto()     # reverse (强制倒序)
     WITH = auto()
     INDEX = auto()
     ENDFOR = auto()
@@ -55,6 +57,9 @@ class TokenType(Enum):
     TRUE = auto()
     FALSE = auto()
     MOD = auto()
+    GLOBAL = auto()        # global
+    ARENA = auto()         # arena
+    ENDARENA = auto()      # endarena
 
     # Operators
     ASSIGN = auto()        # :=
@@ -128,6 +133,11 @@ KEYWORDS = {
     "true": TokenType.TRUE,
     "false": TokenType.FALSE,
     "mod": TokenType.MOD,
+    "global": TokenType.GLOBAL,
+    "arena": TokenType.ARENA,
+    "endarena": TokenType.ENDARENA,
+    "order": TokenType.ORDER,
+    "reverse": TokenType.REVERSE,
 }
 
 

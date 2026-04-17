@@ -1,0 +1,94 @@
+-- 归并排序
+-- 测试：递归、列表切片、合并
+
+-- 合并两个有序列表
+func merge(left: list<int>, right: list<int>) -> list<int>
+  result := []
+  i := 0
+  j := 0
+
+  while i < len(left) and j < len(right) do
+    if left[i] <= right[j] then
+      append(result, left[i])
+      i := i + 1
+    else
+      append(result, right[j])
+      j := j + 1
+    endif
+  endwhile
+
+  -- 剩余元素
+  while i < len(left) do
+    append(result, left[i])
+    i := i + 1
+  endwhile
+
+  while j < len(right) do
+    append(result, right[j])
+    j := j + 1
+  endwhile
+
+  return result
+endfunc
+
+-- 归并排序主函数
+func merge_sort(arr: list<int>) -> list<int>
+  if len(arr) <= 1 then
+    return arr
+  endif
+
+  -- 分割
+  mid := int(len(arr) / 2)
+  left := []
+  right := []
+
+  for i in 0 to mid - 1 do
+    append(left, arr[i])
+  endfor
+
+  for i in mid to len(arr) - 1 do
+    append(right, arr[i])
+  endfor
+
+  -- 递归排序并合并
+  sorted_left := merge_sort(left)
+  sorted_right := merge_sort(right)
+
+  return merge(sorted_left, sorted_right)
+endfunc
+
+func main()
+  @test_empty
+  empty := []
+  result_empty := merge_sort(empty)
+  write("Empty list:", result_empty)
+
+  @test_single
+  single := [42]
+  result_single := merge_sort(single)
+  write("Single element:", result_single)
+
+  @test_sorted
+  sorted := [1, 2, 3, 4, 5]
+  result_sorted := merge_sort(sorted)
+  write("Already sorted:", result_sorted)
+
+  @test_reverse
+  rev_arr := [5, 4, 3, 2, 1]
+  result_reverse := merge_sort(rev_arr)
+  write("Reverse sorted:", result_reverse)
+
+  @test_random
+  random := [64, 34, 25, 12, 22, 11, 90, 5]
+  result_random := merge_sort(random)
+  write("Random:", random)
+  write("Sorted:", result_random)
+
+  @test_large
+  large := [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]
+  result_large := merge_sort(large)
+  write("\nLarger list:", large)
+  write("Sorted:", result_large)
+
+  write("\nMerge sort: ALL TESTS COMPLETED")
+endfunc
