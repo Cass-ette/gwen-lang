@@ -33,7 +33,7 @@ endfunc
 | 模块 | `module` | `endmodule` |
 | 并行 | `parallel do` | `endparallel` |
 | 内存域 | `arena` | `endarena` |
-| 匿名函数 | `=> ...` | `end` |
+| 匿名函数 | `=> ...` | `endfunc`（块体）/ 无（单行） |
 | 类型转换 | `as` | — |
 
 ---

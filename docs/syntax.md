@@ -158,7 +158,7 @@ sort(list, (a, b: int) => a > b)
 handler := (x: int) =>
   y := x * 2
   return y + 1
-end
+endfunc
 ```
 
 ### 函数是一等公民

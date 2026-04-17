@@ -336,13 +336,8 @@ class Parser:
                     expr = self.parse_expr()
                     body = [ast.ReturnStmt(value=expr, line=expr.line)]
                 else:
-                    body = self.parse_block_until(TokenType.IDENTIFIER)
-                    # expect 'end'
-                    end_tok = self.peek()
-                    if end_tok.value == "end":
-                        self.advance()
-                    else:
-                        raise ParseError("Expected 'end' for lambda", end_tok)
+                    body = self.parse_block_until(TokenType.ENDFUNC)
+                    self.expect(TokenType.ENDFUNC)
                 return ast.Lambda(params=params, body=body, line=params[0].line if params else self.peek().line)
         except (ParseError, IndexError):
             pass
