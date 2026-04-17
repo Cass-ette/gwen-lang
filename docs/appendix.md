@@ -39,15 +39,15 @@ endfunc
 
 ## 类型关键字
 
-| 关键字 | 说明 |
-|--------|------|
-| `int8`, `int16`, `int32`, `int64` | 有符号定宽整数 |
-| `uint8`, `uint16`, `uint32`, `uint64` | 无符号定宽整数 |
-| `int<N>` | 自定义 N 位大整数 |
-| `float32`, `float64` | 定宽浮点数 |
-| `float<N>` | 自定义 N 位十进制精度浮点 |
-| `decimal<P, S>` | 定点数：P 位总长，S 位小数 |
-| `type` | 类型别名 |
+| 关键字 | 说明 | 状态 |
+|--------|------|------|
+| `int8`, `int16`, `int32`, `int64` | 有符号定宽整数 | 已实现 |
+| `uint8`, `uint16`, `uint32`, `uint64` | 无符号定宽整数 | 已实现 |
+| `float32`, `float64` | 定宽浮点数（IEEE 754） | 已实现 |
+| `int<N>` | 自定义 N 位大整数 | 设计阶段 |
+| `float<N>` | 自定义 N 位精度浮点 | 设计阶段 |
+| `decimal<P, S>` | 定点数 | 设计阶段 |
+| `type` | 类型别名 | 设计阶段 |
 
 ---
 
@@ -84,29 +84,29 @@ module server_ops
 use http_client
 use logger from logging
 
-export func health_check(servers: list(string)) -> list(result(string, error))
-  parallel allow_fail => results do
+export func health_check(servers: list<string>) -> list<string>
+  results := []
+  parallel allow_fail => par_results do
     for server in servers do
       check_one(server)
     endfor
   endparallel
-  return results
+  return par_results
 endfunc
 
-func check_one(server: string) -> result(string, error)
+func check_one(server: string) -> string
   @request
-  resp, err := http_client.get(server + "/health")
+  resp, success := http_client.get(server + "/health")
 
-  match err
-    when ok(r) then
-      if r.status = 200 then
-        return ok(server + " is healthy")
-      else
-        return err(server + " returned " + r.status)
-      endif
-    when err(e) then
-      return err(server + " unreachable: " + e)
-  endmatch
+  if success then
+    if resp.status = 200 then
+      return ok(server + " is healthy")
+    else
+      return err(server + " returned non-200")
+    endif
+  else
+    return err(server + " unreachable")
+  endif
 endfunc check_one
 
 endmodule

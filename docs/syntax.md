@@ -118,8 +118,10 @@ func read_file(path: string) -> string, bool
   return content, true
 endfunc
 
-data, ok := read_file("/etc/config")
+data, found := read_file("/etc/config")
 ```
+
+> 注意：`ok` 和 `err` 是保留关键字，不能用作变量名。
 
 ### 默认参数
 
@@ -169,22 +171,31 @@ endfunc handle_request
 
 ### Result 类型
 
+函数返回 `ok(value)` 或 `err(message)`，调用方用 `match` 处理：
+
 ```
-func read_file(path: string) -> result(string, error)
+func read_file(path: string) -> string, bool
   if file_exists(path) then
-    return ok(file_content)
+    return file_content, true
   else
-    return err("file not found")
+    return "", false
   endif
+endfunc
+
+-- 或者用 ok/err 包装
+func parse_int(s: string) -> int
+  ...
+  return ok(n)      -- 成功
+  return err("not a number")  -- 失败
 endfunc
 ```
 
 ### match 处理
 
 ```
-match read_file("/etc/config")
-  when ok(data) then
-    write(data)
+match parse_int("42")
+  when ok(n) then
+    write(n)
   when err(e) then
     write("error: ", e)
 endmatch
@@ -194,10 +205,9 @@ endmatch
 
 ## 类型标注
 
-- 函数参数：必须标注
-- 函数返回值：可选（可推导）
-- 局部变量：可选（可推导）
-- 模块级变量：必须标注
+- 函数参数：推荐标注（当前不强制）
+- 函数返回值：可选
+- 局部变量：可选（推导）
 
 ```
 x: int := 42         -- 显式标注

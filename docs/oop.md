@@ -130,14 +130,15 @@ endmatch
 
 ## 与模块系统的关系
 
-对象和 module 可以共存：
+对象和 module 可以共存（对象导出语法待对象系统实现后确定）：
 
 ```gwen
 module banking
   object Account ... endobject
   object Transaction ... endobject
 
-  export Account, Transaction
+  -- 注：当前 export 仅支持函数
+  -- 对象导出语法将在对象系统实现时设计
 endmodule
 
 use Account from banking

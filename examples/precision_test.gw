@@ -58,10 +58,18 @@ endfunc
 func test_as_conversion()
   write("")
   write("=== as conversion ===")
-  r1 := 3.14159265 as float32
-  r2 := 3.14159265 as float64
-  write("3.14159265 as float32:", r1)
-  write("3.14159265 as float64:", r2)
+  match 3.14159265 as float32
+    when ok(v) then
+      write("3.14159265 as float32:", v)
+    else
+      write("float32 conversion failed")
+  endmatch
+  match 3.14159265 as float64
+    when ok(v) then
+      write("3.14159265 as float64:", v)
+    else
+      write("float64 conversion failed")
+  endmatch
 endfunc
 
 func test_float32_binary_search()
