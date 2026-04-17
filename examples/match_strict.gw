@@ -1,0 +1,85 @@
+-- 测试 match 语义收紧（方案 A+B）
+-- A: Result 类型必须用 ok(x)/err(x) 模式
+-- B: 必须有 else 分支兜底未匹配的情况
+
+func get_result() -> result<int, string>
+  return ok(42)
+endfunc
+
+func test_ok_pattern()
+  write("=== Test: ok(x) pattern ===")
+  r := get_result()
+  match r
+    when ok(val) then
+      write("Got value:", val)
+    else
+      write("No match")
+  endmatch
+endfunc
+
+func test_err_pattern()
+  write("")
+  write("=== Test: err(x) pattern ===")
+  bad := err("something wrong")
+  match bad
+    when err(msg) then
+      write("Got error:", msg)
+    else
+      write("No match")
+  endmatch
+endfunc
+
+func test_ok_and_err_complete()
+  write("")
+  write("=== Test: ok + err (complete, no else) ===")
+  r := get_result()
+  match r
+    when ok(val) then
+      write("Success:", val)
+    when err(msg) then
+      write("Failed:", msg)
+  endmatch
+  -- 覆盖了 ok 和 err 所有情况，不需要 else
+endfunc
+
+func test_literal_match_not_result()
+  write("")
+  write("=== Test: literal match (not Result type, allowed) ===")
+  x := 5
+  match x
+    when 1 then
+      write("One")
+    when 5 then
+      write("Five")
+    when 10 then
+      write("Ten")
+    else
+      write("Other")
+  endmatch
+endfunc
+
+func test_range_pattern()
+  write("")
+  write("=== Test: range pattern (not Result type, allowed) ===")
+  score := 85
+  match score
+    when 90 to 100 then
+      write("A")
+    when 80 to 89 then
+      write("B")
+    when 70 to 79 then
+      write("C")
+    else
+      write("D or F")
+  endmatch
+endfunc
+
+func main()
+  test_ok_pattern()
+  test_err_pattern()
+  test_ok_and_err_complete()
+  test_literal_match_not_result()
+  test_range_pattern()
+  write("")
+  write("Match strict semantics: ALL TESTS PASSED")
+endfunc

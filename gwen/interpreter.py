@@ -190,11 +190,11 @@ class Interpreter:
         # Auto-call main() if it exists
         try:
             main_fn = self.global_env.get("main")
-            if isinstance(main_fn, GwenFunction):
-                self.call_function(main_fn, [])
         except GwenError:
             # No main() defined, that's fine for scripts without func main
-            pass
+            return
+        if isinstance(main_fn, GwenFunction):
+            self.call_function(main_fn, [])
 
     def exec_block(self, stmts: List[Any], env: Environment):
         for stmt in stmts:
@@ -325,14 +325,34 @@ class Interpreter:
 
         elif isinstance(stmt, ast.MatchStmt):
             subject = self.eval_expr(stmt.subject, env)
+
+            # [方案 A] 如果 subject 是 Result 类型，强制使用 ok(x)/err(x) 模式
+            is_result = isinstance(subject, (OkValue, ErrValue))
+            if is_result:
+                for case in stmt.cases:
+                    for pat in case.patterns:
+                        if not isinstance(pat, (ast.OkExpr, ast.ErrExpr)):
+                            raise GwenError(
+                                f"Match on Result type must use ok(x) or err(x) patterns, not '{type(pat).__name__}' "
+                                f"(line {pat.line if hasattr(pat, 'line') else '?'}). "
+                                f"Use 'when ok(val) then ...' or 'when err(msg) then ...'",
+                                stmt.line
+                            )
+
             matched = False
             for case in stmt.cases:
                 case_env = Environment(parent=env)
-                if self.match_patterns(subject, case.patterns, case_env):
+                if self.match_patterns(subject, case.patterns, case_env, stmt.line):
                     self.exec_block(case.body, case_env)
                     matched = True
                     break
-            if not matched and stmt.else_body:
+            if not matched:
+                if not stmt.else_body:
+                    # [方案 B] 没有匹配且没有 else 分支
+                    raise GwenError(
+                        f"Match statement has no matching case and no 'else' branch (exhaustive match required)",
+                        stmt.line
+                    )
                 self.exec_block(stmt.else_body, env)
 
         elif isinstance(stmt, ast.ModuleDef):
@@ -587,7 +607,7 @@ class Interpreter:
             return r.value
         return None
 
-    def match_patterns(self, subject: Any, patterns: List[Any], env: Environment) -> bool:
+    def match_patterns(self, subject: Any, patterns: List[Any], env: Environment, line: int = 0) -> bool:
         for pattern in patterns:
             if self.match_single(subject, pattern, env):
                 return True
