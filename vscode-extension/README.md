@@ -17,7 +17,7 @@ VSCode extension for the Gwen programming language.
 cd vscode-extension
 npm install -g @vscode/vsce
 vsce package
-code --install-extension gwen-lang-0.1.0.vsix
+code //install-extension gwen-lang-0.1.0.vsix
 ```
 
 ### Development Mode
@@ -55,7 +55,7 @@ code --install-extension gwen-lang-0.1.0.vsix
 ## Example
 
 ```gwen
--- Gwen Hello World
+// Gwen Hello World
 func main()
   write("Hello, Gwen!")
 endfunc

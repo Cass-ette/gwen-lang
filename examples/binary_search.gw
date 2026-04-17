@@ -1,7 +1,7 @@
--- 二分查找算法
--- 测试：循环、条件、索引、多返回值
+// 二分查找算法
+// 测试：循环、条件、索引、多返回值
 
--- 返回 (index, found)
+// 返回 (index, found)
 func binary_search(arr: list<int>, target: int) -> int, bool
   left := 0
   right := len(arr) - 1
@@ -27,20 +27,20 @@ func main()
   idx, found := binary_search(arr, 7)
   write("Search 7 in", arr)
   write("Result: index =", idx, "found =", found)
-  -- Expected: index = 3, found = true
+  // Expected: index = 3, found = true
 
   @test_not_found
   idx2, found2 := binary_search(arr, 6)
   write("\nSearch 6 in", arr)
   write("Result: index =", idx2, "found =", found2)
-  -- Expected: index = -1, found = false
+  // Expected: index = -1, found = false
 
   @test_edge
   idx3, found3 := binary_search(arr, 1)
   idx4, found4 := binary_search(arr, 19)
   write("\nEdge cases:")
-  write("Search 1: index =", idx3, "found =", found3)  -- 0, true
-  write("Search 19: index =", idx4, "found =", found4)  -- 9, true
+  write("Search 1: index =", idx3, "found =", found3)  // 0, true
+  write("Search 19: index =", idx4, "found =", found4)  // 9, true
 
   if found and not found2 and found3 and found4 then
     write("\nBinary search: ALL TESTS PASSED")

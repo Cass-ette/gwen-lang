@@ -1,38 +1,38 @@
--- Test global keyword: nested functions modify outer variables explicitly
+// Test global keyword: nested functions modify outer variables explicitly
 
 func outer() -> int
-  x: int := 10  -- Local variable in outer
+  x: int := 10  // Local variable in outer
 
   func inner()
-    -- Must use global to modify outer's variable
-    global x := x + 5  -- x = 10 + 5 = 15
+    // Must use global to modify outer's variable
+    global x := x + 5  // x = 10 + 5 = 15
   endfunc
 
   inner()
-  return x  -- Returns 15
+  return x  // Returns 15
 endfunc
 
 func counter() -> int
-  count: int := 0  -- Local variable
+  count: int := 0  // Local variable
 
   func increment()
-    global count := count + 1  -- modifies outer's count
+    global count := count + 1  // modifies outer's count
   endfunc
 
   increment()
   increment()
   increment()
-  return count  -- Returns 3
+  return count  // Returns 3
 endfunc
 
 func main()
   @test_outer
   arr1 := outer()
-  write("outer() returned:", arr1)  -- 15
+  write("outer() returned:", arr1)  // 15
 
   @test_counter
   arr2 := counter()
-  write("counter() returned:", arr2)  -- 3
+  write("counter() returned:", arr2)  // 3
 
   if arr1 = 15 and arr2 = 3 then
     write("Nested scope with global works!")

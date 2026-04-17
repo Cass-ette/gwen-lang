@@ -1,4 +1,4 @@
--- Greatest Common Divisor
+// Greatest Common Divisor
 
 func gcd(a: int, b: int) -> int
   while b != 0 do

@@ -1,11 +1,11 @@
--- Segment Tree implementation in Gwen
--- Supports range sum queries and point updates
+// Segment Tree implementation in Gwen
+// Supports range sum queries and point updates
 
 module segment_tree
 
--- Build segment tree from array
+// Build segment tree from array
 export func build(tree: list, arr: list, node: int, start: int, end: int)
-  -- write("build", node, start, end)
+  // write("build", node, start, end)
   if start = end then
     tree[node] := arr[start]
   else
@@ -20,19 +20,19 @@ export func build(tree: list, arr: list, node: int, start: int, end: int)
   endif
 endfunc
 
--- Query sum in range [left, right]
+// Query sum in range [left, right]
 export func query(tree: list, node: int, start: int, end: int, left: int, right: int)
-  -- Out of range
+  // Out of range
   if right < start or end < left then
     return ok(0)
   endif
 
-  -- Fully within range
+  // Fully within range
   if left <= start and end <= right then
     return ok(tree[node])
   endif
 
-  -- Partial overlap - query both children
+  // Partial overlap - query both children
   mid := (start + end) / 2
   left_child := node * 2
   right_child := node * 2 + 1
@@ -53,7 +53,7 @@ export func query(tree: list, node: int, start: int, end: int, left: int, right:
   endmatch
 endfunc
 
--- Update element at index to new value
+// Update element at index to new value
 export func update(tree: list, node: int, start: int, end: int, index: int, value: int)
   if start = end then
     tree[node] := value
@@ -72,7 +72,7 @@ export func update(tree: list, node: int, start: int, end: int, index: int, valu
   endif
 endfunc
 
--- Helper: create tree array with size 4*n initialized to 0
+// Helper: create tree array with size 4*n initialized to 0
 export func create_tree(n: int)
   tree := []
   for i in 1 to int(n * 4) do
@@ -83,7 +83,7 @@ endfunc
 
 endmodule
 
--- Example usage
+// Example usage
 func main()
   use build, query, update, create_tree from segment_tree
 

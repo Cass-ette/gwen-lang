@@ -1,30 +1,30 @@
--- 浮点二分查找：求平方根，控制精度 epsilon
--- 测试：浮点运算、精度控制、收敛条件
+// 浮点二分查找：求平方根，控制精度 epsilon
+// 测试：浮点运算、精度控制、收敛条件
 
--- 二分查找求平方根
--- target: 要求平方根的数
--- epsilon: 精度阈值（如 0.0001）
--- 返回 (root, iterations)
+// 二分查找求平方根
+// target: 要求平方根的数
+// epsilon: 精度阈值（如 0.0001）
+// 返回 (root, iterations)
 func sqrt_binary(target: float, epsilon: float) -> float, int
   if target < 0 then
-    return -1.0, 0  -- 负数无实数平方根
+    return -1.0, 0  // 负数无实数平方根
   endif
 
   if target = 0 then
     return 0.0, 0
   endif
 
-  -- 确定搜索范围
+  // 确定搜索范围
   low := 0.0
   high := target
   if target < 1 then
-    high := 1.0  -- 小于1的数，平方根比自身大
+    high := 1.0  // 小于1的数，平方根比自身大
   endif
 
   mid := 0.0
   iterations := 0
 
-  -- 二分查找：当区间宽度大于 epsilon 时继续
+  // 二分查找：当区间宽度大于 epsilon 时继续
   while (high - low) > epsilon do
     mid := (low + high) / 2.0
     square := mid * mid
@@ -39,7 +39,7 @@ func sqrt_binary(target: float, epsilon: float) -> float, int
 
     iterations := iterations + 1
 
-    -- 安全上限：防止无限循环
+    // 安全上限：防止无限循环
     if iterations > 1000 then
       return mid, iterations
     endif
@@ -48,12 +48,12 @@ func sqrt_binary(target: float, epsilon: float) -> float, int
   return (low + high) / 2.0, iterations
 endfunc
 
--- 求解方程 f(x) = x^3 - 2x - 5 = 0
--- 在区间 [2, 3] 内找根（已知有唯一实根）
+// 求解方程 f(x) = x^3 - 2x - 5 = 0
+// 在区间 [2, 3] 内找根（已知有唯一实根）
 func solve_cubic(epsilon: float) -> float, int
-  -- f(x) = x^3 - 2x - 5
-  -- f(2) = 8 - 4 - 5 = -1 < 0
-  -- f(3) = 27 - 6 - 5 = 16 > 0
+  // f(x) = x^3 - 2x - 5
+  // f(2) = 8 - 4 - 5 = -1 < 0
+  // f(3) = 27 - 6 - 5 = 16 > 0
 
   low := 2.0
   high := 3.0
@@ -66,9 +66,9 @@ func solve_cubic(epsilon: float) -> float, int
     if f_mid = 0 then
       return mid, iterations
     elif f_mid < 0 then
-      low := mid  -- 根在右半区间
+      low := mid  // 根在右半区间
     else
-      high := mid  -- 根在左半区间
+      high := mid  // 根在左半区间
     endif
 
     iterations := iterations + 1

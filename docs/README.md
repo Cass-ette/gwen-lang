@@ -41,28 +41,28 @@
 ## 快速示例
 
 ```
--- Hello World
+// Hello World
 func main()
   write("Hello, Gwen!")
 endfunc
 ```
 
 ```
--- 快速排序
+// 快速排序
 func sort(arr: list<int>) -> list<int>
   if len(arr) <= 1 then
     return arr
   endif
-  -- ...
+  // ...
 endfunc
 ```
 
 ```
--- 显式作用域
+// 显式作用域
 func counter()
   count: int := 0
   func increment()
-    global count := count + 1  -- 显式修改外层
+    global count := count + 1  // 显式修改外层
   endfunc
   increment()
   return count
@@ -79,5 +79,5 @@ endfunc
 ## 注释
 
 ```
--- 单行注释
+// 单行注释
 ```

@@ -1,4 +1,4 @@
--- Hello World in Gwen
+// Hello World in Gwen
 
 func main()
   write("Hello, Gwen!")

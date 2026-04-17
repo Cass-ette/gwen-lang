@@ -1,4 +1,4 @@
--- Arena 语法测试
+// Arena 语法测试
 
 func main()
   @test_arena_basic

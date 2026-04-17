@@ -190,10 +190,23 @@ class Lexer:
         while self.pos < len(self.source) and self.peek() in (" ", "\t", "\r"):
             self.advance()
 
-    def skip_comment(self):
-        # -- single line comment
+    def skip_line_comment(self):
+        # // single line comment - consume until newline
         while self.pos < len(self.source) and self.peek() != "\n":
             self.advance()
+
+    def skip_block_comment(self):
+        # /* ... */ block comment (not nested)
+        start_line, start_col = self.line, self.column
+        self.advance()  # consume /
+        self.advance()  # consume *
+        while self.pos < len(self.source):
+            if self.peek() == "*" and self.peek_next() == "/":
+                self.advance()  # consume *
+                self.advance()  # consume /
+                return
+            self.advance()
+        raise LexerError("Unterminated block comment", start_line, start_col)
 
     def read_string(self):
         line, col = self.line, self.column
@@ -270,8 +283,14 @@ class Lexer:
                 continue
 
             # Comment
-            if ch == "-" and self.peek_next() == "-":
-                self.skip_comment()
+            # Line comment
+            if ch == "/" and self.peek_next() == "/":
+                self.skip_line_comment()
+                continue
+
+            # Block comment
+            if ch == "/" and self.peek_next() == "*":
+                self.skip_block_comment()
                 continue
 
             # String

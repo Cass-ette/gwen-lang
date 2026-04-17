@@ -25,12 +25,12 @@ Gwen 的 object 系统**只保留对审计有利的部分**，剔除有害的部
 
 ```gwen
 object Account
-  -- 字段默认私有，外部不可直接访问
+  // 字段默认私有，外部不可直接访问
   balance: decimal
   owner: string
   transaction_count: int
 
-  -- 构造函数
+  // 构造函数
   new(owner: string, initial: decimal) -> Account
     return Account{
       balance := initial,
@@ -39,7 +39,7 @@ object Account
     }
   endnew
 
-  -- 方法（self 必须显式声明）
+  // 方法（self 必须显式声明）
   func deposit(self: Account, amount: decimal) -> result
     if amount < 0 then
       return err("negative deposit")
@@ -57,7 +57,7 @@ object Account
     return ok(amount)
   endfunc
 
-  -- 只读访问器
+  // 只读访问器
   func get_balance(self: Account) -> decimal
     return self.balance
   endfunc
@@ -71,18 +71,18 @@ endobject
 ### 使用对象
 
 ```gwen
--- 构造
+// 构造
 acc := Account.new("Alice", 1000.00)
 
--- 方法调用（语法糖）
+// 方法调用（语法糖）
 result := acc.deposit(500)
 
--- 审计器等价展开
+// 审计器等价展开
 result := Account.deposit(acc, 500)
 
--- 错误：字段私有，无法直接访问
-write(acc.balance)     -- 编译/运行时错误：private field
-write(acc.get_balance())  -- 正确：通过方法访问
+// 错误：字段私有，无法直接访问
+write(acc.balance)     // 编译/运行时错误：private field
+write(acc.get_balance())  // 正确：通过方法访问
 ```
 
 ## 对比：Gwen vs 传统 OOP
@@ -108,11 +108,11 @@ payment.pay(100);  // 实际是 CreditCard 还是 Crypto？
 
 **Gwen 风格**：
 ```gwen
--- 情况 1：明确类型
+// 情况 1：明确类型
 cc := CreditCard.new(...)
-cc.pay(100)        -- 确定是 CreditCard.pay
+cc.pay(100)        // 确定是 CreditCard.pay
 
--- 情况 2：需要多态时，显式分派
+// 情况 2：需要多态时，显式分派
 match payment_type
   when "credit" then CreditCard.pay(account, 100)
   when "crypto" then Crypto.pay(account, 100)
@@ -137,8 +137,8 @@ module banking
   object Account ... endobject
   object Transaction ... endobject
 
-  -- 注：当前 export 仅支持函数
-  -- 对象导出语法将在对象系统实现时设计
+  // 注：当前 export 仅支持函数
+  // 对象导出语法将在对象系统实现时设计
 endmodule
 
 use Account from banking

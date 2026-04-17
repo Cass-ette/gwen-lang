@@ -1,4 +1,4 @@
--- L2 数据结构测试：list、索引、迭代
+// L2 数据结构测试：list、索引、迭代
 
 func test_list_creation()
   write("[L2.1] List Creation")
@@ -26,10 +26,10 @@ func test_list_indexing()
   write("  arr[2]:", arr[2])
   write("  arr[4]:", arr[4])
 
-  -- 反向索引
+  // 反向索引
   write("  arr[len-1]:", arr[len(arr) - 1])
 
-  -- 修改
+  // 修改
   arr[1] := 99
   write("  After arr[1] := 99:", arr)
 
@@ -42,15 +42,15 @@ func test_list_operations()
 
   lst := [1, 2, 3]
 
-  -- append
+  // append
   append(lst, 4)
   append(lst, 5)
   write("  After append:", lst)
 
-  -- len
+  // len
   write("  Length:", len(lst))
 
-  -- manual pop (remove last by slicing)
+  // manual pop (remove last by slicing)
   last_val := lst[len(lst) - 1]
   new_lst := []
   for i in 0 to len(lst) - 2 do
@@ -68,14 +68,14 @@ func test_list_iteration()
 
   items := ["a", "b", "c", "d"]
 
-  -- foreach
+  // foreach
   result := ""
   for item in items do
     result := result + item
   endfor
   write("  Concatenated:", result)
 
-  -- foreach with index
+  // foreach with index
   indexed := ""
   for item in items with index i do
     indexed := indexed + str(i) + item
@@ -89,14 +89,14 @@ func test_list_comprehension_manual()
   write("")
   write("[L2.5] Manual List Building (no native comprehension)")
 
-  -- Build squares manually
+  // Build squares manually
   squares := []
   for i in 1 to 10 do
     append(squares, i * i)
   endfor
   write("  Squares 1..10:", squares)
 
-  -- Filter evens
+  // Filter evens
   evens := []
   for i in 1 to 20 do
     if i mod 2 = 0 then
@@ -117,11 +117,11 @@ func test_nested_lists()
   write("  Matrix:", matrix)
   write("  matrix[1][2]:", matrix[1][2])
 
-  -- 修改嵌套元素
+  // 修改嵌套元素
   matrix[0][0] := 99
   write("  After matrix[0][0] := 99:", matrix)
 
-  -- 遍历矩阵
+  // 遍历矩阵
   sum := 0
   for row in matrix do
     for val in row do
@@ -139,14 +139,14 @@ func test_list_slicing_manual()
 
   arr := [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
-  -- slice 2..6
+  // slice 2..6
   slice := []
   for i in 2 to 6 do
     append(slice, arr[i])
   endfor
   write("  arr[2..6]:", slice)
 
-  -- reverse slice
+  // reverse slice
   rev := []
   for i in 9 to 0 do
     append(rev, arr[i])
@@ -166,7 +166,7 @@ func test_list_sort_verify()
   write("  Original:", unsorted)
   write("  Sorted:", sorted)
 
-  -- Verify sorted
+  // Verify sorted
   is_sorted := true
   for i in 0 to len(sorted) - 2 do
     if sorted[i] > sorted[i + 1] then
@@ -179,7 +179,7 @@ func test_list_sort_verify()
   return is_sorted and sorted[0] = 11 and sorted[len(sorted) - 1] = 90
 endfunc
 
--- Helper: return new sorted list without modifying original
+// Helper: return new sorted list without modifying original
 func merge_sort_copy(arr: list<int>) -> list<int>
   if len(arr) <= 1 then
     return arr

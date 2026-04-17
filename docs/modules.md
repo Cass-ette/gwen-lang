@@ -12,7 +12,7 @@ export func gcd(a: int, b: int) -> int
   return a
 endfunc
 
-func helper() -> int       -- 私有，外部不可见
+func helper() -> int       // 私有，外部不可见
   ...
 endfunc
 

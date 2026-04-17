@@ -29,16 +29,16 @@
 ```
 use pop, insert, sort, reverse, map, filter from list
 
--- 弹出末尾
+// 弹出末尾
 last := pop(items)
 
--- 插入
-insert(items, 0, "head")  -- 在索引0插入
+// 插入
+insert(items, 0, "head")  // 在索引0插入
 
--- 排序（返回新列表）
+// 排序（返回新列表）
 sorted := sort(nums)
 
--- 高阶函数
+// 高阶函数
 doubles := map(nums, (x) => x * 2)
 evens := filter(nums, (x) => x mod 2 = 0)
 ```
@@ -101,11 +101,11 @@ home := env("HOME")
 Gwen **不采用 OOP**（类、继承、方法调用），标准库保持**函数式**接口：
 
 ```
--- Gwen 风格（函数式）
+// Gwen 风格（函数式）
 append(lst, item)
 sort(lst)
 
--- 不是 OOP 风格
+// 不是 OOP 风格
 lst.append(item)
 lst.sort()
 ```

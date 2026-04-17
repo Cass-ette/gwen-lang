@@ -1,7 +1,7 @@
--- 斐波那契数列
--- 测试：递归、迭代
+// 斐波那契数列
+// 测试：递归、迭代
 
--- 递归实现
+// 递归实现
 func fib_recursive(n: int) -> int
   if n <= 1 then
     return n
@@ -9,7 +9,7 @@ func fib_recursive(n: int) -> int
   return fib_recursive(n - 1) + fib_recursive(n - 2)
 endfunc
 
--- 迭代实现
+// 迭代实现
 func fib_iterative(n: int) -> int
   if n <= 1 then
     return n

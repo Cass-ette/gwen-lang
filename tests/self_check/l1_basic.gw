@@ -1,5 +1,5 @@
--- L1 基础测试：语法、运算、控制流
--- 验证语言核心实现正确性
+// L1 基础测试：语法、运算、控制流
+// 验证语言核心实现正确性
 
 func test_arithmetic()
   write("[L1.1] Arithmetic")
@@ -12,7 +12,7 @@ func test_arithmetic()
   write("  10 mod 3 =", a mod b)
   write("  10 ^ 2 =", 10 ^ 2)
 
-  -- 浮点
+  // 浮点
   x: float64 := 3.14
   y: float64 := 2.0
   write("  3.14 * 2 =", x * y)
@@ -30,7 +30,7 @@ func test_comparison()
   write("  5 <= 5:", 5 <= 5)
   write("  5 >= 5:", 5 >= 5)
 
-  -- 链式比较等价展开
+  // 链式比较等价展开
   a := 5
   b := 10
   c := 15
@@ -73,7 +73,7 @@ func test_if_elif_else()
 
   write("  Score 85 -> Grade:", grade)
 
-  -- 嵌套 if
+  // 嵌套 if
   x := 10
   y := 20
   if x > 5 then
@@ -89,7 +89,7 @@ func test_while_loop()
   write("")
   write("[L1.5] While Loop")
 
-  -- 累加
+  // 累加
   sum := 0
   i := 1
   while i <= 10 do
@@ -98,7 +98,7 @@ func test_while_loop()
   endwhile
   write("  Sum 1..10 =", sum)
 
-  -- 提前终止（模拟 break）
+  // 提前终止（模拟 break）
   found := false
   j := 0
   while j < 100 and not found do
@@ -117,28 +117,28 @@ func test_for_range()
   write("")
   write("[L1.6] For Range")
 
-  -- 正向
+  // 正向
   sum1 := 0
   for i in 1 to 5 do
     sum1 := sum1 + i
   endfor
   write("  Sum 1..5 =", sum1)
 
-  -- 反向（自动）
+  // 反向（自动）
   sum2 := 0
   for i in 5 to 1 do
     sum2 := sum2 + i
   endfor
   write("  Sum 5..1 (auto reverse) =", sum2)
 
-  -- 步长
+  // 步长
   sum3 := 0
   for i in 0 to 10 step 2 do
     sum3 := sum3 + i
   endfor
   write("  Sum even 0..10 =", sum3)
 
-  -- order/reverse 强制方向
+  // order/reverse 强制方向
   order_sum := 0
   for i in 5 to 1 order do
     order_sum := order_sum + i
@@ -152,7 +152,7 @@ func test_function_basics()
   write("")
   write("[L1.7] Function Basics")
 
-  -- 调用测试函数
+  // 调用测试函数
   r1 := test_arithmetic()
   r2 := test_comparison()
 
@@ -165,7 +165,7 @@ func test_multi_return()
   write("")
   write("[L1.8] Multi-Return Values")
 
-  -- 多返回值直接解包
+  // 多返回值直接解包
   q1, r1 := divide_with_remainder(17, 5)
   write("  17 / 5 =", q1, "rem", r1)
 
@@ -189,9 +189,9 @@ func test_variable_scope()
   outer := 10
 
   func inner()
-    -- 读取外层
+    // 读取外层
     read_outer := outer
-    -- 修改需要 global
+    // 修改需要 global
     global outer := outer + 1
     return read_outer
   endfunc
@@ -213,7 +213,7 @@ func test_string_ops()
   concat := s1 + ", " + s2
   write("  Concat:", concat)
 
-  -- 转义序列
+  // 转义序列
   newline := "Line1\nLine2"
   tab := "Col1\tCol2"
   write("  Escapes work (visual check)")
@@ -227,7 +227,7 @@ func main()
 
   results := []
 
-  -- Run all tests sequentially (parallel is optional)
+  // Run all tests sequentially (parallel is optional)
   append(results, test_arithmetic())
   append(results, test_comparison())
   append(results, test_logical())

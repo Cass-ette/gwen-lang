@@ -1,9 +1,9 @@
--- L5 边界测试：极端输入、边界值、规模压力
--- 验证 Gwen 实现在边界条件下的健壮性
+// L5 边界测试：极端输入、边界值、规模压力
+// 验证 Gwen 实现在边界条件下的健壮性
 
--- ============ 辅助函数 ============
+// ============ 辅助函数 ============
 
--- 空列表求和
+// 空列表求和
 func sum_list(arr: list<int>) -> int
   total := 0
   for x in arr do
@@ -12,7 +12,7 @@ func sum_list(arr: list<int>) -> int
   return total
 endfunc
 
--- 递归求深度（测试递归栈）
+// 递归求深度（测试递归栈）
 func count_down(n: int) -> int
   if n <= 0 then
     return 0
@@ -20,7 +20,7 @@ func count_down(n: int) -> int
   return 1 + count_down(n - 1)
 endfunc
 
--- 迭代斐波那契（大 n）
+// 迭代斐波那契（大 n）
 func fib_iter(n: int) -> int
   if n <= 1 then
     return n
@@ -35,7 +35,7 @@ func fib_iter(n: int) -> int
   return b
 endfunc
 
--- 字符串重复计数
+// 字符串重复计数
 func count_char(s: string, target: string) -> int
   count := 0
   i := 0
@@ -49,7 +49,7 @@ func count_char(s: string, target: string) -> int
   return count
 endfunc
 
--- 列表最大值（含空列表保护）
+// 列表最大值（含空列表保护）
 func safe_max(arr: list<int>) -> int, bool
   if len(arr) = 0 then
     return 0, false
@@ -63,13 +63,13 @@ func safe_max(arr: list<int>) -> int, bool
   return m, true
 endfunc
 
--- ============ 测试主程序 ============
+// ============ 测试主程序 ============
 
 func main()
   write("=== Gwen L5 Boundary Self-Check ===")
   write("")
 
-  -- Test 1: 空列表操作
+  // Test 1: 空列表操作
   write("[B1] Empty list operations")
   empty := []
   s := sum_list(empty)
@@ -77,14 +77,14 @@ func main()
   write("  sum([]) =", s, "len([]) =", n)
   t1 := s = 0 and n = 0
 
-  -- Test 2: 空列表 safe_max
+  // Test 2: 空列表 safe_max
   write("")
   write("[B2] Empty list safe_max")
   val, has_val := safe_max(empty)
   write("  safe_max([]) -> val:", val, "has_val:", has_val)
   t2 := has_val = false
 
-  -- Test 3: 单元素列表
+  // Test 3: 单元素列表
   write("")
   write("[B3] Single element list")
   single := [42]
@@ -92,7 +92,7 @@ func main()
   write("  safe_max([42]) ->", val2, "has_val:", has_val2)
   t3 := val2 = 42 and has_val2 = true
 
-  -- Test 4: 大列表求和（1 到 1000）
+  // Test 4: 大列表求和（1 到 1000）
   write("")
   write("[B4] Large list sum: 1 to 1000")
   big_sum := 0
@@ -100,23 +100,23 @@ func main()
     big_sum := big_sum + i
   endfor
   write("  sum(1..1000) =", big_sum)
-  t4 := big_sum = 500500  -- n*(n+1)/2 = 1000*1001/2
+  t4 := big_sum = 500500  // n*(n+1)/2 = 1000*1001/2
 
-  -- Test 5: 深递归（100 层）
+  // Test 5: 深递归（100 层）
   write("")
   write("[B5] Deep recursion: count_down(100)")
   depth := count_down(100)
   write("  count_down(100) =", depth)
   t5 := depth = 100
 
-  -- Test 6: 大 n 斐波那契（迭代，n=50）
+  // Test 6: 大 n 斐波那契（迭代，n=50）
   write("")
   write("[B6] Large Fibonacci: fib(50)")
   f50 := fib_iter(50)
   write("  fib(50) =", f50)
   t6 := f50 = 12586269025
 
-  -- Test 7: 负数边界
+  // Test 7: 负数边界
   write("")
   write("[B7] Negative number boundaries")
   neg_arr := [-1, -100, -50, -3, -99]
@@ -124,7 +124,7 @@ func main()
   write("  max([-1,-100,-50,-3,-99]) =", max_neg)
   t7 := max_neg = -1
 
-  -- Test 8: 字符串边界：空字符串
+  // Test 8: 字符串边界：空字符串
   write("")
   write("[B8] Empty string length")
   empty_str := ""
@@ -132,7 +132,7 @@ func main()
   write("  len(\"\") =", l)
   t8 := l = 0
 
-  -- Test 9: 字符串单字符计数
+  // Test 9: 字符串单字符计数
   write("")
   write("[B9] Count chars in string")
   s9 := "banana"
@@ -140,7 +140,7 @@ func main()
   write("  count('a' in \"banana\") =", cnt)
   t9 := cnt = 3
 
-  -- Test 10: 嵌套列表边界
+  // Test 10: 嵌套列表边界
   write("")
   write("[B10] Nested list boundary")
   matrix := [
@@ -152,14 +152,14 @@ func main()
   write("  matrix[2][2] =", matrix[2][2])
   t10 := matrix[0][0] = 1 and matrix[2][2] = 6
 
-  -- Test 11: 整数零和负零行为
+  // Test 11: 整数零和负零行为
   write("")
   write("[B11] Zero arithmetic")
   z := 0
   t11 := z + 0 = 0 and z * 100 = 0 and z - 0 = 0 and 0 - z = 0
   write("  0+0=0, 0*100=0, 0-0=0:", t11)
 
-  -- Test 12: for 循环边界：start = end
+  // Test 12: for 循环边界：start = end
   write("")
   write("[B12] for loop: start = end")
   count12 := 0
@@ -169,7 +169,7 @@ func main()
   write("  for i in 5 to 5: iterations =", count12)
   t12 := count12 = 1
 
-  -- Summary
+  // Summary
   write("")
   write("=== Summary ===")
   results := [t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12]

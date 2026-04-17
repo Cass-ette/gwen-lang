@@ -1,5 +1,5 @@
--- 显式精度类型测试: float32, float64, int8/16/32/64
--- 验证 IEEE 754 精度行为和溢出检测
+// 显式精度类型测试: float32, float64, int8/16/32/64
+// 验证 IEEE 754 精度行为和溢出检测
 
 func test_float32()
   write("=== float32 precision ===")
@@ -8,7 +8,7 @@ func test_float32()
   write("  expected:   3.1415927410125732 (IEEE 754 single)")
   write("  original - pi32:", 3.141592653589793 - pi32)
 
-  -- 大数精度损失
+  // 大数精度损失
   big: float32 := 123456789.0
   big64: float64 := 123456789.0
   write("")

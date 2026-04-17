@@ -1,0 +1,40 @@
+// Gwen 语法特性展示
+// 特点：审计优先、显式类型、强制错误处理、直观的控制流
+
+func safe_divide(a: int, b: int) -> int, bool
+  if b = 0 then
+    return 0, false
+  endif
+  return a / b, true
+endfunc
+
+func main()
+  @setup
+  scores: list<int> := [88, 72, 95, 64, 100]
+  total: int8 := 0           // int8 范围 [-128, 127]，超出会报错
+
+  @sum_scores
+  for s in scores do
+    total := total + s / 5    // 平均到 int8 范围内
+  endfor
+  write("总分/5 累加:", total)
+
+  @safe_math
+  result, ok_flag := safe_divide(100, 0)
+  if ok_flag then
+    write("100/0 =", result)
+  else
+    write("拒绝除零")
+  endif
+
+  @precision_trap
+  match 3.14159265 as float32
+    when ok(v) then write("float32 π:", v)     // 精度会丢失
+    else write("转换失败")
+  endmatch
+
+  @reverse_loop
+  for i in 1 to 3 reverse do
+    write("倒数:", i)
+  endfor
+endfunc

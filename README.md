@@ -36,8 +36,8 @@ Features:
 ### Variables & Types
 
 ```
-x := 42            -- inferred
-x: int := 42       -- explicit type
+x := 42            // inferred
+x: int := 42       // explicit type
 ```
 
 ### Functions
@@ -115,7 +115,7 @@ endmatch
 module math_utils
 
 export func gcd(a: int, b: int) -> int
-  -- ...
+  // ...
 endfunc
 
 endmodule

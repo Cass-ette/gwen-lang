@@ -1,6 +1,6 @@
--- 测试 match 语义收紧（方案 A+B）
--- A: Result 类型必须用 ok(x)/err(x) 模式
--- B: 必须有 else 分支兜底未匹配的情况
+// 测试 match 语义收紧（方案 A+B）
+// A: Result 类型必须用 ok(x)/err(x) 模式
+// B: 必须有 else 分支兜底未匹配的情况
 
 func get_result() -> result<int, string>
   return ok(42)
@@ -39,7 +39,7 @@ func test_ok_and_err_complete()
     when err(msg) then
       write("Failed:", msg)
   endmatch
-  -- 覆盖了 ok 和 err 所有情况，不需要 else
+  // 覆盖了 ok 和 err 所有情况，不需要 else
 endfunc
 
 func test_literal_match_not_result()

@@ -45,8 +45,8 @@ v: uint16 := 65535
 | `float64` | ~15 位十进制有效数字 | IEEE 754 双精度 |
 
 ```
-pi: float32  := 3.14159        -- ~7 位精度
-precise: float64 := 3.14159265358979  -- ~15 位精度
+pi: float32  := 3.14159        // ~7 位精度
+precise: float64 := 3.14159265358979  // ~15 位精度
 ```
 
 **精度陷阱**：`float32` 在 2²⁴（16,777,216）处开始丢失整数精度，`float32(16777216) = float32(16777217)` 为 `true`。
@@ -59,7 +59,7 @@ precise: float64 := 3.14159265358979  -- ~15 位精度
 
 ```
 x: int8 := 127
-x := x + 1   -- 运行时错误：Overflow: 128 out of range for int8 [-128, 127]
+x := x + 1   // 运行时错误：Overflow: 128 out of range for int8 [-128, 127]
 ```
 
 ---
@@ -71,7 +71,7 @@ x := x + 1   -- 运行时错误：Overflow: 128 out of range for int8 [-128, 127
 ```
 match 3.7 as int
   when ok(n) then
-    write(n)          -- 3，截断
+    write(n)          // 3，截断
   when err(e) then
     write("failed:", e)
 endmatch
@@ -80,14 +80,14 @@ endmatch
 ### 常用转换
 
 ```
-3.7 as int        -- ok(3)，截断小数
-"hello" as int    -- err("Cannot convert...")
-5 as float        -- ok(5.0)
-42 as string      -- ok("42")
+3.7 as int        // ok(3)，截断小数
+"hello" as int    // err("Cannot convert...")
+5 as float        // ok(5.0)
+42 as string      // ok("42")
 
--- 精度转换
-100 as int8       -- ok(100)，值在范围内
-200 as int8       -- err(...)，溢出
+// 精度转换
+100 as int8       // ok(100)，值在范围内
+200 as int8       // err(...)，溢出
 ```
 
 ---
@@ -97,9 +97,9 @@ endmatch
 变量声明时可标注类型，解释器会在赋值时执行强制转换和溢出检测：
 
 ```
-a: int8  := 100       -- 赋值时检查范围
-b: float32 := 3.14    -- 截断为 float32 精度
-c: int64 := 10 ^ 15   -- 大整数，int64 范围内
+a: int8  := 100       // 赋值时检查范围
+b: float32 := 3.14    // 截断为 float32 精度
+c: int64 := 10 ^ 15   // 大整数，int64 范围内
 ```
 
 ---
@@ -107,9 +107,9 @@ c: int64 := 10 ^ 15   -- 大整数，int64 范围内
 ## 泛型类型
 
 ```
-list<int>              -- 整数列表
-list<list<int>>        -- 整数矩阵
-list<string>           -- 字符串列表
+list<int>              // 整数列表
+list<list<int>>        // 整数矩阵
+list<string>           // 字符串列表
 ```
 
 ---
@@ -117,9 +117,9 @@ list<string>           -- 字符串列表
 ## 函数类型
 
 ```
-(int) -> int           -- 接受 int，返回 int
-(int, int) -> int      -- 接受两个 int，返回 int
-() -> string           -- 无参数，返回 string
+(int) -> int           // 接受 int，返回 int
+(int, int) -> int      // 接受两个 int，返回 int
+() -> string           // 无参数，返回 string
 ```
 
 ---

@@ -1,4 +1,4 @@
--- Higher-order functions with generic types
+// Higher-order functions with generic types
 
 func map(f: (int) -> int, arr: list<int>) -> list<int>
   result := []

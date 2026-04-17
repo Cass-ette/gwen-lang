@@ -96,11 +96,11 @@ endfunc
 ## 内置函数
 
 ```
-write(x, ...)        -- 输出到标准输出
-read(prompt)         -- 读取一行输入（可选提示语）
-len(list)            -- 列表长度
-append(list, item)   -- 向列表追加元素
-str(x), int(x), float(x), type(x)  -- 类型相关函数
+write(x, ...)        // 输出到标准输出
+read(prompt)         // 读取一行输入（可选提示语）
+len(list)            // 列表长度
+append(list, item)   // 向列表追加元素
+str(x), int(x), float(x), type(x)  // 类型相关函数
 ```
 
 ---

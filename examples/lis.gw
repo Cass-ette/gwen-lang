@@ -1,7 +1,7 @@
--- 最长递增子序列 (Longest Increasing Subsequence)
--- 测试：动态规划、while 循环、列表操作、多返回值
+// 最长递增子序列 (Longest Increasing Subsequence)
+// 测试：动态规划、while 循环、列表操作、多返回值
 
--- 返回 LIS 长度和具体序列
+// 返回 LIS 长度和具体序列
 func lis(arr: list<int>) -> int, list<int>
   if len(arr) = 0 then
     return 0, []
@@ -9,9 +9,9 @@ func lis(arr: list<int>) -> int, list<int>
 
   n := len(arr)
 
-  -- dp[i] 表示以 arr[i] 结尾的 LIS 长度
+  // dp[i] 表示以 arr[i] 结尾的 LIS 长度
   dp := []
-  -- prev[i] 记录前驱节点，用于重建序列
+  // prev[i] 记录前驱节点，用于重建序列
   prev := []
 
   for i in 0 to n - 1 do
@@ -19,11 +19,11 @@ func lis(arr: list<int>) -> int, list<int>
     append(prev, -1)
   endfor
 
-  -- 计算 dp
+  // 计算 dp
   max_len := 1
   max_idx := 0
 
-  -- 使用 while 避免 for 的自动倒序问题
+  // 使用 while 避免 for 的自动倒序问题
   i := 1
   while i <= n - 1 do
     j := 0
@@ -42,11 +42,11 @@ func lis(arr: list<int>) -> int, list<int>
     i := i + 1
   endwhile
 
-  -- 重建序列
+  // 重建序列
   sequence := []
   idx := max_idx
   while idx >= 0 do
-    -- 插入到开头
+    // 插入到开头
     temp := []
     append(temp, arr[idx])
     for item in sequence do
@@ -65,51 +65,51 @@ func main()
   len1, seq1 := lis(arr1)
   write("Array:", arr1)
   write("LIS length:", len1, "Sequence:", seq1)
-  -- Expected: length 4, sequence [2, 3, 7, 101] or [2, 5, 7, 101]
+  // Expected: length 4, sequence [2, 3, 7, 101] or [2, 5, 7, 101]
 
   @test_empty
   arr2 := []
   len2, seq2 := lis(arr2)
   write("\nEmpty array:")
   write("LIS length:", len2, "Sequence:", seq2)
-  -- Expected: 0, []
+  // Expected: 0, []
 
   @test_single
   arr3 := [5]
   len3, seq3 := lis(arr3)
   write("\nSingle element:")
   write("LIS length:", len3, "Sequence:", seq3)
-  -- Expected: 1, [5]
+  // Expected: 1, [5]
 
   @test_strictly_increasing
   arr4 := [1, 2, 3, 4, 5]
   len4, seq4 := lis(arr4)
   write("\nStrictly increasing:")
   write("LIS length:", len4, "Sequence:", seq4)
-  -- Expected: 5, [1, 2, 3, 4, 5]
+  // Expected: 5, [1, 2, 3, 4, 5]
 
   @test_strictly_decreasing
   arr5 := [5, 4, 3, 2, 1]
   len5, seq5 := lis(arr5)
   write("\nStrictly decreasing:")
   write("LIS length:", len5, "Sequence:", seq5)
-  -- Expected: 1, any single element
+  // Expected: 1, any single element
 
   @test_duplicates
   arr6 := [1, 2, 2, 3, 1, 2, 3, 4]
   len6, seq6 := lis(arr6)
   write("\nWith duplicates:")
   write("LIS length:", len6, "Sequence:", seq6)
-  -- Expected: 4, [1, 2, 3, 4]
+  // Expected: 4, [1, 2, 3, 4]
 
   @test_all_equal
   arr7 := [5, 5, 5, 5]
   len7, seq7 := lis(arr7)
   write("\nAll equal:")
   write("LIS length:", len7, "Sequence:", seq7)
-  -- Expected: 1, [5]
+  // Expected: 1, [5]
 
-  -- 验证
+  // 验证
   all_pass := true
   if len1 != 4 then
     write("\nFAIL: basic test, expected length 4, got", len1)
