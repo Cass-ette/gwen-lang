@@ -1,0 +1,164 @@
+-- L4 类型系统测试：精度、溢出、转换
+-- 验证显式精度类型的行为正确性
+
+-- ============ 辅助函数 ============
+
+-- float32 无法表示 2^24+1，因为只有 23 位尾数
+func check_float32_precision() -> bool
+  x: float32 := 16777216.0
+  y: float32 := 16777217.0
+  -- float32 只有 23 位尾数（~7 位十进制），2^24+1 舍入为 2^24
+  return x = y
+endfunc
+
+-- float64 有 52 位尾数，能区分 2^24 和 2^24+1
+func check_float64_precision() -> bool
+  a: float64 := 16777216.0
+  b: float64 := 16777217.0
+  return a != b
+endfunc
+
+-- as 转换辅助：float -> int 截断
+func test_as_float_to_int(f: float) -> int, bool
+  match f as int
+    when ok(v) then
+      return v, true
+    else
+      return 0, false
+  endmatch
+endfunc
+
+-- as 转换辅助：int -> int8
+func test_as_to_int8(n: int) -> int, bool
+  match n as int8
+    when ok(v) then
+      return v, true
+    else
+      return 0, false
+  endmatch
+endfunc
+
+-- ============ 测试主程序 ============
+
+func main()
+  write("=== Gwen L4 Type System Self-Check ===")
+  write("")
+
+  -- Test 1: int8 范围 [-128, 127]
+  write("[T1] int8 range")
+  a: int8 := 127
+  b: int8 := -128
+  write("  int8 max:", a, "min:", b)
+  t1 := a = 127 and b = -128
+
+  -- Test 2: int8 边界值
+  write("")
+  write("[T2] int8 boundary values")
+  c: int8 := 0
+  d: int8 := 1
+  e: int8 := -1
+  write("  int8 zero:", c, "one:", d, "neg one:", e)
+  t2 := c = 0 and d = 1 and e = -1
+
+  -- Test 3: int16 范围
+  write("")
+  write("[T3] int16 range")
+  f: int16 := 32767
+  g: int16 := -32768
+  write("  int16 max:", f, "min:", g)
+  t3 := f = 32767 and g = -32768
+
+  -- Test 4: int32 范围
+  write("")
+  write("[T4] int32 range")
+  h: int32 := 2147483647
+  i: int32 := -2147483648
+  write("  int32 max:", h, "min:", i)
+  t4 := h = 2147483647 and i = -2147483648
+
+  -- Test 5: int64 大数运算
+  write("")
+  write("[T5] int64 large numbers")
+  big: int64 := 1000000000
+  big2: int64 := big * 1000000
+  write("  1e9 * 1e6 =", big2)
+  t5 := big2 = 1000000000000000
+
+  -- Test 6: uint8 范围 [0, 255]
+  write("")
+  write("[T6] uint8 range")
+  u: uint8 := 255
+  u2: uint8 := 0
+  write("  uint8 max:", u, "min:", u2)
+  t6 := u = 255 and u2 = 0
+
+  -- Test 7: float32 精度丢失（2^24 整数边界）
+  write("")
+  write("[T7] float32 precision loss (2^24 boundary)")
+  p1 := check_float32_precision()
+  write("  float32(16777216) = float32(16777217):", p1)
+  t7 := p1  -- float32 无法区分 2^24 和 2^24+1
+
+  -- Test 8: float64 精度保留
+  write("")
+  write("[T8] float64 precision retained")
+  p2 := check_float64_precision()
+  write("  float64(16777216) != float64(16777217):", p2)
+  t8 := p2  -- float64 能区分
+
+  -- Test 9: as 类型转换（float -> int 截断）
+  write("")
+  write("[T9] Type conversion: float -> int")
+  ival, ok9 := test_as_float_to_int(3.14)
+  write("  3.14 as int:", ival, "ok:", ok9)
+  t9 := ok9 and ival = 3
+
+  -- Test 10: float32 经典 0.1 + 0.2
+  write("")
+  write("[T10] float32 classic: 0.1 + 0.2")
+  x: float32 := 0.1
+  y: float32 := 0.2
+  z: float32 := x + y
+  write("  0.1 + 0.2 in float32:", z)
+  diff := z - 0.3
+  if diff < 0 then
+    diff := 0 - diff
+  endif
+  write("  |result - 0.3| =", diff)
+  t10 := diff < 0.001
+
+  -- Test 11: as 转换到精度类型
+  write("")
+  write("[T11] as conversion: int -> int8")
+  v8, ok11 := test_as_to_int8(100)
+  write("  100 as int8:", v8, "ok:", ok11)
+  t11 := ok11 and v8 = 100
+
+  -- Test 12: int32 算术
+  write("")
+  write("[T12] int32 arithmetic")
+  a32: int32 := 1000000
+  b32: int32 := 2000000
+  sum := a32 + b32
+  write("  int32: 1000000 + 2000000 =", sum)
+  t12 := sum = 3000000
+
+  -- Summary
+  write("")
+  write("=== Summary ===")
+  results := [t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12]
+  passed := 0
+  for r in results do
+    if r then
+      passed := passed + 1
+    endif
+  endfor
+
+  write("Passed:", passed, "/ 12")
+
+  if passed = 12 then
+    write("L4 Type System: ALL TESTS PASSED")
+  else
+    write("L4 Type System: SOME TESTS FAILED")
+  endif
+endfunc
