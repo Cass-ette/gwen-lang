@@ -121,4 +121,4 @@
 
 ## 上次更新
 
-2026-04-17 - 补全显式精度类型文档，tracking 对齐实现状态
+2026-04-18 - 修复 is_truthy(0.0) 返回 true、删除死代码、补全文档缺漏（stdlib/appendix/memory）

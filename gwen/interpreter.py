@@ -560,7 +560,6 @@ class Interpreter:
             return float(result)
         if op == "=":
             return left == right
-            return left == right
         if op == "!=":
             return left != right
         if op == "<":
@@ -666,7 +665,6 @@ class Interpreter:
                 env.set(pattern.value.name, subject.value)
                 return True
             return subject.value == self.eval_expr(pattern.value, env)
-            return subject.value == self.eval_expr(pattern.value, env)
 
         # Range pattern
         if isinstance(pattern, ast.BinaryOp) and pattern.op == "to":
@@ -685,6 +683,8 @@ class Interpreter:
             return value
         if isinstance(value, int):
             return value != 0
+        if isinstance(value, float):
+            return value != 0.0
         if isinstance(value, str):
             return len(value) > 0
         if isinstance(value, list):

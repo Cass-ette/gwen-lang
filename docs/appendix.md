@@ -32,6 +32,7 @@ endfunc
 | 匹配 | `match` | `endmatch` |
 | 模块 | `module` | `endmodule` |
 | 并行 | `parallel do` | `endparallel` |
+| 内存域 | `arena` | `endarena` |
 | 匿名函数 | `=> ...` | `end` |
 | 类型转换 | `as` | — |
 
@@ -48,6 +49,33 @@ endfunc
 | `float<N>` | 自定义 N 位精度浮点 | 设计阶段 |
 | `decimal<P, S>` | 定点数 | 设计阶段 |
 | `type` | 类型别名 | 设计阶段 |
+
+---
+
+## 其他关键字
+
+| 关键字 | 用途 | 状态 |
+|--------|------|------|
+| `func`, `endfunc` | 函数定义 | 已实现 |
+| `if`, `then`, `elif`, `else`, `endif` | 条件分支 | 已实现 |
+| `while`, `do`, `endwhile` | 循环 | 已实现 |
+| `for`, `in`, `to`, `step`, `endfor` | 遍历 | 已实现 |
+| `order`, `reverse` | for 循环方向控制 | 已实现 |
+| `with`, `index` | for 循环辅助 | 已实现 |
+| `match`, `when`, `endmatch` | 模式匹配 | 已实现 |
+| `ok`, `err` | Result 类型构造 | 已实现 |
+| `as` | 类型转换 | 已实现 |
+| `return` | 函数返回 | 已实现 |
+| `and`, `or`, `not` | 逻辑运算 | 已实现 |
+| `true`, `false` | 布尔字面量 | 已实现 |
+| `mod` | 取模运算 | 已实现 |
+| `global` | 全局变量声明 | 已实现 |
+| `module`, `endmodule` | 模块定义 | 已实现 |
+| `export` | 导出函数 | 已实现 |
+| `use`, `from` | 模块导入 | 已实现 |
+| `parallel`, `endparallel` | 并行块（当前顺序执行） | 已实现（语法） |
+| `allow_fail` | 并行容错标记 | 已实现（语法） |
+| `arena`, `endarena` | 内存域（当前无操作） | 已实现（语法） |
 
 ---
 
@@ -96,10 +124,10 @@ endfunc
 
 func check_one(server: string) -> string
   @request
-  resp, success := http_client.get(server + "/health")
+  status, success := http_client.get(server + "/health")
 
   if success then
-    if resp.status = 200 then
+    if status = 200 then
       return ok(server + " is healthy")
     else
       return err(server + " returned non-200")
@@ -107,7 +135,7 @@ func check_one(server: string) -> string
   else
     return err(server + " unreachable")
   endif
-endfunc check_one
+endfunc
 
 endmodule
 ```

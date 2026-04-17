@@ -43,19 +43,21 @@ endarena
 -- 块结束，整个 arena 批量释放，无碎片
 ```
 
-### 后端服务示例
+### 后端服务示例（设计愿景）
+
+> 以下语法为远期设计目标，当前解释器不支持 `byte[8192]`、`in arena` 修饰符等。
 
 ```
-func handle_request(req: Request) -> Response
+func handle_request(req)
   arena request_arena do
     -- 请求级内存池
     body := read_body(req)
     cache := parse_json(body)
 
-    -- 大数组显式放入 arena
-    buffer: byte[8192] in request_arena
+    -- 远期：大数组显式放入 arena
+    -- buffer: byte[8192] in request_arena
 
-    result := process(cache, buffer)
+    result := process(cache)
     return result
   endarena
   -- 请求结束，所有内存一次性释放
@@ -97,19 +99,21 @@ endfor
 
 ## 与作用域结合
 
-区域尊重函数作用域，可以跨函数传递 arena 引用（受限）：
+区域尊重函数作用域，可以跨函数传递 arena 引用（远期设计）：
+
+> 以下 `Arena` 类型参数和 `process_in` 为远期设计，当前不可用。
 
 ```
-func helper(data: Data, a: Arena)
-  -- 在传入的 arena 中分配
-  result := process_in(data, a)
-  return result
-endfunc
+-- 远期目标：
+-- func helper(data, a: Arena)
+--   result := process_in(data, a)
+--   return result
+-- endfunc
 
 func main()
   arena main_arena do
     data := load()
-    result := helper(data, main_arena)
+    result := helper(data)
   endarena
 endfunc
 ```
