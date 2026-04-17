@@ -54,7 +54,7 @@ def test_string():
 
 
 def test_comment():
-    tokens = tokenize('x := 1 -- this is a comment\ny := 2')
+    tokens = tokenize('x := 1 // this is a comment\ny := 2')
     types = [t.type for t in tokens if t.type not in (TokenType.EOF, TokenType.NEWLINE)]
     assert types == [
         TokenType.IDENTIFIER, TokenType.ASSIGN, TokenType.INTEGER,
@@ -105,10 +105,10 @@ def test_module():
 
 
 def test_parallel():
-    tokens = tokenize('parallel allow_fail => results do')
+    tokens = tokenize('parallel allowfail => results do')
     types = [t.type for t in tokens if t.type not in (TokenType.EOF, TokenType.NEWLINE)]
     assert types == [
-        TokenType.PARALLEL, TokenType.ALLOW_FAIL, TokenType.FAT_ARROW,
+        TokenType.PARALLEL, TokenType.ALLOWFAIL, TokenType.FAT_ARROW,
         TokenType.IDENTIFIER, TokenType.DO,
     ]
 

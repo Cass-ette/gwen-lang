@@ -75,7 +75,7 @@ endfunc
 | `export` | 导出函数 | 已实现 |
 | `use`, `from` | 模块导入 | 已实现 |
 | `parallel`, `endparallel` | 并行块（当前顺序执行） | 已实现（语法） |
-| `allow_fail` | 并行容错标记 | 已实现（语法） |
+| `allowfail` | 并行容错标记 | 已实现（语法） |
 | `arena`, `endarena` | 内存域（当前无操作） | 已实现（语法） |
 
 ---
@@ -115,7 +115,7 @@ use logger from logging
 
 export func health_check(servers: list<string>) -> list<string>
   results := []
-  parallel allow_fail => par_results do
+  parallel allowfail => par_results do
     for server in servers do
       check_one(server)
     endfor

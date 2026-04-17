@@ -54,7 +54,7 @@
         },
         {
           "name": "keyword.control.gwen",
-          "match": "\\b(allow_fail|parallel|section)\\b"
+          "match": "\\b(allowfail|parallel|section)\\b"
         },
         {
           "name": "keyword.other.endblock.gwen",

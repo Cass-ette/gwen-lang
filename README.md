@@ -132,7 +132,7 @@ parallel do
   deploy(server2)
 endparallel
 
-parallel allow_fail => results do
+parallel allowfail => results do
   check(server1)
   check(server2)
 endparallel

@@ -34,7 +34,7 @@ endparallel
 ### 允许失败，继续跑
 
 ```
-parallel allow_fail do
+parallel allowfail do
   deploy(server1)
   deploy(server2)
 endparallel
@@ -43,7 +43,7 @@ endparallel
 ### 组合：拿结果 + 允许失败（结果为 ok/err）
 
 ```
-parallel allow_fail => results do
+parallel allowfail => results do
   check(server1)
   check(server2)
 endparallel

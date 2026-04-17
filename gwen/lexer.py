@@ -45,7 +45,7 @@ class TokenType(Enum):
     RETURN = auto()
     PARALLEL = auto()
     ENDPARALLEL = auto()
-    ALLOW_FAIL = auto()
+    ALLOWFAIL = auto()
     OK = auto()
     ERR = auto()
     AND = auto()
@@ -118,7 +118,7 @@ KEYWORDS = {
     "return": TokenType.RETURN,
     "parallel": TokenType.PARALLEL,
     "endparallel": TokenType.ENDPARALLEL,
-    "allow_fail": TokenType.ALLOW_FAIL,
+    "allowfail": TokenType.ALLOWFAIL,
     "ok": TokenType.OK,
     "err": TokenType.ERR,
     "as": TokenType.AS,

@@ -631,7 +631,7 @@ class Parser:
         allow_fail = False
         result_var = None
 
-        if self.at(TokenType.ALLOW_FAIL):
+        if self.at(TokenType.ALLOWFAIL):
             self.advance()
             allow_fail = True
 

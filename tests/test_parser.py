@@ -166,7 +166,7 @@ endparallel""")
 
 
 def test_parallel_allow_fail_result():
-    prog = parse("""parallel allow_fail => results do
+    prog = parse("""parallel allowfail => results do
   check()
 endparallel""")
     stmt = prog.statements[0]
