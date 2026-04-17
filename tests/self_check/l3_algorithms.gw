@@ -7,7 +7,9 @@ func bubble_sort(arr: list<int>) -> list<int>
   for i in 0 to n - 2 do
     for j in 0 to n - i - 2 do
       if arr[j] > arr[j + 1] then
-        arr[j], arr[j + 1] := arr[j + 1], arr[j]
+        temp := arr[j]
+        arr[j] := arr[j + 1]
+        arr[j + 1] := temp
       endif
     endfor
   endfor
@@ -54,24 +56,20 @@ func linear_search(arr: list<int>, target: int) -> int, bool
   return -1, false
 endfunc
 
--- 4. 斐波那契（迭代+缓存）
-fib_cache := {}
+-- 4. 斐波那契（迭代）
 func fibonacci(n: int) -> int
   if n <= 1 then
     return n
   endif
 
-  -- 检查缓存
-  key := n
-  match fib_cache[key]
-    when ok(val) then
-      return val
-    when err(_) then
-      -- 计算并缓存
-      val := fibonacci(n - 1) + fibonacci(n - 2)
-      fib_cache[key] := val
-      return val
-  endmatch
+  a := 0
+  b := 1
+  for i in 2 to n do
+    temp := a + b
+    a := b
+    b := temp
+  endfor
+  return b
 endfunc
 
 -- 5. 素数筛
@@ -114,8 +112,10 @@ endfunc
 -- 6. 最大公约数
 func gcd(a: int, b: int) -> int
   while b != 0 do
-    a, b := b, a mod b
-  endfor
+    temp := a
+    a := b
+    b := temp mod b
+  endwhile
   return a
 endfunc
 
@@ -236,7 +236,9 @@ func bubble_sort_intervals(intervals: list<list<int>>) -> list<list<int>>
   for i in 0 to n - 2 do
     for j in 0 to n - i - 2 do
       if intervals[j][0] > intervals[j + 1][0] then
-        intervals[j], intervals[j + 1] := intervals[j + 1], intervals[j]
+        temp := intervals[j]
+        intervals[j] := intervals[j + 1]
+        intervals[j + 1] := temp
       endif
     endfor
   endfor
@@ -350,10 +352,10 @@ func main()
   write("")
   write("[A10] Two Sum")
   nums := [2, 7, 11, 15]
-  i, j, ok := two_sum(nums, 9)
+  i, j, found := two_sum(nums, 9)
   write("  nums:", nums, "target: 9")
-  write("  indices:", i, j, "found:", ok)
-  t10 := ok and nums[i] + nums[j] = 9
+  write("  indices:", i, j, "found:", found)
+  t10 := found and nums[i] + nums[j] = 9
 
   -- Test 11: Merge Intervals
   write("")
