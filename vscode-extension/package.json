@@ -1,0 +1,57 @@
+{
+  "name": "gwen-lang",
+  "displayName": "Gwen Language Support",
+  "description": "Syntax highlighting and snippets for Gwen language",
+  "version": "0.1.0",
+  "publisher": "cass-ette",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "gwen",
+        "aliases": [
+          "Gwen",
+          "gwen"
+        ],
+        "extensions": [
+          ".gw"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/gwen-light.svg",
+          "dark": "./icons/gwen-dark.svg"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gwen",
+        "scopeName": "source.gwen",
+        "path": "./syntaxes/gwen.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "gwen",
+        "path": "./snippets/gwen.json"
+      }
+    ]
+  },
+  "scripts": {
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^2.15.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Cass-ette/gwen-lang"
+  },
+  "license": "MIT"
+}

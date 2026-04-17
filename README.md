@@ -16,6 +16,21 @@ python3 -m gwen examples/hello.gw
 python3 -m gwen  # starts the REPL
 ```
 
+### VSCode Extension
+
+Gwen has a VSCode extension for syntax highlighting and snippets:
+
+```bash
+cd vscode-extension
+./install.sh
+```
+
+Features:
+- Syntax highlighting for `.gw` files
+- Code snippets (func, if, while, for, match, etc.)
+- Auto-indentation based on block structure
+- Comment toggling with `Cmd+/` / `Ctrl+/`
+
 ## Language Features
 
 ### Variables & Types
@@ -161,6 +176,29 @@ python3 tests/test_interpreter.py
 
 `.gw`
 
-## Design Document
+## Project Structure
 
-See [docs/design.md](docs/design.md) for the full language specification.
+```
+gwen-lang/
+├── gwen/              # Interpreter implementation
+│   ├── lexer.py
+│   ├── parser.py
+│   ├── interpreter.py
+│   └── ast_nodes.py
+├── docs/              # Language documentation
+│   ├── syntax.md
+│   ├── types.md
+│   ├── scope.md
+│   └── ...
+├── examples/          # Example programs
+├── tests/             # Test suite
+└── vscode-extension/  # VSCode extension
+```
+
+## Documentation
+
+- [docs/README.md](docs/README.md) — Documentation index
+- [docs/syntax.md](docs/syntax.md) — Syntax reference
+- [docs/types.md](docs/types.md) — Type system
+- [docs/scope.md](docs/scope.md) — Variable scoping
+- [docs/tracking.md](docs/tracking.md) — Implementation status

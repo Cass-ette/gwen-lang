@@ -1,0 +1,151 @@
+{
+  "Function": {
+    "prefix": "func",
+    "description": "Function definition",
+    "body": [
+      "func ${1:name}(${2:params}) -> ${3:return_type}",
+      "  ${4:body}",
+      "endfunc"
+    ]
+  },
+  "If Statement": {
+    "prefix": "if",
+    "description": "If-then-else statement",
+    "body": [
+      "if ${1:condition} then",
+      "  ${2:body}",
+      "endif"
+    ]
+  },
+  "If-Else": {
+    "prefix": "ifelse",
+    "description": "If-then-else statement",
+    "body": [
+      "if ${1:condition} then",
+      "  ${2:true_body}",
+      "else",
+      "  ${3:false_body}",
+      "endif"
+    ]
+  },
+  "While Loop": {
+    "prefix": "while",
+    "description": "While loop",
+    "body": [
+      "while ${1:condition} do",
+      "  ${2:body}",
+      "endwhile"
+    ]
+  },
+  "For Range": {
+    "prefix": "for",
+    "description": "For range loop",
+    "body": [
+      "for ${1:i} in ${2:start} to ${3:end} do",
+      "  ${4:body}",
+      "endfor"
+    ]
+  },
+  "For Each": {
+    "prefix": "foreach",
+    "description": "For each loop",
+    "body": [
+      "for ${1:item} in ${2:list} do",
+      "  ${3:body}",
+      "endfor"
+    ]
+  },
+  "Match Statement": {
+    "prefix": "match",
+    "description": "Pattern matching",
+    "body": [
+      "match ${1:subject}",
+      "  when ${2:pattern1} then",
+      "    ${3:action1}",
+      "  else",
+      "    ${4:default_action}",
+      "endmatch"
+    ]
+  },
+  "Module": {
+    "prefix": "module",
+    "description": "Module definition",
+    "body": [
+      "module ${1:name}",
+      "  ${2:body}",
+      "endmodule"
+    ]
+  },
+  "Variable Declaration": {
+    "prefix": "var",
+    "description": "Variable with type",
+    "body": [
+      "${1:name}: ${2:type} := ${3:value}"
+    ]
+  },
+  "Result Ok": {
+    "prefix": "ok",
+    "description": "Ok result",
+    "body": [
+      "ok(${1:value})"
+    ]
+  },
+  "Result Err": {
+    "prefix": "err",
+    "description": "Error result",
+    "body": [
+      "err(${1:message})"
+    ]
+  },
+  "Global Variable": {
+    "prefix": "global",
+    "description": "Global scope variable",
+    "body": [
+      "global ${1:name} := ${2:value}"
+    ]
+  },
+  "Arena Block": {
+    "prefix": "arena",
+    "description": "Arena memory block",
+    "body": [
+      "arena ${1:name} do",
+      "  ${2:body}",
+      "endarena"
+    ]
+  },
+  "Parallel Block": {
+    "prefix": "parallel",
+    "description": "Parallel execution block",
+    "body": [
+      "parallel",
+      "  section",
+      "    ${1:task1}",
+      "  endsection",
+      "  section",
+      "    ${2:task2}",
+      "  endsection",
+      "endparallel => ${3:results}"
+    ]
+  },
+  "Lambda": {
+    "prefix": "lambda",
+    "description": "Anonymous function",
+    "body": [
+      "(${1:params}) => ${2:expression}"
+    ]
+  },
+  "Write": {
+    "prefix": "write",
+    "description": "Write to output",
+    "body": [
+      "write(${1:message})"
+    ]
+  },
+  "Tag": {
+    "prefix": "tag",
+    "description": "Navigation tag",
+    "body": [
+      "@${1:tagname}"
+    ]
+  }
+}
