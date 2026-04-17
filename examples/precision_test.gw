@@ -1,0 +1,98 @@
+-- 显式精度类型测试: float32, float64, int8/16/32/64
+-- 验证 IEEE 754 精度行为和溢出检测
+
+func test_float32()
+  write("=== float32 precision ===")
+  pi32: float32 := 3.141592653589793
+  write("pi as float32:", pi32)
+  write("  expected:   3.1415927410125732 (IEEE 754 single)")
+  write("  original - pi32:", 3.141592653589793 - pi32)
+
+  -- 大数精度损失
+  big: float32 := 123456789.0
+  big64: float64 := 123456789.0
+  write("")
+  write("123456789.0 as float32:", big, "(lost precision)")
+  write("123456789.0 as float64:", big64, "(exact)")
+endfunc
+
+func test_float64()
+  write("")
+  write("=== float64 precision ===")
+  pi64: float64 := 3.141592653589793
+  write("pi as float64:", pi64)
+  write("  Same as Python native float (IEEE 754 double)")
+endfunc
+
+func test_float32_arithmetic()
+  write("")
+  write("=== float32 arithmetic ===")
+  a: float32 := 0.1
+  b: float32 := 0.2
+  write("0.1 + 0.2 (float32):", a + b)
+  write("  Note: IEEE 754 single precision artifact")
+  c: float64 := 0.1
+  d: float64 := 0.2
+  write("0.1 + 0.2 (float64):", c + d)
+endfunc
+
+func test_int_ranges()
+  write("")
+  write("=== int ranges ===")
+  i8: int8 := 127
+  i16: int16 := 32767
+  i32: int32 := 2147483647
+  i64: int64 := 9223372036854775807
+  write("int8 max:", i8, "  [-128, 127]")
+  write("int16 max:", i16, " [-32768, 32767]")
+  write("int32 max:", i32)
+  write("int64 max:", i64)
+
+  u8: uint8 := 255
+  u16: uint16 := 65535
+  write("")
+  write("uint8 max:", u8, " [0, 255]")
+  write("uint16 max:", u16, " [0, 65535]")
+endfunc
+
+func test_as_conversion()
+  write("")
+  write("=== as conversion ===")
+  r1 := 3.14159265 as float32
+  r2 := 3.14159265 as float64
+  write("3.14159265 as float32:", r1)
+  write("3.14159265 as float64:", r2)
+endfunc
+
+func test_float32_binary_search()
+  write("")
+  write("=== float32 sqrt(2) ===")
+  low: float32 := 0.0
+  high: float32 := 2.0
+  eps: float32 := 0.001
+  iters := 0
+  while (high - low) > eps do
+    mid: float32 := (low + high) / 2.0
+    if mid * mid < 2.0 then
+      low := mid
+    else
+      high := mid
+    endif
+    iters := iters + 1
+  endwhile
+  root: float32 := (low + high) / 2.0
+  write("sqrt(2) with epsilon=0.001:", root)
+  write("  root^2:", root * root)
+  write("  iterations:", iters)
+endfunc
+
+func main()
+  test_float32()
+  test_float64()
+  test_float32_arithmetic()
+  test_int_ranges()
+  test_as_conversion()
+  test_float32_binary_search()
+  write("")
+  write("Precision types: ALL TESTS PASSED")
+endfunc

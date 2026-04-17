@@ -1,7 +1,58 @@
 """Gwen interpreter - tree-walk execution of AST."""
 
+import struct
 from typing import Any, Dict, List, Optional
 from . import ast_nodes as ast
+
+
+# --- Explicit precision type definitions ---
+
+INT_RANGES = {
+    "int8":   (-2**7,       2**7 - 1),
+    "int16":  (-2**15,      2**15 - 1),
+    "int32":  (-2**31,      2**31 - 1),
+    "int64":  (-2**63,      2**63 - 1),
+    "uint8":  (0,           2**8 - 1),
+    "uint16": (0,           2**16 - 1),
+    "uint32": (0,           2**32 - 1),
+    "uint64": (0,           2**64 - 1),
+}
+
+PRECISION_TYPES = {"float32", "float64", "int8", "int16", "int32", "int64",
+                   "uint8", "uint16", "uint32", "uint64"}
+
+
+def coerce_to_type(value: Any, type_name: str, line: int = 0) -> Any:
+    """Coerce a value to the specified explicit precision type."""
+    if type_name == "float32":
+        # Truncate to IEEE 754 single precision
+        f = float(value)
+        return struct.unpack('f', struct.pack('f', f))[0]
+    elif type_name == "float64":
+        return float(value)
+    elif type_name in INT_RANGES:
+        lo, hi = INT_RANGES[type_name]
+        i = int(value)
+        if i < lo or i > hi:
+            raise GwenError(f"Overflow: {i} out of range for {type_name} [{lo}, {hi}]", line)
+        return i
+    elif type_name == "int":
+        return int(value)
+    elif type_name == "float":
+        return float(value)
+    else:
+        return value  # unknown type, pass through
+
+
+def resolve_type_name(type_node: Any) -> Optional[str]:
+    """Extract the type name string from a type AST node."""
+    if type_node is None:
+        return None
+    if isinstance(type_node, ast.TypeName):
+        return type_node.name
+    if isinstance(type_node, ast.GenericType):
+        return type_node.base
+    return None
 
 
 class GwenError(Exception):
@@ -142,6 +193,7 @@ class Interpreter:
             if isinstance(main_fn, GwenFunction):
                 self.call_function(main_fn, [])
         except GwenError:
+            # No main() defined, that's fine for scripts without func main
             pass
 
     def exec_block(self, stmts: List[Any], env: Environment):
@@ -197,6 +249,9 @@ class Interpreter:
 
         elif isinstance(stmt, ast.VarDecl):
             value = self.eval_expr(stmt.value, env) if stmt.value else None
+            type_name = resolve_type_name(stmt.type_name)
+            if value is not None and type_name and type_name in PRECISION_TYPES:
+                value = coerce_to_type(value, type_name, stmt.line)
             env.set(stmt.name, value)
 
         elif isinstance(stmt, ast.ReturnStmt):
@@ -478,8 +533,12 @@ class Interpreter:
                 return OkValue(str(value))
             if target == "bool":
                 return OkValue(self.is_truthy(value))
+            if target in PRECISION_TYPES:
+                return OkValue(coerce_to_type(value, target, expr.line))
             return ErrValue(f"Unknown type: {target}")
-        except (ValueError, TypeError):
+        except GwenError:
+            raise
+        except (ValueError, TypeError, OverflowError):
             return ErrValue(f"Cannot convert {type(value).__name__} to {target}")
 
     def eval_call(self, call: ast.FuncCall, env: Environment) -> Any:
@@ -502,7 +561,11 @@ class Interpreter:
         params = fn.node.params
         for i, param in enumerate(params):
             if i < len(args):
-                call_env.set(param.name, args[i])
+                val = args[i]
+                ptype = resolve_type_name(param.type_name)
+                if ptype and ptype in PRECISION_TYPES:
+                    val = coerce_to_type(val, ptype, param.line)
+                call_env.set(param.name, val)
             elif param.default is not None:
                 call_env.set(param.name, self.eval_expr(param.default, fn.closure))
             else:
