@@ -100,6 +100,7 @@ class Environment:
     def __init__(self, parent: Optional['Environment'] = None, is_call_frame: bool = False, func_name: Optional[str] = None):
         self.vars: Dict[str, Any] = {}
         self.types: Dict[str, str] = {}  # variable name -> type name (e.g. "int8")
+        self.consts: set = set()  # set of variable names that are const (immutable)
         self.parent = parent
         self.is_call_frame = is_call_frame  # True for function call environments
         self.func_name = func_name  # Function name for this call frame
@@ -131,6 +132,18 @@ class Environment:
         """Record type annotation for a variable."""
         if type_name:
             self.types[name] = type_name
+
+    def mark_const(self, name: str):
+        """Mark a variable as const (immutable) in current scope."""
+        self.consts.add(name)
+
+    def is_const(self, name: str) -> bool:
+        """Check if name is const anywhere in the scope chain."""
+        if name in self.consts:
+            return True
+        if self.parent:
+            return self.parent.is_const(name)
+        return False
 
     def update_local(self, name: str, value: Any):
         """Update or create variable in current scope only."""
@@ -224,6 +237,10 @@ class Interpreter:
             env.set(stmt.name, fn)
 
         elif isinstance(stmt, ast.Assignment):
+            # Block reassignment to const bindings before evaluating RHS
+            for target in stmt.targets:
+                if isinstance(target, str) and env.is_const(target):
+                    raise GwenError(f"Cannot assign to const variable: {target}", stmt.line)
             values = [self.eval_expr(v, env) for v in stmt.values]
             current_func = env.func_name
             # Check for multi-value unpacking from function return
@@ -266,12 +283,16 @@ class Interpreter:
                 raise GwenError(f"Assignment count mismatch: {len(stmt.targets)} targets, {len(values)} values", stmt.line)
 
         elif isinstance(stmt, ast.VarDecl):
+            if env.is_const(stmt.name):
+                raise GwenError(f"Cannot redeclare const variable: {stmt.name}", stmt.line)
             value = self.eval_expr(stmt.value, env) if stmt.value else None
             type_name = resolve_type_name(stmt.type_name)
             if value is not None and type_name and type_name in PRECISION_TYPES:
                 value = coerce_to_type(value, type_name, stmt.line)
             env.set(stmt.name, value)
             env.set_type(stmt.name, type_name)
+            if stmt.is_const:
+                env.mark_const(stmt.name)
 
         elif isinstance(stmt, ast.ReturnStmt):
             if stmt.value is None:
@@ -406,6 +427,8 @@ class Interpreter:
         elif isinstance(stmt, ast.GlobalStmt):
             # global x := value - force assignment to outer (non-local) scope
             # Searches: 1) current call frame's parent (module/closure), 2) call stack
+            if env.is_const(stmt.name):
+                raise GwenError(f"Cannot assign to const variable: {stmt.name}", stmt.line)
             value = self.eval_expr(stmt.value, env)
 
             # First try: search up env chain (module/closures)

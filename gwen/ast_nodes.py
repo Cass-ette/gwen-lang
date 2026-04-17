@@ -132,6 +132,7 @@ class VarDecl:
     name: str
     type_name: Optional[Any] = None
     value: Any = None
+    is_const: bool = False
     line: int = 0
 
 @dataclass

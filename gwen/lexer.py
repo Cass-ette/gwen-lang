@@ -55,6 +55,7 @@ class TokenType(Enum):
     FALSE = auto()
     MOD = auto()
     GLOBAL = auto()        # global
+    CONST = auto()         # const
     ARENA = auto()         # arena
     ENDARENA = auto()      # endarena
 
@@ -128,6 +129,7 @@ KEYWORDS = {
     "false": TokenType.FALSE,
     "mod": TokenType.MOD,
     "global": TokenType.GLOBAL,
+    "const": TokenType.CONST,
     "arena": TokenType.ARENA,
     "endarena": TokenType.ENDARENA,
     "order": TokenType.ORDER,

@@ -70,6 +70,7 @@ endfunc
 | `true`, `false` | 布尔字面量 | 已实现 |
 | `mod` | 取模运算 | 已实现 |
 | `global` | 全局变量声明 | 已实现 |
+| `const` | 不可变绑定 | 已实现 |
 | `module`, `endmodule` | 模块定义 | 已实现 |
 | `export` | 导出函数 | 已实现 |
 | `use`, `from` | 模块导入 | 已实现 |

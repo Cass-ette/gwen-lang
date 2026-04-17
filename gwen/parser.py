@@ -77,6 +77,8 @@ class Parser:
             return self.parse_parallel()
         if tok.type == TokenType.GLOBAL:
             return self.parse_global()
+        if tok.type == TokenType.CONST:
+            return self.parse_const()
         if tok.type == TokenType.ARENA:
             return self.parse_arena()
         if tok.type == TokenType.TAG:
@@ -611,6 +613,18 @@ class Parser:
         self.expect(TokenType.ASSIGN)
         value = self.parse_expr()
         return ast.GlobalStmt(name=name, value=value, line=tok.line)
+
+    def parse_const(self) -> ast.VarDecl:
+        """Parse const NAME [: type] := value - immutable binding."""
+        tok = self.expect(TokenType.CONST)
+        name = self.expect(TokenType.IDENTIFIER).value
+        type_node = None
+        if self.at(TokenType.COLON):
+            self.advance()
+            type_node = self.parse_type()
+        self.expect(TokenType.ASSIGN)
+        value = self.parse_expr()
+        return ast.VarDecl(name=name, type_name=type_node, value=value, is_const=True, line=tok.line)
 
     def parse_parallel(self) -> ast.ParallelStmt:
         tok = self.expect(TokenType.PARALLEL)
