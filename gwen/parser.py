@@ -106,13 +106,23 @@ class Parser:
             values = [self.parse_expr()]
             return ast.Assignment(targets=targets, values=values, line=tok.line)
 
-        # Check for multi-target: a, b := x, y
-        if self.at(TokenType.COMMA) and isinstance(expr, ast.Identifier):
-            targets = [expr.name]
+        # Check for multi-target: a, b := x, y  or  arr[i], arr[j] := x, y
+        if self.at(TokenType.COMMA) and isinstance(expr, (ast.Identifier, ast.IndexAccess)):
+            targets = []
+            if isinstance(expr, ast.Identifier):
+                targets = [expr.name]
+            else:  # IndexAccess
+                targets = [expr]
             while self.at(TokenType.COMMA):
                 self.advance()
-                name_tok = self.expect(TokenType.IDENTIFIER)
-                targets.append(name_tok.value)
+                # Parse next target: identifier or index access
+                target_expr = self.parse_expr()
+                if isinstance(target_expr, ast.Identifier):
+                    targets.append(target_expr.name)
+                elif isinstance(target_expr, ast.IndexAccess):
+                    targets.append(target_expr)
+                else:
+                    raise ParseError("Expected identifier or index access in multi-assignment", self.peek())
             self.expect(TokenType.ASSIGN)
             values = [self.parse_expr()]
             while self.at(TokenType.COMMA):
