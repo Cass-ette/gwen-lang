@@ -298,11 +298,21 @@ class Parser:
     def parse_list_literal(self) -> ast.ListLiteral:
         tok = self.advance()  # [
         elements = []
+        self.skip_newlines()  # Allow newline after [
         if not self.at(TokenType.RBRACKET):
             elements.append(self.parse_expr())
-            while self.at(TokenType.COMMA):
-                self.advance()
-                elements.append(self.parse_expr())
+            while True:
+                self.skip_newlines()  # Allow newlines between elements
+                if self.at(TokenType.RBRACKET):
+                    break
+                if self.at(TokenType.COMMA):
+                    self.advance()
+                    self.skip_newlines()  # Allow newline after comma
+                    if self.at(TokenType.RBRACKET):  # Trailing comma
+                        break
+                    elements.append(self.parse_expr())
+                else:
+                    break
         self.expect(TokenType.RBRACKET)
         return ast.ListLiteral(elements, line=tok.line)
 
