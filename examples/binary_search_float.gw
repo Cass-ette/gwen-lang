@@ -1,0 +1,128 @@
+-- 浮点二分查找：求平方根，控制精度 epsilon
+-- 测试：浮点运算、精度控制、收敛条件
+
+-- 二分查找求平方根
+-- target: 要求平方根的数
+-- epsilon: 精度阈值（如 0.0001）
+-- 返回 (root, iterations)
+func sqrt_binary(target: float, epsilon: float) -> float, int
+  if target < 0 then
+    return -1.0, 0  -- 负数无实数平方根
+  endif
+
+  if target = 0 then
+    return 0.0, 0
+  endif
+
+  -- 确定搜索范围
+  low := 0.0
+  high := target
+  if target < 1 then
+    high := 1.0  -- 小于1的数，平方根比自身大
+  endif
+
+  mid := 0.0
+  iterations := 0
+
+  -- 二分查找：当区间宽度大于 epsilon 时继续
+  while (high - low) > epsilon do
+    mid := (low + high) / 2.0
+    square := mid * mid
+
+    if square = target then
+      return mid, iterations
+    elif square < target then
+      low := mid
+    else
+      high := mid
+    endif
+
+    iterations := iterations + 1
+
+    -- 安全上限：防止无限循环
+    if iterations > 1000 then
+      return mid, iterations
+    endif
+  endwhile
+
+  return (low + high) / 2.0, iterations
+endfunc
+
+-- 求解方程 f(x) = x^3 - 2x - 5 = 0
+-- 在区间 [2, 3] 内找根（已知有唯一实根）
+func solve_cubic(epsilon: float) -> float, int
+  -- f(x) = x^3 - 2x - 5
+  -- f(2) = 8 - 4 - 5 = -1 < 0
+  -- f(3) = 27 - 6 - 5 = 16 > 0
+
+  low := 2.0
+  high := 3.0
+  iterations := 0
+
+  while (high - low) > epsilon do
+    mid := (low + high) / 2.0
+    f_mid := mid * mid * mid - 2.0 * mid - 5.0
+
+    if f_mid = 0 then
+      return mid, iterations
+    elif f_mid < 0 then
+      low := mid  -- 根在右半区间
+    else
+      high := mid  -- 根在左半区间
+    endif
+
+    iterations := iterations + 1
+
+    if iterations > 1000 then
+      return mid, iterations
+    endif
+  endwhile
+
+  return (low + high) / 2.0, iterations
+endfunc
+
+func main()
+  @test_sqrt_2
+  root, iters := sqrt_binary(2.0, 0.0001)
+  write("sqrt(2) with epsilon=0.0001:")
+  write("  root =", root)
+  write("  iterations =", iters)
+  write("  check: root^2 =", root * root)
+  write("")
+
+  @test_sqrt_10
+  root2, iters2 := sqrt_binary(10.0, 0.00001)
+  write("sqrt(10) with epsilon=0.00001:")
+  write("  root =", root2)
+  write("  iterations =", iters2)
+  write("  check: root^2 =", root2 * root2)
+  write("")
+
+  @test_sqrt_small
+  root3, iters3 := sqrt_binary(0.25, 0.0001)
+  write("sqrt(0.25) with epsilon=0.0001:")
+  write("  root =", root3)
+  write("  iterations =", iters3)
+  write("  check: root^2 =", root3 * root3)
+  write("")
+
+  @test_cubic
+  cubic_root, cubic_iters := solve_cubic(0.0001)
+  write("Solve x^3 - 2x - 5 = 0 in [2,3]:")
+  write("  root =", cubic_root)
+  write("  iterations =", cubic_iters)
+  f_val := cubic_root * cubic_root * cubic_root - 2.0 * cubic_root - 5.0
+  write("  check: f(root) =", f_val)
+  write("")
+
+  @test_precision_comparison
+  write("Precision comparison for sqrt(2):")
+  epsilons := [0.1, 0.01, 0.001, 0.0001, 0.00001]
+  for eps in epsilons do
+    r, i := sqrt_binary(2.0, eps)
+    write("  eps =", eps, "-> root =", r, "iters =", i)
+  endfor
+
+  write("")
+  write("Float binary search: ALL TESTS COMPLETED")
+endfunc
