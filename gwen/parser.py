@@ -305,6 +305,10 @@ class Parser:
             self.expect(TokenType.RPAREN)
             return ast.ErrExpr(value, line=tok.line)
 
+        # Dict literal: dict[string, int]{"a": 1, "b": 2}
+        if tok.type == TokenType.IDENTIFIER and tok.value == "dict":
+            return self.parse_dict_literal()
+
         if tok.type in (TokenType.IDENTIFIER, TokenType.INDEX):
             self.advance()
             return ast.Identifier(tok.value, line=tok.line)
@@ -337,6 +341,43 @@ class Parser:
                     break
         self.expect(TokenType.RBRACKET)
         return ast.ListLiteral(elements, line=tok.line)
+
+    def parse_dict_literal(self) -> ast.DictLiteral:
+        """Parse dict[string, int]{"a": 1, "b": 2} syntax."""
+        tok = self.advance()  # dict
+        # Parse type parameters: [string, int]
+        self.expect(TokenType.LBRACKET)
+        key_type = self.parse_type()
+        self.expect(TokenType.COMMA)
+        value_type = self.parse_type()
+        self.expect(TokenType.RBRACKET)
+        # Parse entries: {"a": 1, "b": 2}
+        self.expect(TokenType.LBRACE)
+        entries = []
+        self.skip_newlines()
+        if not self.at(TokenType.RBRACE):
+            # First entry
+            key = self.parse_expr()
+            self.expect(TokenType.COLON)
+            value = self.parse_expr()
+            entries.append((key, value))
+            while True:
+                self.skip_newlines()
+                if self.at(TokenType.RBRACE):
+                    break
+                if self.at(TokenType.COMMA):
+                    self.advance()
+                    self.skip_newlines()
+                    if self.at(TokenType.RBRACE):  # Trailing comma
+                        break
+                    key = self.parse_expr()
+                    self.expect(TokenType.COLON)
+                    value = self.parse_expr()
+                    entries.append((key, value))
+                else:
+                    break
+        self.expect(TokenType.RBRACE)
+        return ast.DictLiteral(key_type=key_type, value_type=value_type, entries=entries, line=tok.line)
 
     def parse_paren_or_lambda(self) -> Any:
         """Parse (expr) or (params) => body."""

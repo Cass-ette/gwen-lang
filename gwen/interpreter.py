@@ -323,6 +323,10 @@ class Interpreter:
         self.global_env.set("sqrt", self._builtin_sqrt)
         self.global_env.set("floor", self._builtin_floor)
         self.global_env.set("ceil", self._builtin_ceil)
+        self.global_env.set("has_key", self._builtin_has_key)
+        self.global_env.set("get", self._builtin_get)
+        self.global_env.set("keys", self._builtin_keys)
+        self.global_env.set("values", self._builtin_values)
 
     def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
         """Follow type alias chain to canonical type name."""
@@ -370,6 +374,8 @@ class Interpreter:
             return "string"
         if isinstance(obj, list):
             return "list"
+        if isinstance(obj, dict):
+            return "dict"
         if isinstance(obj, MoneyValue):
             return f"money[{obj.currency}]"
         if isinstance(obj, OkValue):
@@ -571,6 +577,32 @@ class Interpreter:
         if isinstance(x, float):
             return float(math.ceil(x))
         raise GwenError(f"ceil() requires float, got {type(x).__name__}")
+
+    # --- Dict built-in functions ---
+
+    def _builtin_has_key(self, d, key):
+        """Check if dict contains key."""
+        if not isinstance(d, dict):
+            raise GwenError(f"has_key() requires a dict, got {type(d).__name__}")
+        return key in d
+
+    def _builtin_get(self, d, key, default):
+        """Get value from dict with default if key not found."""
+        if not isinstance(d, dict):
+            raise GwenError(f"get() requires a dict, got {type(d).__name__}")
+        return d.get(key, default)
+
+    def _builtin_keys(self, d):
+        """Return list of dict keys."""
+        if not isinstance(d, dict):
+            raise GwenError(f"keys() requires a dict, got {type(d).__name__}")
+        return list(d.keys())
+
+    def _builtin_values(self, d):
+        """Return list of dict values."""
+        if not isinstance(d, dict):
+            raise GwenError(f"values() requires a dict, got {type(d).__name__}")
+        return list(d.values())
 
     def run(self, program: ast.Program):
         self.exec_block(program.statements, self.global_env)
@@ -944,6 +976,12 @@ class Interpreter:
         if isinstance(expr, ast.IndexAccess):
             obj = self.eval_expr(expr.obj, env)
             index = self.eval_expr(expr.index, env)
+            # Handle dict with proper error on missing key
+            if isinstance(obj, dict):
+                if index not in obj:
+                    raise GwenError(f"Key not found: {index!r}", expr.line)
+                return obj[index]
+            # Handle list (existing behavior)
             return obj[index]
 
         if isinstance(expr, ast.Lambda):
@@ -957,6 +995,17 @@ class Interpreter:
 
         if isinstance(expr, ast.AsExpr):
             return self.eval_as(expr, env)
+
+        if isinstance(expr, ast.DictLiteral):
+            result = {}
+            for key_expr, val_expr in expr.entries:
+                key = self.eval_expr(key_expr, env)
+                val = self.eval_expr(val_expr, env)
+                # Validate key type (must be str or int for now)
+                if not isinstance(key, (str, int)):
+                    raise GwenError(f"Dict keys must be string or int, got {type(key).__name__}", expr.line)
+                result[key] = val
+            return result
 
         raise GwenError(f"Unknown expression type: {type(expr).__name__}")
 

@@ -106,6 +106,13 @@ class ListLiteral:
     line: int = 0
 
 @dataclass
+class DictLiteral:
+    key_type: Any
+    value_type: Any
+    entries: List[Any] = field(default_factory=list)  # List of (key_expr, value_expr)
+    line: int = 0
+
+@dataclass
 class AsExpr:
     expr: Any
     type_name: str

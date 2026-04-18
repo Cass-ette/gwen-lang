@@ -932,6 +932,104 @@ endfunc""")
     assert out == "2 1\n1 2"
 
 
+# --- Dict tests ---
+
+def test_dict_basic():
+    out = run('''d := dict[string, int]{"a": 1, "b": 2}
+write(d["a"])
+write(d["b"])''')
+    assert out == "1\n2"
+
+
+def test_dict_len():
+    out = run('''d := dict[string, int]{"x": 1, "y": 2, "z": 3}
+write(len(d))''')
+    assert out == "3"
+
+
+def test_dict_empty():
+    out = run('''d := dict[string, int]{}
+write(len(d))''')
+    assert out == "0"
+
+
+def test_dict_write_new_key():
+    out = run('''d := dict[string, int]{"a": 1}
+d["b"] := 2
+write(d["a"])
+write(d["b"])
+write(len(d))''')
+    assert out == "1\n2\n2"
+
+
+def test_dict_overwrite_key():
+    out = run('''d := dict[string, int]{"a": 1}
+d["a"] := 99
+write(d["a"])''')
+    assert out == "99"
+
+
+def test_dict_missing_key_errors():
+    import pytest
+    from gwen.interpreter import GwenError
+    with pytest.raises(GwenError, match="Key not found"):
+        run('''d := dict[string, int]{"a": 1}
+write(d["missing"])''')
+
+
+def test_dict_has_key():
+    out = run('''d := dict[string, int]{"a": 1}
+write(has_key(d, "a"))
+write(has_key(d, "z"))''')
+    assert out == "True\nFalse"
+
+
+def test_dict_get_with_default():
+    out = run('''d := dict[string, int]{"a": 1}
+write(get(d, "a", 0))
+write(get(d, "missing", 99))''')
+    assert out == "1\n99"
+
+
+def test_dict_keys_values():
+    out = run('''d := dict[string, int]{"a": 1, "b": 2}
+write(keys(d))
+write(values(d))''')
+    assert out == "['a', 'b']\n[1, 2]"
+
+
+def test_dict_int_keys():
+    out = run('''d := dict[int, string]{1: "one", 2: "two"}
+write(d[1])
+write(d[2])''')
+    assert out == "one\ntwo"
+
+
+def test_dict_trailing_comma():
+    out = run('''d := dict[string, int]{
+  "a": 1,
+  "b": 2,
+}
+write(len(d))''')
+    assert out == "2"
+
+
+def test_dict_type():
+    out = run('''d := dict[string, int]{"a": 1}
+write(type(d))''')
+    assert out == "dict"
+
+
+def test_dict_iteration_via_keys():
+    out = run('''d := dict[string, int]{"a": 1, "b": 2}
+total := 0
+for k in keys(d) do
+  total := total + d[k]
+endfor
+write(total)''')
+    assert out == "3"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = 0

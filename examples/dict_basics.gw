@@ -1,0 +1,33 @@
+// Dict: 拒绝魔法的字典类型
+//
+// - 读不存在的 key 会报错（不静默返回 nil）
+// - 需要静默判断用 has_key / get(..., default)
+
+func main()
+  // 字面量：必须显式给出键值类型
+  scores := dict[string, int]{"alice": 90, "bob": 85}
+
+  write("alice =", scores["alice"])
+  write("len =", len(scores))
+
+  // 新增 / 覆盖
+  scores["carol"] := 77
+  scores["alice"] := 95
+  write("alice =", scores["alice"])
+  write("carol =", scores["carol"])
+
+  // 存在性判断
+  write("has zoe?", has_key(scores, "zoe"))
+  write("zoe default =", get(scores, "zoe", 0))
+
+  // 遍历：通过 keys()
+  total := 0
+  for k in keys(scores) do
+    total := total + scores[k]
+  endfor
+  write("total =", total)
+
+  // int 键也支持
+  users := dict[int, string]{1: "alice", 2: "bob"}
+  write("user 1 =", users[1])
+endfunc

@@ -83,6 +83,8 @@ class TokenType(Enum):
     RPAREN = auto()        # )
     LBRACKET = auto()      # [
     RBRACKET = auto()      # ]
+    LBRACE = auto()        # {
+    RBRACE = auto()        # }
     COMMA = auto()         # ,
     COLON = auto()         # :
     DOT = auto()           # .
@@ -367,6 +369,8 @@ class Lexer:
                 ")": TokenType.RPAREN,
                 "[": TokenType.LBRACKET,
                 "]": TokenType.RBRACKET,
+                "{": TokenType.LBRACE,
+                "}": TokenType.RBRACE,
                 ",": TokenType.COMMA,
                 ":": TokenType.COLON,
                 ".": TokenType.DOT,
