@@ -18,6 +18,8 @@ y := /* 行内 */ 20
 ```
 x := 42              // 赋值（当前函数级本地）
 global x := 42       // 显式修改外层作用域（见 scope.md）
+const PI := 3.14     // 不可变绑定，再赋值会报错
+const MAX: int32 := 1000  // 支持类型标注 + 溢出检测
 x = 42               // 相等判断
 x != 42              // 不等
 x <= 42              // 小于等于
@@ -27,7 +29,21 @@ x >= 42              // 大于等于
 ### 索引赋值
 
 ```
-arr[i] := value      // 支持列表元素就地修改
+arr[i] := value              // 单个元素就地修改
+arr[i], arr[j] := arr[j], arr[i]  // 多目标：一次交换两个位置
+```
+
+### 列表字面量
+
+```
+nums := [1, 2, 3]
+
+// 多行风格，末尾允许逗号
+matrix := [
+  [1, 2, 3],
+  [4, 5, 6],
+  [7, 8, 9],
+]
 ```
 
 ### 算术运算
@@ -86,6 +102,15 @@ for i in 10 to 1 do
   write(i)
 endfor
 
+// 显式方向：order 升序 / reverse 降序（仅范围 for）
+for i in 1 to 10 order do
+  write(i)
+endfor
+
+for i in 1 to 10 reverse do
+  write(i)
+endfor
+
 // 集合遍历
 for item in list do
   process(item)
@@ -107,6 +132,8 @@ match x
   else do_d()
 endmatch
 ```
+
+**强制解构规则**：`match` 作用于 `result` 类型（`ok(x)`/`err(e)`）时，必须同时覆盖 `ok` 和 `err` 两个分支，或显式提供 `else`，否则编译期/运行期报错。这避免了悄悄丢掉错误分支的情况。
 
 ---
 

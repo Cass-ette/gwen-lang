@@ -26,12 +26,12 @@ Gwen 的 object 系统**只保留对审计有利的部分**，剔除有害的部
 ```gwen
 object Account
   // 字段默认私有，外部不可直接访问
-  balance: decimal
+  balance: float64
   owner: string
   transaction_count: int
 
   // 构造函数
-  new(owner: string, initial: decimal) -> Account
+  new(owner: string, initial: float64) -> Account
     return Account{
       balance := initial,
       owner := owner,
@@ -40,7 +40,7 @@ object Account
   endnew
 
   // 方法（self 必须显式声明）
-  func deposit(self: Account, amount: decimal) -> result
+  func deposit(self: Account, amount: float64) -> result
     if amount < 0 then
       return err("negative deposit")
     endif
@@ -49,7 +49,7 @@ object Account
     return ok(self.balance)
   endfunc
 
-  func withdraw(self: Account, amount: decimal) -> result
+  func withdraw(self: Account, amount: float64) -> result
     if amount > self.balance then
       return err("insufficient funds")
     endif
@@ -58,7 +58,7 @@ object Account
   endfunc
 
   // 只读访问器
-  func get_balance(self: Account) -> decimal
+  func get_balance(self: Account) -> float64
     return self.balance
   endfunc
 

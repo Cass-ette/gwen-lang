@@ -120,4 +120,5 @@
 
 ## 上次更新
 
+2026-04-18 - 文档补齐：syntax.md 加 const / 索引多赋值 / list 字面量 / order & reverse / match 强制解构；oop.md 将 `decimal` 替换为 `float64`
 2026-04-18 - 实现类型别名 `type`（透明别名，继承精度约束）
