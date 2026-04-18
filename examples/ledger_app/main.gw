@@ -1,0 +1,272 @@
+// Gwen ledger app
+//
+// Purpose:
+// - exercise the restricted object system
+// - exercise result-based file I/O
+// - exercise list/dict/string utilities
+// - surface current language friction in a real program shape
+
+object Entry
+  date: string
+  kind: string
+  category: string
+  amount: float
+  note: string
+
+  new(date: string, kind: string, category: string, amount: float, note: string) -> Entry
+    return Entry{
+      date := date,
+      kind := kind,
+      category := category,
+      amount := amount,
+      note := note
+    }
+  endnew
+
+  func get_date(self: Entry) -> string
+    return self.date
+  endfunc
+
+  func get_kind(self: Entry) -> string
+    return self.kind
+  endfunc
+
+  func get_category(self: Entry) -> string
+    return self.category
+  endfunc
+
+  func get_amount(self: Entry) -> float
+    return self.amount
+  endfunc
+
+  func get_note(self: Entry) -> string
+    return self.note
+  endfunc
+
+  func signed_amount(self: Entry) -> float
+    if self.kind = "income" then
+      return self.amount
+    endif
+    return 0.0 - self.amount
+  endfunc
+
+  func to_line(self: Entry) -> string
+    parts := [
+      self.date,
+      self.kind,
+      self.category,
+      str(self.amount),
+      self.note
+    ]
+    return join(parts, "|")
+  endfunc
+
+  func describe(self: Entry) -> string
+    parts := [
+      self.get_date(),
+      self.get_kind(),
+      self.get_category(),
+      str(self.get_amount()),
+      self.get_note()
+    ]
+    return join(parts, " | ")
+  endfunc
+endobject
+
+object Ledger
+  owner: string
+  storage_path: string
+  entries: list
+
+  new(owner: string, storage_path: string) -> Ledger
+    return Ledger{
+      owner := owner,
+      storage_path := storage_path,
+      entries := []
+    }
+  endnew
+
+  func get_owner(self: Ledger) -> string
+    return self.owner
+  endfunc
+
+  func get_storage_path(self: Ledger) -> string
+    return self.storage_path
+  endfunc
+
+  func entry_count(self: Ledger) -> int
+    return len(self.entries)
+  endfunc
+
+  func add_income(self: Ledger, date: string, category: string, amount: float, note: string)
+    append(self.entries, Entry.new(date, "income", category, amount, note))
+  endfunc
+
+  func add_expense(self: Ledger, date: string, category: string, amount: float, note: string)
+    append(self.entries, Entry.new(date, "expense", category, amount, note))
+  endfunc
+
+  func add_entry(self: Ledger, entry: Entry)
+    append(self.entries, entry)
+  endfunc
+
+  func export_lines(self: Ledger) -> list[string]
+    lines := []
+    for entry in self.entries do
+      append(lines, entry.to_line())
+    endfor
+    return lines
+  endfunc
+
+  func import_line(self: Ledger, line: string) -> result[int]
+    parts := split(line, "|")
+    if len(parts) != 5 then
+      return err("expected 5 columns, got " + str(len(parts)))
+    endif
+    self.add_entry(Entry.new(parts[0], parts[1], parts[2], float(parts[3]), parts[4]))
+    return ok(1)
+  endfunc
+
+  func income_total(self: Ledger) -> float
+    total := 0.0
+    for entry in self.entries do
+      if entry.get_kind() = "income" then
+        total := total + entry.get_amount()
+      endif
+    endfor
+    return total
+  endfunc
+
+  func expense_total(self: Ledger) -> float
+    total := 0.0
+    for entry in self.entries do
+      if entry.get_kind() = "expense" then
+        total := total + entry.get_amount()
+      endif
+    endfor
+    return total
+  endfunc
+
+  func balance(self: Ledger) -> float
+    return self.income_total() - self.expense_total()
+  endfunc
+
+  func category_totals(self: Ledger) -> dict[string, float]
+    totals := dict[string, float]{}
+    for entry in self.entries do
+      category := entry.get_category()
+      if haskey(totals, category) then
+        totals[category] := totals[category] + entry.signed_amount()
+      else
+        totals[category] := entry.signed_amount()
+      endif
+    endfor
+    return totals
+  endfunc
+
+  func print_register(self: Ledger)
+    for entry in self.entries do
+      write(" -", entry.describe())
+    endfor
+  endfunc
+endobject
+
+module ledger_store
+  export func save(ledger: Ledger) -> result[int]
+    lines := ledger.export_lines()
+    body := join(lines, "\n")
+    if len(lines) > 0 then
+      body := body + "\n"
+    endif
+    return writefile(ledger.get_storage_path(), body)
+  endfunc
+
+  export func load(ledger: Ledger) -> result[int]
+    match readfile(ledger.get_storage_path())
+      when ok(content) =>
+        if trim(content) = "" then
+          return ok(0)
+        endif
+        lines := split(content, "\n")
+        loaded := 0
+        for line in lines do
+          if trim(line) != "" then
+            match ledger.import_line(line)
+              when ok(n) =>
+                loaded := loaded + n
+              when err(e) =>
+                return err("bad ledger line: " + e)
+            endmatch
+          endif
+        endfor
+        return ok(loaded)
+      when err(e) =>
+        return err(e)
+    endmatch
+  endfunc
+endmodule
+
+module ledger_report
+  export func print_summary(ledger: Ledger)
+    write("Owner:", ledger.get_owner())
+    write("Entry count:", ledger.entry_count())
+    write("Income total:", str(ledger.income_total()))
+    write("Expense total:", str(ledger.expense_total()))
+    write("Balance:", str(ledger.balance()))
+    totals := ledger.category_totals()
+    categories := sort(keys(totals), asc)
+    write("Category totals:")
+    for category in categories do
+      write("  ", category, "=>", str(totals[category]))
+    endfor
+  endfunc
+endmodule
+
+func seed_demo_data(ledger: Ledger)
+  ledger.add_income("2026-04-01", "salary", 5000.0, "monthly salary")
+  ledger.add_income("2026-04-05", "refund", 12.0, "book refund")
+  ledger.add_expense("2026-04-02", "food", 32.5, "lunch with team")
+  ledger.add_expense("2026-04-03", "transport", 8.0, "metro card")
+  ledger.add_expense("2026-04-04", "food", 18.0, "coffee beans")
+  ledger.add_expense("2026-04-06", "software", 19.99, "domain renewal")
+endfunc
+
+func main()
+  use save, load from ledger_store
+  use print_summary from ledger_report
+
+  path := "/tmp/gwen_ledger_app_demo.txt"
+
+  write("== Gwen Ledger App ==")
+
+  ledger := Ledger.new("Cass", path)
+  seed_demo_data(ledger)
+
+  write("")
+  write("Live summary:")
+  print_summary(ledger)
+
+  write("")
+  write("Register:")
+  ledger.print_register()
+
+  write("")
+  match save(ledger)
+    when ok(n) =>
+      write("Saved bytes:", n)
+    when err(e) =>
+      write("Save failed:", e)
+  endmatch
+
+  write("")
+  reloaded := Ledger.new("Cass", path)
+  match load(reloaded)
+    when ok(count) =>
+      write("Reloaded entries:", count)
+      write("")
+      write("Reloaded summary:")
+      print_summary(reloaded)
+    when err(e) =>
+      write("Load failed:", e)
+  endmatch
+endfunc
