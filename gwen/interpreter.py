@@ -292,6 +292,7 @@ class Environment:
     ):
         self.vars: Dict[str, Any] = {}
         self.types: Dict[str, str] = {}  # variable name -> type name (e.g. "int8")
+        self.aliases: Dict[str, str] = {}  # type alias name -> canonical type name
         self.consts: set = set()  # set of variable names that are const (immutable)
         self.parent = parent
         self.is_call_frame = is_call_frame  # True for function call environments
@@ -325,6 +326,22 @@ class Environment:
         """Record type annotation for a variable."""
         if type_name:
             self.types[name] = type_name
+
+    def get_alias(self, name: str) -> Optional[str]:
+        """Look up a type alias across the scope chain."""
+        if name in self.aliases:
+            return self.aliases[name]
+        if self.parent:
+            return self.parent.get_alias(name)
+        return None
+
+    def get_local_alias(self, name: str) -> Optional[str]:
+        """Look up a type alias in the current scope only."""
+        return self.aliases.get(name)
+
+    def set_alias(self, name: str, target: str):
+        """Create or update a type alias in the current scope."""
+        self.aliases[name] = target
 
     def mark_const(self, name: str):
         """Mark a variable as const (immutable) in current scope."""
@@ -361,8 +378,6 @@ class Interpreter:
     def __init__(self, module_search_paths: Optional[List[str]] = None):
         self.global_env = Environment()
         self.modules: Dict[str, Environment] = {}
-        self.type_aliases: Dict[str, str] = {}  # alias name -> canonical type name
-        self.objects: Dict[str, ObjectType] = {}  # object name -> ObjectType
         self.module_search_paths: List[str] = []
         self._loading_modules: set[str] = set()
         self._setup_builtins()
@@ -464,15 +479,28 @@ class Interpreter:
 
         raise GwenError(f"Module not found: {module_name}", line)
 
-    def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
+    def _resolve_alias(self, type_name: Optional[str], env: Environment) -> Optional[str]:
         """Follow type alias chain to canonical type name."""
         seen = set()
-        while type_name and type_name in self.type_aliases:
+        while type_name:
             if type_name in seen:
                 break  # circular alias guard
             seen.add(type_name)
-            type_name = self.type_aliases[type_name]
+            next_name = env.get_alias(type_name)
+            if next_name is None:
+                break
+            type_name = next_name
         return type_name
+
+    def _lookup_object_type(self, name: str, env: Environment, line: int) -> ObjectType:
+        """Resolve an object type through the normal environment visibility rules."""
+        try:
+            obj = env.get(name)
+        except GwenError:
+            raise GwenError(f"Unknown object type: {name}", line)
+        if not isinstance(obj, ObjectType):
+            raise GwenError(f"'{name}' is not an object type", line)
+        return obj
 
     def _builtin_write(self, *args):
         print(*args)
@@ -894,7 +922,7 @@ class Interpreter:
         elif isinstance(stmt, ast.VarDecl):
             if env.is_const(stmt.name):
                 raise GwenError(f"Cannot redeclare const variable: {stmt.name}", stmt.line)
-            type_name = self._resolve_alias(resolve_type_name(stmt.type_name))
+            type_name = self._resolve_alias(resolve_type_name(stmt.type_name), env)
             if stmt.is_uninit:
                 # Declared without value -> mark uninit; reads will error
                 env.set(stmt.name, UNINIT)
@@ -919,7 +947,7 @@ class Interpreter:
             for d in stmt.decls:
                 if env.is_const(d.name):
                     raise GwenError(f"Cannot redeclare const variable: {d.name}", d.line)
-                type_name = self._resolve_alias(resolve_type_name(d.type_name))
+                type_name = self._resolve_alias(resolve_type_name(d.type_name), env)
                 # Per-decl resolution: explicit := wins over block default
                 if d.value is not None:
                     v = self.eval_expr(d.value, env)
@@ -945,10 +973,10 @@ class Interpreter:
                 env.set_type(d.name, type_name)
 
         elif isinstance(stmt, ast.TypeAlias):
-            target_name = self._resolve_alias(resolve_type_name(stmt.target))
+            target_name = self._resolve_alias(resolve_type_name(stmt.target), env)
             if target_name is None:
                 raise GwenError(f"Invalid type in alias '{stmt.name}'", stmt.line)
-            self.type_aliases[stmt.name] = target_name
+            env.set_alias(stmt.name, target_name)
 
         elif isinstance(stmt, ast.ReturnStmt):
             if stmt.value is None:
@@ -1108,6 +1136,13 @@ class Interpreter:
             for s in stmt.body:
                 if isinstance(s, ast.FuncDef) and s.exported:
                     module_ns.set(s.name, mod_env.get(s.name))
+                elif isinstance(s, ast.ObjectDef) and s.exported:
+                    module_ns.set(s.name, mod_env.get(s.name))
+                elif isinstance(s, ast.TypeAlias) and s.exported:
+                    target = mod_env.get_local_alias(s.name)
+                    if target is None:
+                        raise GwenError(f"Exported type alias '{s.name}' was not defined", s.line)
+                    module_ns.set_alias(s.name, target)
             self.modules[stmt.name] = module_ns
             env.set(stmt.name, module_ns)
 
@@ -1117,12 +1152,19 @@ class Interpreter:
             mod_env = self.modules[stmt.module]
             if stmt.names:
                 for name in stmt.names:
-                    if name not in mod_env.vars:
+                    imported = False
+                    if name in mod_env.vars:
+                        env.set(name, mod_env.get(name))
+                        imported = True
+                    alias = mod_env.get_local_alias(name)
+                    if alias is not None:
+                        env.set_alias(name, alias)
+                        imported = True
+                    if not imported:
                         raise GwenError(
                             f"Module '{stmt.module}' does not export '{name}'",
                             stmt.line,
                         )
-                    env.set(name, mod_env.get(name))
             else:
                 # Import module namespace
                 mod_ns = Environment()
@@ -1197,7 +1239,7 @@ class Interpreter:
             self.eval_expr(stmt.expr, env)
 
         elif isinstance(stmt, ast.ObjectDef):
-            if stmt.name in self.objects:
+            if stmt.name in env.vars:
                 raise GwenError(f"Object '{stmt.name}' already defined", stmt.line)
             field_names = []
             field_types = {}
@@ -1205,7 +1247,7 @@ class Interpreter:
                 if f.name in field_types:
                     raise GwenError(f"Duplicate field '{f.name}' in object '{stmt.name}'", f.line)
                 field_names.append(f.name)
-                field_types[f.name] = self._resolve_alias(resolve_type_name(f.type_annotation))
+                field_types[f.name] = self._resolve_alias(resolve_type_name(f.type_annotation), env)
             methods_dict = {}
             for m in stmt.methods:
                 if m.name in methods_dict:
@@ -1213,7 +1255,6 @@ class Interpreter:
                 methods_dict[m.name] = m
             obj_type = ObjectType(stmt.name, field_names, field_types,
                                   stmt.constructor, methods_dict, env)
-            self.objects[stmt.name] = obj_type
             env.set(stmt.name, obj_type)
 
         else:
@@ -1301,17 +1342,6 @@ class Interpreter:
             return self.eval_call(expr, env)
 
         if isinstance(expr, ast.MemberAccess):
-            # Type-side access: Account.new / Account.method
-            if isinstance(expr.obj, ast.Identifier) and expr.obj.name in self.objects:
-                obj_type = self.objects[expr.obj.name]
-                if expr.member == "new":
-                    if obj_type.constructor is None:
-                        raise GwenError(f"Object '{obj_type.name}' has no constructor", expr.line)
-                    return _ConstructorRef(obj_type)
-                if expr.member in obj_type.methods:
-                    return _StaticMethodRef(obj_type, expr.member)
-                raise GwenError(f"Object '{obj_type.name}' has no member '{expr.member}'", expr.line)
-
             obj = self.eval_expr(expr.obj, env)
             if isinstance(obj, ObjectValue):
                 # Method access: bound method
@@ -1396,9 +1426,7 @@ class Interpreter:
             return result
 
         if isinstance(expr, ast.ObjectLiteral):
-            if expr.name not in self.objects:
-                raise GwenError(f"Unknown object type: {expr.name}", expr.line)
-            obj_type = self.objects[expr.name]
+            obj_type = self._lookup_object_type(expr.name, env, expr.line)
             fields = {}
             provided = set()
             for fname, fexpr in expr.fields:
@@ -1554,7 +1582,7 @@ class Interpreter:
 
     def eval_as(self, expr: ast.AsExpr, env: Environment) -> Any:
         value = self.eval_expr(expr.expr, env)
-        target = expr.type_name
+        target = self._resolve_alias(expr.type_name, env)
         # Forbid money -> money[other_currency]
         if isinstance(value, MoneyValue) and is_money_type(target):
             target_currency = money_currency(target)
@@ -1661,8 +1689,8 @@ class Interpreter:
         for i, param in enumerate(rest):
             if i < len(args):
                 val = args[i]
-                ptype = self._resolve_alias(resolve_type_name(param.type_name))
-                if ptype and ptype in PRECISION_TYPES:
+                ptype = self._resolve_alias(resolve_type_name(param.type_name), call_env)
+                if needs_type_check(ptype):
                     val = coerce_to_type(val, ptype, param.line)
                 call_env.set(param.name, val)
             elif param.default is not None:
@@ -1683,8 +1711,8 @@ class Interpreter:
         for i, param in enumerate(ctor.params):
             if i < len(args):
                 val = args[i]
-                ptype = self._resolve_alias(resolve_type_name(param.type_name))
-                if ptype and ptype in PRECISION_TYPES:
+                ptype = self._resolve_alias(resolve_type_name(param.type_name), call_env)
+                if needs_type_check(ptype):
                     val = coerce_to_type(val, ptype, param.line)
                 call_env.set(param.name, val)
             elif param.default is not None:
@@ -1708,8 +1736,8 @@ class Interpreter:
         for i, param in enumerate(params):
             if i < len(args):
                 val = args[i]
-                ptype = resolve_type_name(param.type_name)
-                if ptype and ptype in PRECISION_TYPES:
+                ptype = self._resolve_alias(resolve_type_name(param.type_name), call_env)
+                if needs_type_check(ptype):
                     val = coerce_to_type(val, ptype, param.line)
                 call_env.set(param.name, val)
             elif param.default is not None:

@@ -139,6 +139,28 @@ endmodule""")
     assert func.exported is True
 
 
+def test_export_object():
+    prog = parse("""module bank
+  export object Account
+    balance: int
+  endobject
+endmodule""")
+    stmt = prog.statements[0]
+    obj = stmt.body[0]
+    assert isinstance(obj, ast.ObjectDef)
+    assert obj.exported is True
+
+
+def test_export_type_alias():
+    prog = parse("""module ids
+  export type UserId = int
+endmodule""")
+    stmt = prog.statements[0]
+    alias = stmt.body[0]
+    assert isinstance(alias, ast.TypeAlias)
+    assert alias.exported is True
+
+
 def test_use_module():
     prog = parse('use math_utils')
     stmt = prog.statements[0]

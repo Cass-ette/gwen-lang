@@ -102,3 +102,104 @@ write(helper(9))
 
     with pytest.raises(Exception, match="does not export 'helper'"):
         run_path(main_path)
+
+
+def test_use_loads_exported_object_from_file_module(tmp_path: Path):
+    (tmp_path / "bank.gw").write_text(
+        """module bank
+export object Account
+  balance: int
+
+  new(balance: int) -> Account
+    return Account{balance := balance}
+  endnew
+
+  func value(self: Account) -> int
+    return self.balance
+  endfunc
+endobject
+endmodule
+""",
+        encoding="utf-8",
+    )
+    main_path = tmp_path / "main.gw"
+    main_path.write_text(
+        """use Account from bank
+acc := Account.new(13)
+write(acc.value())
+""",
+        encoding="utf-8",
+    )
+
+    assert run_path(main_path) == "13"
+
+
+def test_use_rejects_private_object_from_file_module(tmp_path: Path):
+    (tmp_path / "bank.gw").write_text(
+        """module bank
+object Account
+  balance: int
+
+  new(balance: int) -> Account
+    return Account{balance := balance}
+  endnew
+endobject
+endmodule
+""",
+        encoding="utf-8",
+    )
+    main_path = tmp_path / "main.gw"
+    main_path.write_text(
+        """use Account from bank
+acc := Account.new(13)
+""",
+        encoding="utf-8",
+    )
+
+    import pytest
+
+    with pytest.raises(Exception, match="does not export 'Account'"):
+        run_path(main_path)
+
+
+def test_use_loads_exported_type_alias_from_file_module(tmp_path: Path):
+    (tmp_path / "ids.gw").write_text(
+        """module ids
+export type UserId = int8
+endmodule
+""",
+        encoding="utf-8",
+    )
+    main_path = tmp_path / "main.gw"
+    main_path.write_text(
+        """use UserId from ids
+id: UserId := 17
+write(id)
+""",
+        encoding="utf-8",
+    )
+
+    assert run_path(main_path) == "17"
+
+
+def test_private_type_alias_still_works_inside_exported_file_module_function(tmp_path: Path):
+    (tmp_path / "ids.gw").write_text(
+        """module ids
+type TinyId = int8
+
+export func echo(id: TinyId) -> TinyId
+  return id
+endfunc
+endmodule
+""",
+        encoding="utf-8",
+    )
+    main_path = tmp_path / "main.gw"
+    main_path.write_text(
+        """use echo from ids
+write(echo(99))
+""",
+        encoding="utf-8",
+    )
+
+    assert run_path(main_path) == "99"

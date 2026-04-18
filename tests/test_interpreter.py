@@ -267,6 +267,135 @@ use math_utils
 write(math_utils.helper(7))""")
 
 
+def test_module_exported_object_importable():
+    out = run("""module bank
+  export object Account
+    balance: int
+
+    new(balance: int) -> Account
+      return Account{balance := balance}
+    endnew
+
+    func value(self: Account) -> int
+      return self.balance
+    endfunc
+  endobject
+endmodule
+
+use Account from bank
+acc := Account.new(7)
+write(acc.value())""")
+    assert out == "7"
+
+
+def test_module_namespace_exposes_exported_object():
+    out = run("""module bank
+  export object Account
+    balance: int
+
+    new(balance: int) -> Account
+      return Account{balance := balance}
+    endnew
+
+    func value(self: Account) -> int
+      return self.balance
+    endfunc
+  endobject
+endmodule
+
+use bank
+acc := bank.Account.new(11)
+write(acc.value())""")
+    assert out == "11"
+
+
+def test_module_private_object_not_importable():
+    import pytest
+    with pytest.raises(Exception, match="does not export 'Account'"):
+        run("""module bank
+  object Account
+    balance: int
+
+    new(balance: int) -> Account
+      return Account{balance := balance}
+    endnew
+  endobject
+endmodule
+
+use Account from bank
+acc := Account.new(7)""")
+
+
+def test_module_namespace_hides_private_object():
+    import pytest
+    with pytest.raises(Exception, match="Undefined variable: Account"):
+        run("""module bank
+  object Account
+    balance: int
+
+    new(balance: int) -> Account
+      return Account{balance := balance}
+    endnew
+  endobject
+endmodule
+
+use bank
+acc := bank.Account.new(7)""")
+
+
+def test_module_private_object_does_not_leak_globally():
+    import pytest
+    with pytest.raises(Exception, match="Undefined variable: Account"):
+        run("""module bank
+  object Account
+    balance: int
+
+    new(balance: int) -> Account
+      return Account{balance := balance}
+    endnew
+  endobject
+endmodule
+
+acc := Account.new(7)""")
+
+
+def test_module_exported_type_alias_importable():
+    out = run("""module ids
+  export type UserId = int8
+endmodule
+
+use UserId from ids
+id: UserId := 42
+write(id)""")
+    assert out == "42"
+
+
+def test_module_private_type_alias_not_importable():
+    import pytest
+    with pytest.raises(Exception, match="does not export 'UserId'"):
+        run("""module ids
+  type UserId = int
+endmodule
+
+use UserId from ids
+id: UserId := 42""")
+
+
+def test_module_private_type_alias_stays_visible_inside_exported_function():
+    import pytest
+    with pytest.raises(Exception, match="Overflow"):
+        run("""module ids
+  type TinyId = int8
+
+  export func echo(id: TinyId) -> TinyId
+    return id
+  endfunc
+endmodule
+
+use echo from ids
+write(echo(200))""")
+
+
 def test_nested_if():
     out = run("""x := 10
 y := 20

@@ -98,7 +98,15 @@ class Parser:
             return self.parse_func_def(exported=False)
         if tok.type == TokenType.EXPORT:
             self.advance()
-            return self.parse_func_def(exported=True)
+            if self.at(TokenType.FUNC):
+                return self.parse_func_def(exported=True)
+            if self.at(TokenType.OBJECT):
+                return self.parse_object_def(exported=True)
+            if self.at(TokenType.IDENTIFIER) and self.peek().value == "type":
+                next_tok = self.tokens[self.pos + 1] if self.pos + 1 < len(self.tokens) else None
+                if next_tok and next_tok.type == TokenType.IDENTIFIER:
+                    return self.parse_type_alias(exported=True)
+            raise ParseError("Expected 'func', 'object', or 'type' after 'export'", self.peek())
         if tok.type == TokenType.IF:
             return self.parse_if()
         if tok.type == TokenType.WHILE:
@@ -735,13 +743,13 @@ class Parser:
         value = self.parse_expr()
         return ast.VarDecl(name=name, type_name=type_node, value=value, is_const=True, line=tok.line)
 
-    def parse_type_alias(self) -> ast.TypeAlias:
+    def parse_type_alias(self, exported: bool = False) -> ast.TypeAlias:
         """Parse type Alias = ExistingType - transparent type alias."""
         tok = self.advance()  # consume 'type' identifier
         name = self.expect(TokenType.IDENTIFIER).value
         self.expect(TokenType.EQ)
         target = self.parse_type()
-        return ast.TypeAlias(name=name, target=target, line=tok.line)
+        return ast.TypeAlias(name=name, target=target, exported=exported, line=tok.line)
 
     def parse_var_block(self) -> ast.VarBlock:
         """Parse var [default [<expr>]] NAME : TYPE (newline ...)* endvar."""
@@ -806,7 +814,7 @@ class Parser:
         self.expect(TokenType.ENDARENA)
         return ast.ArenaStmt(name=name, body=body, line=tok.line)
 
-    def parse_object_def(self) -> ast.ObjectDef:
+    def parse_object_def(self, exported: bool = False) -> ast.ObjectDef:
         """Parse object Name ... endobject."""
         tok = self.expect(TokenType.OBJECT)
         name = self.expect(TokenType.IDENTIFIER).value
@@ -847,6 +855,7 @@ class Parser:
             fields=fields,
             constructor=constructor,
             methods=methods,
+            exported=exported,
             line=line
         )
 

@@ -289,6 +289,7 @@ class ObjectDef:
     fields: List[FieldDef] = field(default_factory=list)  # field definitions
     constructor: Optional[ConstructorDef] = None  # optional new() method
     methods: List[MethodDef] = field(default_factory=list)
+    exported: bool = False
     line: int = 0
 
 @dataclass
@@ -300,6 +301,7 @@ class TagStmt:
 class TypeAlias:
     name: str = ""
     target: Any = None  # TypeNode
+    exported: bool = False
     line: int = 0
 
 @dataclass
