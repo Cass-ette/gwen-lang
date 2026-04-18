@@ -93,7 +93,7 @@ endmatch
 ### Error Handling (Result type)
 
 ```
-func read_file(path: string)
+func readfile(path: string)
   if file_exists(path) then
     return ok(content)
   else
@@ -101,7 +101,7 @@ func read_file(path: string)
   endif
 endfunc
 
-match read_file("/etc/config")
+match readfile("/etc/config")
   when ok(data) then
     write(data)
   when err(e) then

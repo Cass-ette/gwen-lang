@@ -1,7 +1,7 @@
 // Dict: 拒绝魔法的字典类型
 //
 // - 读不存在的 key 会报错（不静默返回 nil）
-// - 需要静默判断用 has_key / get(..., default)
+// - 需要静默判断用 haskey / get(..., default)
 
 func main()
   // 字面量：必须显式给出键值类型
@@ -17,7 +17,7 @@ func main()
   write("carol =", scores["carol"])
 
   // 存在性判断
-  write("has zoe?", has_key(scores, "zoe"))
+  write("has zoe?", haskey(scores, "zoe"))
   write("zoe default =", get(scores, "zoe", 0))
 
   // 遍历：通过 keys()

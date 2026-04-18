@@ -1,0 +1,39 @@
+// File I/O: 拒绝魔法的文件读写
+//
+// 全部返回 result[T]，必须 match 处理——错误不静默。
+// 没有 file_exists：想知道能不能读，就去读并处理 err。
+// 没有 read_lines：split(content, "\n") 一行替代。
+
+func main()
+  path := "/tmp/gwen_demo.txt"
+
+  // 写（覆盖）——ok 里是字节数
+  match writefile(path, "hello\nworld\n")
+    when ok(n) => write("wrote", n, "bytes")
+    when err(e) => write("write failed:", e)
+  endmatch
+
+  // 读
+  match readfile(path)
+    when ok(content) =>
+      write("--- content ---")
+      write(content)
+      // 想按行？自己 split——没必要额外 API
+      lines := split(content, "\n")
+      write("line count:", len(lines))
+    when err(e) =>
+      write("read failed:", e)
+  endmatch
+
+  // 追加
+  match appendfile(path, "appended!\n")
+    when ok(n) => write("appended", n, "bytes")
+    when err(e) => write("append failed:", e)
+  endmatch
+
+  // 读不存在的文件 —— err 路径必走
+  match readfile("/tmp/definitely_missing_xyz.txt")
+    when ok(s) => write("impossible")
+    when err(e) => write("expected err:", e)
+  endmatch
+endfunc

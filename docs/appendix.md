@@ -127,7 +127,7 @@ floor(x)             // 向下取整（仅 float，返回 float）
 ceil(x)              // 向上取整（仅 float，返回 float）
 
 // 类型
-str(x), int(x), float(x), type(x)
+str(x), int(x), float(x), typeof(x)
 ```
 
 ---

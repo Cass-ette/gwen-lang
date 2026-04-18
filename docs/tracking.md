@@ -121,10 +121,22 @@
 2. **低优先级**：`in arena` 分配修饰
 3. **远期**：真正内存池
 
+## 记账：将来可能调整（TODO）
+
+| 项 | 现状 | 未来考虑 |
+|---|---|---|
+| `order` / `reverse` 边界归一化 | 实际会隐式交换边界（小魔法） | 改为"边界不符则循环 0 次"，符合"错误不静默" |
+| `readfile` / `writefile` 等命名 | 当前终端 I/O 占着 `read`/`write` | 若终端 I/O 未来移入 `io` 模块，文件版可升格为 `read`/`write` |
+| `%` 符号 | 保留，未使用 | 候选用途：百分比字面量（`10%` = 0.10，配合 money 类型） |
+| `ok` / `err` 是语法不是函数 | 现状：特殊表达式 | 若升级为一等构造函数需改解释器；暂不动，文档已明示 |
+| `type` 上下文关键字 | `type Alias = int` 仍保留 `type` 关键字；`typeof(x)` 为函数 | 观察：若歧义压力大可考虑改为 `alias` 关键字 |
+
 ---
 
 ## 上次更新
 
+2026-04-18 - 文件 I/O (`readfile`/`writefile`/`appendfile`)，全部 `result[T]` 风格；命名统一为 compound（`haskey`/`readfile`...），`type(x)` → `typeof(x)`；`{}` 规则更新为 dict 字面量；syntax.md 补 `ok`/`err` 是语法说明、`order`/`reverse` 使用场景；保留 `%` 符号（候选百分比字面量）
+2026-04-18 - 实现 `dict[K, V]` 字典类型（`{}` 字面量、缺键报错、`haskey`/`get`/`keys`/`values`）
 2026-04-18 - 实现 `var / default / endvar` 变量初始化机制（未初始化读前报错、零值表、一键赋值、单项覆盖、基础类型严格类型校验）
 2026-04-18 - 实现 `money[Tag]` 货币类型（int64 定点，4 位小数，币种强隔离，无隐式换汇）
 2026-04-18 - 文档补齐：syntax.md 加 const / 索引多赋值 / list 字面量 / order & reverse / match 强制解构；oop.md 将 `decimal` 替换为 `float64`

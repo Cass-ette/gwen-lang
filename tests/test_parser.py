@@ -201,7 +201,7 @@ def test_binary_ops():
 
 
 def test_ok_err():
-    prog = parse("""match read_file()
+    prog = parse("""match readfile()
   when ok(data) =>
     print(data)
   when err(e) =>

@@ -58,7 +58,17 @@ Gwen 的目标读者是**人**，不是 AI。
 | `()` | 调用、分组、形参 | 不做元组（Gwen 用列表 `[a,b]`） |
 | `[]` | 容器（字面量、索引、泛型） | 避免 `<>` 与比较混淆 |
 | `<>` | **仅比较** | 不做泛型（转到 `[]`） |
-| `{}` | **语言未使用** | 文档占位符专用，无语法冲突 |
+| `{}` | 键值对字面量（dict；未来记录类型） | 不做块结构（Gwen 用 `endxxx`） |
+
+### 4.1 保留符号（不做同义词，留给未来）
+
+| 符号 | 当前 | 保留用途（候选，未实现） |
+|------|------|----------|
+| `%` | 未使用 | 候选：**百分比字面量**（`10%` = 0.10，配合 `money` 类型）。**不做 `mod` 同义词**——取模只有一种拼写 `mod`。 |
+| `&` `\|` `~` | 未使用 | 位运算或集合操作关键字化（`band`/`bor`/`bnot`），符号保留。 |
+| `?` | 未使用 | 不做可空标记（`result[T]` 已覆盖错误，不需要 null 文化）。保留给未来条件性语法。 |
+
+**原则**：Gwen 不做同义词——**同一操作只有一种拼写**。已有关键字/符号表达的语义（`mod`、`^`、`and`/`or`/`not`），不再提供符号版本。没有 `%`、`**`、`&&`、`\|\|`。
 
 ### 5. 全能但显式：复杂能力的实现方式
 
@@ -73,11 +83,11 @@ Gwen 的目标读者是**人**，不是 AI。
 
 ### 6. 文档元语法
 
-本文档用 `{placeholder}` 表示占位符，**不是 Gwen 代码**。
+本文档用 `<placeholder>` 表示占位符，**不是 Gwen 代码**（旧版用 `{}`，现冲突 dict 字面量，已改为 `<>`——`<>` 在文档注释中无歧义，Gwen 源码里 `<>` 只做比较）。
 
 ```
 // 文档写法
-var default {expr}
+var default <expr>
 
 // 实际代码
 var default 0
@@ -154,14 +164,14 @@ empty := dict[string, int]{}
 ```
 scores["alice"]            // 读：键存在 → 值；不存在 → 运行期报错 'Key not found'
 scores["alice"] := 95      // 写：存在就覆盖，不存在就新增
-has_key(scores, "zoe")     // 想静默判断 → 用 has_key
+haskey(scores, "zoe")     // 想静默判断 → 用 haskey
 get(scores, "zoe", 0)      // 想带默认值 → 用 get（显式提供 fallback）
 keys(scores)               // 所有键（list）
 values(scores)             // 所有值（list）
 len(scores)                // 键值对数量
 ```
 
-> `d["missing"]` 不会悄悄返回 `nil` 或零值——要么用 `has_key` 先问，要么用 `get(d, k, default)` 显式声明 fallback。错误不静默。
+> `d["missing"]` 不会悄悄返回 `nil` 或零值——要么用 `haskey` 先问，要么用 `get(d, k, default)` 显式声明 fallback。错误不静默。
 
 ### 算术运算
 
@@ -214,12 +224,12 @@ for i in 1 to 10 step 2 do
   write(i)
 endfor
 
-// 倒序（自动识别）
+// 倒序（自动识别：end < start 时反向）
 for i in 10 to 1 do
   write(i)
 endfor
 
-// 显式方向：order 升序 / reverse 降序（仅范围 for）
+// 显式方向：order 强制升序 / reverse 强制降序（仅范围 for）
 for i in 1 to 10 order do
   write(i)
 endfor
@@ -238,6 +248,29 @@ for item in list with index i do
   write(i, item)
 endfor
 ```
+
+**`order` / `reverse` 什么时候必须写？**
+
+一般不用写——自动识别够用了。但当边界是**变量**时，**推荐显式写方向**防御意外：
+
+```
+// 危险：a 和 b 谁大不确定，方向依赖运行期值
+for i in a to b do ... endfor
+
+// 显式升序：无论 a、b 谁大，总是从小的遍历到大的
+for i in a to b order do ... endfor
+
+// 显式降序：无论 a、b 谁大，总是从大的遍历到小的
+for i in a to b reverse do ... endfor
+```
+
+当前语义（⚠️ 小魔法，可能调整）：
+
+- `order` = 强制升序，边界会被**隐式归一化**（取 min..max）
+- `reverse` = 强制降序，边界会被**隐式归一化**（取 max..min）
+- 不满足时不会"循环 0 次"——而是按强制方向跑
+
+这违反了"拒绝魔法"——边界被悄悄重排。未来可能改为"边界必须和方向一致，否则循环 0 次 + 警告"。字面量边界场景（`1 to 10 order`）不受影响。
 
 ### match
 
@@ -270,12 +303,12 @@ endfunc
 ### 多返回值
 
 ```
-func read_file(path: string) -> string, bool
+func readfile(path: string) -> string, bool
   ...
   return content, true
 endfunc
 
-data, found := read_file("/etc/config")
+data, found := readfile("/etc/config")
 ```
 
 > 注意：`ok` 和 `err` 是保留关键字，不能用作变量名。
@@ -328,24 +361,22 @@ endfunc handle_request
 
 ### Result 类型
 
-函数返回 `ok(value)` 或 `err(message)`，调用方用 `match` 处理：
+可能失败的函数返回 `result[T]`，通过 `ok(value)` / `err(message)` 构造，调用方用 `match` 强制处理两边。
 
 ```
-func read_file(path: string) -> string, bool
-  if file_exists(path) then
-    return file_content, true
-  else
-    return "", false
-  endif
-endfunc
-
-// 或者用 ok/err 包装
-func parse_int(s: string) -> int
+func parse_int(s: string) -> result[int]
   ...
-  return ok(n)      // 成功
+  return ok(n)                // 成功
   return err("not a number")  // 失败
 endfunc
 ```
+
+> **主干风格是 `result[T]`**，不是"多返回值 + bool"。原因：`result` 上的 `match` 强制覆盖 ok/err，`bool` 判断可以忘写。错误必须被看见。
+
+> **`ok` / `err` 是语法，不是函数**。`ok(5)` 看起来像函数调用，实际上是 Gwen 的 `OkExpr` / `ErrExpr` 语法糖。因此：
+> - 不能 `f := ok` 把它当函数传递（不是一等值）
+> - `ok` 和 `err` 是保留关键字，不能用作变量名
+> - 括号形式（`ok(x)` / `err(e)`）是语法规定，不是"函数调用括号"
 
 ### match 处理
 
@@ -357,6 +388,21 @@ match parse_int("42")
     write("error: ", e)
 endmatch
 ```
+
+**强制覆盖**：`match` 作用于 `result` 时必须同时覆盖 `ok` 和 `err`（或显式 `else`），否则报错。这是"错误不静默"的硬保证。
+
+### 实战：文件 I/O
+
+内置 `readfile` / `writefile` / `appendfile` 都返回 `result`，下面是典型写法：
+
+```
+match readfile("/etc/hosts")
+  when ok(content) => write(content)
+  when err(e) => write("failed:", e)
+endmatch
+```
+
+详细 API 见 `stdlib.md` → `io.gw`。
 
 ---
 
@@ -440,7 +486,7 @@ endvar
 
 无预设零值的类型（例如函数类型）会在 `var default` 下报错——必须显式赋值。
 
-### var default {expr} 一键赋值
+### var default &lt;expr&gt; 一键赋值
 
 ```
 var default 1
@@ -450,7 +496,7 @@ var default 1
 endvar
 ```
 
-- `{expr}` 只求值一次，副作用不重复执行
+- `<expr>` 只求值一次，副作用不重复执行
 - 单项 `:= v` 优先级高于块级默认
 - 表达式类型需要能赋给每个变量类型；不匹配（`var default "hi"` + `a: int`）立即报错
 

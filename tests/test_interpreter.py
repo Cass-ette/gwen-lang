@@ -307,7 +307,7 @@ def test_money_basic_arithmetic():
   tax: money[USD] := 1.5
   total := price + tax
   write(total)
-  write(type(total))
+  write(typeof(total))
 endfunc""")
     assert "21.49 USD" in out
     assert "money[USD]" in out
@@ -977,10 +977,10 @@ def test_dict_missing_key_errors():
 write(d["missing"])''')
 
 
-def test_dict_has_key():
+def test_dict_haskey():
     out = run('''d := dict[string, int]{"a": 1}
-write(has_key(d, "a"))
-write(has_key(d, "z"))''')
+write(haskey(d, "a"))
+write(haskey(d, "z"))''')
     assert out == "True\nFalse"
 
 
@@ -1016,7 +1016,7 @@ write(len(d))''')
 
 def test_dict_type():
     out = run('''d := dict[string, int]{"a": 1}
-write(type(d))''')
+write(typeof(d))''')
     assert out == "dict"
 
 
@@ -1028,6 +1028,118 @@ for k in keys(d) do
 endfor
 write(total)''')
     assert out == "3"
+
+
+# --- File I/O tests ---
+
+import tempfile
+
+def test_file_write_and_read():
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".gw_test") as f:
+        path = f.name
+    try:
+        out = run(f'''match writefile("{path}", "hello gwen")
+  when ok(n) => write("wrote", n)
+  when err(e) => write("fail:", e)
+endmatch
+match readfile("{path}")
+  when ok(s) => write("read:", s)
+  when err(e) => write("fail:", e)
+endmatch''')
+        assert out == "wrote 10\nread: hello gwen"
+    finally:
+        os.unlink(path)
+
+
+def test_file_append():
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".gw_test") as f:
+        path = f.name
+    try:
+        out = run(f'''match writefile("{path}", "abc")
+  when ok(n) => n
+  when err(e) => write("fail")
+endmatch
+match appendfile("{path}", "def")
+  when ok(n) => write("app", n)
+  when err(e) => write("fail")
+endmatch
+match readfile("{path}")
+  when ok(s) => write(s)
+  when err(e) => write("fail")
+endmatch''')
+        assert out == "app 3\nabcdef"
+    finally:
+        os.unlink(path)
+
+
+def test_file_read_missing_returns_err():
+    out = run('''match readfile("/tmp/gwen_definitely_missing_xxxyyyzzz_9999.txt")
+  when ok(s) => write("unexpected")
+  when err(e) => write("got err")
+endmatch''')
+    assert out == "got err"
+
+
+def test_file_write_bytes_count_utf8():
+    """writefile returns ok with UTF-8 byte count, not char count."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".gw_test") as f:
+        path = f.name
+    try:
+        out = run(f'''match writefile("{path}", "你好")
+  when ok(n) => write(n)
+  when err(e) => write("fail")
+endmatch''')
+        # 你好 = 6 bytes in UTF-8 (3 bytes each)
+        assert out == "6"
+    finally:
+        os.unlink(path)
+
+
+def test_file_read_utf8():
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".gw_test") as f:
+        path = f.name
+    try:
+        out = run(f'''match writefile("{path}", "中文测试")
+  when ok(n) => n
+  when err(e) => write("fail")
+endmatch
+match readfile("{path}")
+  when ok(s) => write(s)
+  when err(e) => write("fail")
+endmatch''')
+        assert out == "中文测试"
+    finally:
+        os.unlink(path)
+
+
+def test_file_write_overwrites():
+    """writefile overwrites, not appends."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".gw_test") as f:
+        path = f.name
+    try:
+        out = run(f'''match writefile("{path}", "first")
+  when ok(n) => n
+  when err(e) => write("fail")
+endmatch
+match writefile("{path}", "second")
+  when ok(n) => n
+  when err(e) => write("fail")
+endmatch
+match readfile("{path}")
+  when ok(s) => write(s)
+  when err(e) => write("fail")
+endmatch''')
+        assert out == "second"
+    finally:
+        os.unlink(path)
+
+
+def test_file_write_to_bad_path_returns_err():
+    out = run('''match writefile("/this/path/does/not/exist/at/all.txt", "x")
+  when ok(n) => write("unexpected")
+  when err(e) => write("got err")
+endmatch''')
+    assert out == "got err"
 
 
 if __name__ == "__main__":

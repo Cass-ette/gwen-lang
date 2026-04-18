@@ -303,7 +303,7 @@ class Interpreter:
         self.global_env.set("int", self._builtin_int)
         self.global_env.set("float", self._builtin_float)
         self.global_env.set("append", self._builtin_append)
-        self.global_env.set("type", self._builtin_type)
+        self.global_env.set("typeof", self._builtin_type)
         self.global_env.set("sort", self._builtin_sort)
         self.global_env.set("asc", self._builtin_asc)
         self.global_env.set("desc", self._builtin_desc)
@@ -323,10 +323,13 @@ class Interpreter:
         self.global_env.set("sqrt", self._builtin_sqrt)
         self.global_env.set("floor", self._builtin_floor)
         self.global_env.set("ceil", self._builtin_ceil)
-        self.global_env.set("has_key", self._builtin_has_key)
+        self.global_env.set("haskey", self._builtin_haskey)
         self.global_env.set("get", self._builtin_get)
         self.global_env.set("keys", self._builtin_keys)
         self.global_env.set("values", self._builtin_values)
+        self.global_env.set("readfile", self._builtin_readfile)
+        self.global_env.set("writefile", self._builtin_writefile)
+        self.global_env.set("appendfile", self._builtin_appendfile)
 
     def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
         """Follow type alias chain to canonical type name."""
@@ -580,10 +583,10 @@ class Interpreter:
 
     # --- Dict built-in functions ---
 
-    def _builtin_has_key(self, d, key):
+    def _builtin_haskey(self, d, key):
         """Check if dict contains key."""
         if not isinstance(d, dict):
-            raise GwenError(f"has_key() requires a dict, got {type(d).__name__}")
+            raise GwenError(f"haskey() requires a dict, got {type(d).__name__}")
         return key in d
 
     def _builtin_get(self, d, key, default):
@@ -603,6 +606,49 @@ class Interpreter:
         if not isinstance(d, dict):
             raise GwenError(f"values() requires a dict, got {type(d).__name__}")
         return list(d.values())
+
+    # --- File I/O built-in functions ---
+    # 全部返回 result[T]：错误不静默，调用方必须 match 处理。
+
+    def _builtin_readfile(self, path):
+        """Read entire file as string. Returns result[string]."""
+        if not isinstance(path, str):
+            raise GwenError(f"readfile() requires a string path, got {type(path).__name__}")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return OkValue(f.read())
+        except OSError as e:
+            return ErrValue(str(e))
+        except UnicodeDecodeError as e:
+            return ErrValue(f"decode error: {e}")
+
+    def _builtin_writefile(self, path, content):
+        """Overwrite file with content. Returns result[int] (bytes written)."""
+        if not isinstance(path, str):
+            raise GwenError(f"writefile() requires a string path, got {type(path).__name__}")
+        if not isinstance(content, str):
+            raise GwenError(f"writefile() requires string content, got {type(content).__name__}")
+        try:
+            data = content.encode("utf-8")
+            with open(path, "wb") as f:
+                f.write(data)
+            return OkValue(len(data))
+        except OSError as e:
+            return ErrValue(str(e))
+
+    def _builtin_appendfile(self, path, content):
+        """Append content to file. Returns result[int] (bytes written)."""
+        if not isinstance(path, str):
+            raise GwenError(f"appendfile() requires a string path, got {type(path).__name__}")
+        if not isinstance(content, str):
+            raise GwenError(f"appendfile() requires string content, got {type(content).__name__}")
+        try:
+            data = content.encode("utf-8")
+            with open(path, "ab") as f:
+                f.write(data)
+            return OkValue(len(data))
+        except OSError as e:
+            return ErrValue(str(e))
 
     def run(self, program: ast.Program):
         self.exec_block(program.statements, self.global_env)

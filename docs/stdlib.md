@@ -9,6 +9,39 @@
 3. **审计友好**：标准库源码可读，不隐藏复杂逻辑
 4. **渐进增强**：按需加载，不学Python"batteries included"
 
+## 命名约定
+
+> **内置标识符全部 compound，不带下划线，与语言关键字风格一致。**
+
+**依据**：语言关键字就是这样——`endfunc`、`endmatch`、`allowfail`、`endparallel` 都是 compound。stdlib 函数属于"内置标识符"同一族，不该两套风格。
+
+**判据**（按优先级）：
+
+1. **单词本身就显然 → 用单词**
+   ```
+   len(x)  sort(lst, cmp)  keys(d)  split(s, sep)
+   abs(n)  sqrt(n)  pop(lst)  trim(s)
+   ```
+
+2. **动词被"更默认"的目标占了 → compound 写成一个词区分**
+
+   | 动词 | 默认目标（单字） | 非默认（compound） |
+   |------|-----|------|
+   | `read` / `write` | 终端 I/O | `readfile` / `writefile` / `readdir` |
+   | `append` | 列表 `append(lst, item)` | `appendfile(path, content)` |
+
+3. **单词本身不够明白 → compound 补信息**
+   ```
+   haskey(d, k)    // 比 has(d, k) 信息量更大
+   ```
+
+**禁止**：
+- ❌ 下划线命名：`read_file`、`has_key`（破坏统一）
+- ❌ 驼峰命名：`readFile`、`hasKey`（Gwen 没有驼峰传统）
+- ❌ dot 命名空间：`io.read`（Gwen 用 `use from` 导入，不做 method 分派）
+
+**副作用说明**：`readfile`、`haskey` 这类 compound 读感不如 `read_file`、`has_key` 顺眼——这是为了**全语言风格一致**付出的代价，哲学上明确选择一致性优先。
+
 ## 核心内置（解释器自带）
 
 | 函数 | 用途 | 不扩展的理由 |
@@ -20,7 +53,7 @@
 | `str(x)` | 转字符串 | 调试必需 |
 | `int(x)` | 转整数 | 类型转换基础 |
 | `float(x)` | 转浮点 | 类型转换基础 |
-| `type(x)` | 类型检查 | 调试必需 |
+| `typeof(x)` | 类型检查 | 调试必需 |
 
 ## 标准库模块（计划）
 
@@ -66,12 +99,31 @@ root := sqrt(2.0)
 
 ### `io.gw` - 文件 I/O
 
-```
-use read_file, write_file, append_file from io
+全部返回 `result[T]`，**必须 match 处理**——错误不静默。
 
-content := read_file("/etc/hosts")
-write_file("output.txt", content)
 ```
+match readfile("/etc/hosts")
+  when ok(content) => write(content)
+  when err(e) => write("failed:", e)
+endmatch
+
+match writefile("output.txt", "hello")
+  when ok(n) => write("wrote", n, "bytes")
+  when err(e) => write("failed:", e)
+endmatch
+```
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `readfile` | `readfile(path: string) -> result[string]` | 读全文（UTF-8），失败返回 `err(msg)` |
+| `writefile` | `writefile(path: string, content: string) -> result[int]` | 覆盖写，`ok(bytes_written)` |
+| `appendfile` | `appendfile(path: string, content: string) -> result[int]` | 追加写，`ok(bytes_written)` |
+
+**设计说明**（为什么没有某些 API）：
+
+- ❌ **没有 `file_exists`**：它会诱导 TOCTOU bug（查过了再读，中间文件被删），而且自身也会失败（权限/IO）。想知道能不能读，就直接 `readfile` 并处理 `err`——这是唯一不骗自己的写法。
+- ❌ **没有 `read_lines`**：`split(content, "\n")` 一行替代，不提供"便利糖"。
+- `ok` 载荷带信息（字节数 / 内容），不用 `ok(true)` 这种无信息的废话。
 
 ### `os.gw` - 系统接口
 
@@ -93,10 +145,10 @@ home := env("HOME")
 
 | 阶段 | 状态 | 内容 | 具体函数 |
 |------|------|------|----------|
-| **阶段 1** | ✅ 完成 | 核心内置 | `write/read/len/append/str/int/float/type` |
+| **阶段 1** | ✅ 完成 | 核心内置 | `write/read/len/append/str/int/float/typeof` |
 | **阶段 2** | ✅ 完成 | 列表+字符串核心 | **列表**: `sort`, `reversed`, `pop`, `insert`, `concat`<br>**字符串**: `split`, `join`, `substring`, `contains`, `trim`, `replace` |
-| **阶段 3** | 🚧 进行中 | 数学+字典 | **数学**: `abs`, `min`, `max`, `sqrt`, `floor`, `ceil` ✅<br>**字典**: `dict[K,V]`, `has_key`, `get`, `keys`, `values` ✅ |
-| **阶段 4** | 📋 远期 | 文件+高级迭代 | **文件**: `read_file`, `write_file`<br>**迭代**: `map`, `filter`, `range`, `enumerate` |
+| **阶段 3** | ✅ 完成 | 数学+字典 | **数学**: `abs`, `min`, `max`, `sqrt`, `floor`, `ceil` ✅<br>**字典**: `dict[K,V]`, `haskey`, `get`, `keys`, `values` ✅ |
+| **阶段 4** | 🚧 进行中 | 文件+高级迭代 | **文件**: `readfile`, `writefile`, `appendfile` ✅<br>**迭代**: `map`, `filter`, `range`, `enumerate` |
 | **阶段 5** | 📋 远期 | 包管理器 | 第三方模块支持 |
 
 ### 阶段 2 详细设计（实现中）

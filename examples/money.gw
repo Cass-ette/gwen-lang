@@ -10,7 +10,7 @@ func main()
   tax:   money[USD] := 1.5
   total := price + tax
   write(total)               // 21.49 USD
-  write(type(total))         // money[USD]
+  write(typeof(total))         // money[USD]
 
   @scalar_ops
   doubled := price * 2       // 金额 × 数值 → money[USD]
