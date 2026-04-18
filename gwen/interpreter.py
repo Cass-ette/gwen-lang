@@ -310,6 +310,13 @@ class Interpreter:
         self.global_env.set("reversed", self._builtin_reverse)
         self.global_env.set("split", self._builtin_split)
         self.global_env.set("join", self._builtin_join)
+        self.global_env.set("pop", self._builtin_pop)
+        self.global_env.set("insert", self._builtin_insert)
+        self.global_env.set("concat", self._builtin_concat)
+        self.global_env.set("substring", self._builtin_substring)
+        self.global_env.set("contains", self._builtin_contains)
+        self.global_env.set("trim", self._builtin_trim)
+        self.global_env.set("replace", self._builtin_replace)
 
     def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
         """Follow type alias chain to canonical type name."""
@@ -427,6 +434,78 @@ class Interpreter:
         # Convert all parts to strings
         str_parts = [str(p) for p in parts]
         return sep.join(str_parts)
+
+    def _builtin_pop(self, lst):
+        """Remove and return the last element of a list. Modifies the list in place."""
+        if not isinstance(lst, list):
+            raise GwenError(f"pop() requires a list, got {type(lst).__name__}")
+        if len(lst) == 0:
+            raise GwenError("pop() from empty list")
+        return lst.pop()
+
+    def _builtin_insert(self, lst, idx, item):
+        """Insert item at index. Modifies the list in place."""
+        if not isinstance(lst, list):
+            raise GwenError(f"insert() requires a list, got {type(lst).__name__}")
+        if not isinstance(idx, int):
+            raise GwenError(f"insert() index must be an integer, got {type(idx).__name__}")
+        # Allow negative indices and append behavior (idx == len)
+        if idx < 0:
+            idx = len(lst) + idx + 1  # Convert to positive: -1 becomes len
+        if idx < 0 or idx > len(lst):
+            raise GwenError(f"insert() index out of range: {idx}")
+        lst.insert(idx, item)
+        return None
+
+    def _builtin_concat(self, a, b):
+        """Return a new list concatenating a and b. Does not modify inputs."""
+        if not isinstance(a, list):
+            raise GwenError(f"concat() first argument must be a list, got {type(a).__name__}")
+        if not isinstance(b, list):
+            raise GwenError(f"concat() second argument must be a list, got {type(b).__name__}")
+        return a + b
+
+    def _builtin_substring(self, s, start, end):
+        """Extract substring from start (inclusive) to end (exclusive)."""
+        if not isinstance(s, str):
+            raise GwenError(f"substring() requires a string, got {type(s).__name__}")
+        if not isinstance(start, int):
+            raise GwenError(f"substring() start must be an integer, got {type(start).__name__}")
+        if not isinstance(end, int):
+            raise GwenError(f"substring() end must be an integer, got {type(end).__name__}")
+        # Handle negative indices gracefully (clamp to bounds)
+        length = len(s)
+        if start < 0:
+            start = 0
+        if end > length:
+            end = length
+        if start > end:
+            start = end
+        return s[start:end]
+
+    def _builtin_contains(self, s, substr):
+        """Check if substring exists in string."""
+        if not isinstance(s, str):
+            raise GwenError(f"contains() requires a string, got {type(s).__name__}")
+        if not isinstance(substr, str):
+            raise GwenError(f"contains() substr must be a string, got {type(substr).__name__}")
+        return substr in s
+
+    def _builtin_trim(self, s):
+        """Remove leading and trailing whitespace."""
+        if not isinstance(s, str):
+            raise GwenError(f"trim() requires a string, got {type(s).__name__}")
+        return s.strip()
+
+    def _builtin_replace(self, s, old, new):
+        """Replace all occurrences of old with new."""
+        if not isinstance(s, str):
+            raise GwenError(f"replace() requires a string, got {type(s).__name__}")
+        if not isinstance(old, str):
+            raise GwenError(f"replace() old must be a string, got {type(old).__name__}")
+        if not isinstance(new, str):
+            raise GwenError(f"replace() new must be a string, got {type(new).__name__}")
+        return s.replace(old, new)
 
     def run(self, program: ast.Program):
         self.exec_block(program.statements, self.global_env)

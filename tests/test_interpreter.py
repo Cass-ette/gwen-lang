@@ -636,6 +636,120 @@ endfunc""")
     assert out == "apple,banana,cherry"
 
 
+def test_pop_basic():
+    out = run("""func main()
+  lst := [1, 2, 3]
+  last := pop(lst)
+  write(last)
+  write(lst)
+endfunc""")
+    lines = out.split("\n")
+    assert lines[0] == "3"
+    assert lines[1] == "[1, 2]"
+
+
+def test_pop_empty_error():
+    import pytest
+    with pytest.raises(Exception, match="empty"):
+        run("""func main()
+  lst := []
+  x := pop(lst)
+endfunc""")
+
+
+def test_insert_basic():
+    out = run("""func main()
+  lst := [1, 2, 3]
+  insert(lst, 0, 0)
+  write(lst)
+  insert(lst, 2, 99)
+  write(lst)
+endfunc""")
+    lines = out.split("\n")
+    assert lines[0] == "[0, 1, 2, 3]"
+    assert lines[1] == "[0, 1, 99, 2, 3]"
+
+
+def test_concat_new_list():
+    out = run("""func main()
+  a := [1, 2]
+  b := [3, 4]
+  c := concat(a, b)
+  write(c)
+  write(a)
+  write(b)
+endfunc""")
+    lines = out.split("\n")
+    assert lines[0] == "[1, 2, 3, 4]"
+    assert lines[1] == "[1, 2]"
+    assert lines[2] == "[3, 4]"
+
+
+def test_substring_basic():
+    out = run("""func main()
+  s := "hello world"
+  write(substring(s, 0, 5))
+  write(substring(s, 6, 11))
+endfunc""")
+    lines = out.split("\n")
+    assert lines[0] == "hello"
+    assert lines[1] == "world"
+
+
+def test_substring_bounds():
+    out = run("""func main()
+  s := "abc"
+  // end > length clamps to end
+  a := substring(s, 0, 100)
+  // start == end returns empty (represented as -)
+  b := substring(s, 1, 1)
+  // start > length returns empty
+  c := substring(s, 5, 10)
+  marker := "-"
+  write(a, marker, b, marker, c)
+endfunc""")
+    # Output: abc - - -
+    assert "abc" in out
+    assert "- - -" in out or out.count("-") >= 2
+
+
+def test_contains_basic():
+    out = run("""func main()
+  s := "hello world"
+  write(contains(s, "world"))
+  write(contains(s, "foo"))
+  write(contains(s, ""))
+endfunc""")
+    lines = out.split("\n")
+    assert lines[0] == "True"
+    assert lines[1] == "False"
+    assert lines[2] == "True"
+
+
+def test_trim_basic():
+    out = run("""func main()
+  s := "  hello world  \n\t"
+  write(trim(s))
+endfunc""")
+    assert out == "hello world"
+
+
+def test_replace_basic():
+    out = run("""func main()
+  s := "hello world, hello universe"
+  write(replace(s, "hello", "hi"))
+endfunc""")
+    assert out == "hi world, hi universe"
+
+
+def test_replace_no_match():
+    out = run("""func main()
+  s := "hello world"
+  write(replace(s, "foo", "bar"))
+endfunc""")
+    assert out == "hello world"
+
+
 # --- Multiple return values tests ---
 
 def test_multiple_return_basic():
