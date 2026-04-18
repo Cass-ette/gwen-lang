@@ -162,11 +162,12 @@ home := env("HOME")
 | `desc` | 比较器 | 预定义 `(a, b) => a > b` | O(1) |
 | `reversed` | `reversed(lst: list[T]) -> list[T]` | 返回逆序新列表（名称为 `reversed`，`reverse` 是 for 循环关键字） | O(n) |
 | `pop` | `pop(lst: list[T]) -> T` | **原地修改**，移除并返回末尾元素 | O(1) |
+| `removeat` | `removeat(lst: list[T], idx: int) -> T` | **原地修改**，移除并返回指定索引元素 | O(n) |
 | `insert` | `insert(lst: list[T], idx: int, item: T) -> void` | **原地修改**，在索引处插入 | O(n) |
 | `concat` | `concat(a: list[T], b: list[T]) -> list[T]` | 返回新列表（**不修改**输入） | O(a+b) |
 
 **列表函数哲学**：
-- `append`/`pop`/`insert`：**原地修改**，副作用明确
+- `append`/`pop`/`removeat`/`insert`：**原地修改**，副作用明确
 - `sort`/`reversed`/`concat`：**返回新列表**，原数据不变
 - 审计时区分这两类：看函数名+文档，知道是否修改输入
 

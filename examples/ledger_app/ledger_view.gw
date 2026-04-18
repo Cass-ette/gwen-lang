@@ -1,0 +1,12 @@
+module ledger_view
+export func print_lines(title: string, lines: list[string])
+  write(title)
+  if len(lines) = 0 then
+    write("  (none)")
+  else
+    for line in lines do
+      write(" -", line)
+    endfor
+  endif
+endfunc
+endmodule

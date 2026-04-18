@@ -1,0 +1,34 @@
+module ledger_store
+export func save(ledger: Ledger) -> result[int]
+  lines := ledger.export_lines()
+  body := join(lines, "\n")
+  if len(lines) > 0 then
+    body := body + "\n"
+  endif
+  return writefile(ledger.get_storage_path(), body)
+endfunc
+
+export func load(ledger: Ledger) -> result[int]
+  match readfile(ledger.get_storage_path())
+    when ok(content) =>
+      if trim(content) = "" then
+        return ok(0)
+      endif
+      lines := split(content, "\n")
+      loaded := 0
+      for line in lines do
+        if trim(line) != "" then
+          match ledger.import_line(line)
+            when ok(n) =>
+              loaded := loaded + n
+            when err(e) =>
+              return err("bad ledger line: " + e)
+          endmatch
+        endif
+      endfor
+      return ok(loaded)
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+endmodule

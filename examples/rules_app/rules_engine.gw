@@ -1,0 +1,28 @@
+module rules_engine
+use check_required_category, check_country_block, check_documents, check_amount, check_customer_tier from rules_builtin
+
+export func default_rules() -> list
+  return [
+    check_required_category,
+    check_country_block,
+    check_documents,
+    check_amount,
+    check_customer_tier
+  ]
+endfunc
+
+export func run_rules(request: Request, rules: list) -> result[Decision]
+  decision := Decision.new(request.get_id())
+  index := 0
+  for rule in rules do
+    match rule(request, decision)
+      when ok(_) =>
+        index := index + 1
+      when err(e) =>
+        return err("rule[" + str(index) + "] failed for " + request.get_id() + ": " + e)
+    endmatch
+  endfor
+  return ok(decision)
+endfunc
+
+endmodule

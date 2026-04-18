@@ -1,5 +1,6 @@
 """Gwen interpreter - tree-walk execution of AST."""
 
+import os
 import struct
 from typing import Any, Dict, List, Optional
 from . import ast_nodes as ast
@@ -357,12 +358,17 @@ class Environment:
 
 
 class Interpreter:
-    def __init__(self):
+    def __init__(self, module_search_paths: Optional[List[str]] = None):
         self.global_env = Environment()
         self.modules: Dict[str, Environment] = {}
         self.type_aliases: Dict[str, str] = {}  # alias name -> canonical type name
         self.objects: Dict[str, ObjectType] = {}  # object name -> ObjectType
+        self.module_search_paths: List[str] = []
+        self._loading_modules: set[str] = set()
         self._setup_builtins()
+        if module_search_paths:
+            for path in module_search_paths:
+                self.add_module_search_path(path)
 
     def _setup_builtins(self):
         self.global_env.set("write", self._builtin_write)
@@ -380,6 +386,7 @@ class Interpreter:
         self.global_env.set("split", self._builtin_split)
         self.global_env.set("join", self._builtin_join)
         self.global_env.set("pop", self._builtin_pop)
+        self.global_env.set("removeat", self._builtin_removeat)
         self.global_env.set("insert", self._builtin_insert)
         self.global_env.set("concat", self._builtin_concat)
         self.global_env.set("substring", self._builtin_substring)
@@ -400,6 +407,62 @@ class Interpreter:
         self.global_env.set("readfile", self._builtin_readfile)
         self.global_env.set("writefile", self._builtin_writefile)
         self.global_env.set("appendfile", self._builtin_appendfile)
+
+    def add_module_search_path(self, path: Optional[str]):
+        """Register a directory for `use module_name` file lookup."""
+        if not path:
+            return
+        abs_path = os.path.abspath(path)
+        if abs_path in self.module_search_paths:
+            return
+        self.module_search_paths.insert(0, abs_path)
+
+    def _module_candidate_paths(self, module_name: str):
+        """Yield possible source files for a module name."""
+        seen = set()
+        search_paths = self.module_search_paths or [os.getcwd()]
+        for base in search_paths:
+            for candidate in (
+                os.path.join(base, f"{module_name}.gw"),
+                os.path.join(base, module_name, "main.gw"),
+            ):
+                abs_candidate = os.path.abspath(candidate)
+                if abs_candidate not in seen:
+                    seen.add(abs_candidate)
+                    yield abs_candidate
+
+    def _load_module_from_file(self, module_name: str, line: int):
+        """Load a module source file on demand when `use` references it."""
+        if module_name in self.modules:
+            return
+        if module_name in self._loading_modules:
+            raise GwenError(f"Cyclic module import detected while loading '{module_name}'", line)
+
+        for candidate in self._module_candidate_paths(module_name):
+            if not os.path.isfile(candidate):
+                continue
+
+            from .parser import parse
+
+            self._loading_modules.add(module_name)
+            self.add_module_search_path(os.path.dirname(candidate))
+            try:
+                with open(candidate, encoding="utf-8") as f:
+                    source = f.read()
+                program = parse(source)
+                # Load definitions into the current interpreter without auto-running main().
+                self.exec_block(program.statements, self.global_env)
+            finally:
+                self._loading_modules.remove(module_name)
+
+            if module_name not in self.modules:
+                raise GwenError(
+                    f"Module file '{candidate}' did not define module '{module_name}'",
+                    line,
+                )
+            return
+
+        raise GwenError(f"Module not found: {module_name}", line)
 
     def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
         """Follow type alias chain to canonical type name."""
@@ -531,6 +594,18 @@ class Interpreter:
         if len(lst) == 0:
             raise GwenError("pop() from empty list")
         return lst.pop()
+
+    def _builtin_removeat(self, lst, idx):
+        """Remove and return the element at index. Modifies the list in place."""
+        if not isinstance(lst, list):
+            raise GwenError(f"removeat() requires a list, got {type(lst).__name__}")
+        if not isinstance(idx, int):
+            raise GwenError(f"removeat() index must be an integer, got {type(idx).__name__}")
+        if idx < 0:
+            idx = len(lst) + idx
+        if idx < 0 or idx >= len(lst):
+            raise GwenError(f"removeat() index out of range: {idx}")
+        return lst.pop(idx)
 
     def _builtin_insert(self, lst, idx, item):
         """Insert item at index. Modifies the list in place."""
@@ -742,7 +817,9 @@ class Interpreter:
         except OSError as e:
             return ErrValue(str(e))
 
-    def run(self, program: ast.Program):
+    def run(self, program: ast.Program, source_path: Optional[str] = None):
+        if source_path:
+            self.add_module_search_path(os.path.dirname(os.path.abspath(source_path)))
         self.exec_block(program.statements, self.global_env)
         # Auto-call main() if it exists
         try:
@@ -1031,23 +1108,27 @@ class Interpreter:
             for s in stmt.body:
                 if isinstance(s, ast.FuncDef) and s.exported:
                     module_ns.set(s.name, mod_env.get(s.name))
-            self.modules[stmt.name] = mod_env
+            self.modules[stmt.name] = module_ns
             env.set(stmt.name, module_ns)
 
         elif isinstance(stmt, ast.UseStmt):
-            if stmt.module in self.modules:
-                mod_env = self.modules[stmt.module]
-                if stmt.names:
-                    for name in stmt.names:
-                        env.set(name, mod_env.get(name))
-                else:
-                    # Import module namespace
-                    mod_ns = Environment()
-                    for key, val in mod_env.vars.items():
-                        mod_ns.set(key, val)
-                    env.set(stmt.module, mod_ns)
+            if stmt.module not in self.modules:
+                self._load_module_from_file(stmt.module, stmt.line)
+            mod_env = self.modules[stmt.module]
+            if stmt.names:
+                for name in stmt.names:
+                    if name not in mod_env.vars:
+                        raise GwenError(
+                            f"Module '{stmt.module}' does not export '{name}'",
+                            stmt.line,
+                        )
+                    env.set(name, mod_env.get(name))
             else:
-                raise GwenError(f"Module not found: {stmt.module}", stmt.line)
+                # Import module namespace
+                mod_ns = Environment()
+                for key, val in mod_env.vars.items():
+                    mod_ns.set(key, val)
+                env.set(stmt.module, mod_ns)
 
         elif isinstance(stmt, ast.GlobalStmt):
             # global x := value - force assignment to outer (non-local) scope

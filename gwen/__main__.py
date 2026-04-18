@@ -11,7 +11,7 @@ def run_file(path: str):
         source = f.read()
     program = parse(source)
     interp = Interpreter()
-    interp.run(program)
+    interp.run(program, source_path=path)
 
 
 def repl():

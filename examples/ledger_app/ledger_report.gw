@@ -1,0 +1,31 @@
+module ledger_report
+use print_lines from ledger_view
+
+func category_lines(ledger: Ledger, month: string = "") -> list[string]
+  totals := ledger.category_totals(month)
+  categories := sort(keys(totals), asc)
+  lines := []
+  for category in categories do
+    append(lines, category + " => " + str(totals[category]))
+  endfor
+  return lines
+endfunc
+
+export func print_summary(ledger: Ledger)
+  write("Owner:", ledger.get_owner())
+  write("Entry count:", ledger.entry_count())
+  write("Income total:", str(ledger.income_total()))
+  write("Expense total:", str(ledger.expense_total()))
+  write("Balance:", str(ledger.balance()))
+  print_lines("Category totals:", category_lines(ledger))
+endfunc
+
+export func print_month_report(ledger: Ledger, month: string)
+  write("Month report:", month)
+  write("Entry count:", ledger.entry_count(month))
+  write("Income total:", str(ledger.income_total(month)))
+  write("Expense total:", str(ledger.expense_total(month)))
+  write("Balance:", str(ledger.balance(month)))
+  print_lines("Category totals:", category_lines(ledger, month))
+endfunc
+endmodule

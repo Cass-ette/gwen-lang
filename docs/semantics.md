@@ -173,6 +173,7 @@
 |------|------|--------|
 | `append(lst, item)` | `(list[T], T) -> void` | ✅ 原地修改 |
 | `pop(lst)` | `(list[T]) -> T` | ✅ 原地修改 |
+| `removeat(lst, idx)` | `(list[T], int) -> T` | ✅ 原地修改 |
 | `insert(lst, idx, item)` | `(list[T], int, T) -> void` | ✅ 原地修改 |
 | `sort(lst, cmp)` | `(list[T], (T,T)->bool) -> list[T]` | ❌ 返回新列表 |
 | `reversed(lst)` | `(list[T]) -> list[T]` | ❌ 返回新列表 |

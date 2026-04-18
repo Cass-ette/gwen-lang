@@ -233,6 +233,40 @@ write(square(7))""")
     assert out == "49"
 
 
+def test_module_private_func_not_importable():
+    import pytest
+    with pytest.raises(Exception, match="does not export 'helper'"):
+        run("""module math_utils
+  export func square(x: int) -> int
+    return x * x
+  endfunc
+
+  func helper(x: int) -> int
+    return x + 1
+  endfunc
+endmodule
+
+use helper from math_utils
+write(helper(7))""")
+
+
+def test_module_namespace_only_exposes_exports():
+    import pytest
+    with pytest.raises(Exception, match="Undefined variable: helper"):
+        run("""module math_utils
+  export func square(x: int) -> int
+    return x * x
+  endfunc
+
+  func helper(x: int) -> int
+    return x + 1
+  endfunc
+endmodule
+
+use math_utils
+write(math_utils.helper(7))""")
+
+
 def test_nested_if():
     out = run("""x := 10
 y := 20
@@ -654,6 +688,39 @@ def test_pop_empty_error():
         run("""func main()
   lst := []
   x := pop(lst)
+endfunc""")
+
+
+def test_removeat_basic():
+    out = run("""func main()
+  lst := [10, 20, 30, 40]
+  removed := removeat(lst, 1)
+  write(removed)
+  write(lst)
+endfunc""")
+    lines = out.split("\n")
+    assert lines[0] == "20"
+    assert lines[1] == "[10, 30, 40]"
+
+
+def test_removeat_negative_index():
+    out = run("""func main()
+  lst := [10, 20, 30]
+  removed := removeat(lst, -1)
+  write(removed)
+  write(lst)
+endfunc""")
+    lines = out.split("\n")
+    assert lines[0] == "30"
+    assert lines[1] == "[10, 20]"
+
+
+def test_removeat_out_of_range():
+    import pytest
+    with pytest.raises(Exception, match="removeat\\(\\) index out of range"):
+        run("""func main()
+  lst := [1, 2]
+  removeat(lst, 5)
 endfunc""")
 
 

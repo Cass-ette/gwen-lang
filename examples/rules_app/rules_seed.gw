@@ -1,0 +1,15 @@
+module rules_seed
+
+export func seed_requests() -> list
+  requests := []
+
+  append(requests, Request.new("REQ-100", "Alice", 2500.0, "SG", "trusted", true, "books"))
+  append(requests, Request.new("REQ-101", "Bob", 15000.0, "US", "trusted", true, "hardware"))
+  append(requests, Request.new("REQ-102", "Carol", 300.0, "DE", "new", false, "saas"))
+  append(requests, Request.new("REQ-103", "Dmitri", 900.0, "KP", "trusted", true, "services"))
+  append(requests, Request.new("REQ-104", "Eve", 120.0, "FR", "vip", true, ""))
+
+  return requests
+endfunc
+
+endmodule

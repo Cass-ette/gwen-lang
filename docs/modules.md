@@ -39,3 +39,5 @@ result := gcd(12, 8)
 
 - 默认私有
 - `export func` 标记的函数外部可用（当前仅支持函数导出）
+- `use name from module` 只能导入导出符号；私有函数会报错
+- `use module` 导入的命名空间也只包含导出符号

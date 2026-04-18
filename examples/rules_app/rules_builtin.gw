@@ -1,0 +1,44 @@
+module rules_builtin
+
+export func check_required_category(request: Request, decision: Decision) -> result[int]
+  if trim(request.get_category()) = "" then
+    return err("category missing")
+  endif
+  return ok(1)
+endfunc
+
+export func check_country_block(request: Request, decision: Decision) -> result[int]
+  country := request.get_country()
+  if country = "KP" or country = "IR" then
+    decision.mark_reject("country blocked: " + country)
+  endif
+  return ok(1)
+endfunc
+
+export func check_documents(request: Request, decision: Decision) -> result[int]
+  if request.has_complete_docs() = false then
+    decision.mark_review("missing documents")
+  endif
+  return ok(1)
+endfunc
+
+export func check_amount(request: Request, decision: Decision) -> result[int]
+  if request.get_amount() > 10000.0 then
+    decision.mark_review("amount over manual-review threshold")
+  endif
+  return ok(1)
+endfunc
+
+export func check_customer_tier(request: Request, decision: Decision) -> result[int]
+  match request.get_customer_tier()
+    when "vip" =>
+      decision.add_note("vip customer")
+    when "new" =>
+      decision.mark_review("new customer")
+    else
+      return ok(1)
+  endmatch
+  return ok(1)
+endfunc
+
+endmodule

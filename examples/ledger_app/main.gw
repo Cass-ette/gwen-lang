@@ -3,7 +3,7 @@
 // Purpose:
 // - exercise the restricted object system
 // - exercise result-based file I/O
-// - exercise list/dict/string utilities
+// - exercise multi-file module loading
 // - surface current language friction in a real program shape
 
 object Entry
@@ -41,6 +41,21 @@ object Entry
 
   func get_note(self: Entry) -> string
     return self.note
+  endfunc
+
+  func month_key(self: Entry) -> string
+    return substring(self.date, 0, 6)
+  endfunc
+
+  func update_note(self: Entry, note: string)
+    self.note := note
+  endfunc
+
+  func note_contains(self: Entry, note_keyword: string) -> bool
+    if note_keyword = "" then
+      return true
+    endif
+    return contains(self.note, note_keyword)
   endfunc
 
   func signed_amount(self: Entry) -> float
@@ -94,8 +109,22 @@ object Ledger
     return self.storage_path
   endfunc
 
-  func entry_count(self: Ledger) -> int
-    return len(self.entries)
+  func entry_count(self: Ledger, month: string = "") -> int
+    count := 0
+    for entry in self.entries do
+      if self.entry_matches(entry, "", "", month, "") then
+        count := count + 1
+      endif
+    endfor
+    return count
+  endfunc
+
+  func entry_matches(self: Ledger, entry: Entry, category: string, kind: string, month: string = "", note_keyword: string = "") -> bool
+    category_ok := category = "" or entry.get_category() = category
+    kind_ok := kind = "" or entry.get_kind() = kind
+    month_ok := month = "" or entry.month_key() = month
+    note_ok := entry.note_contains(note_keyword)
+    return category_ok and kind_ok and month_ok and note_ok
   endfunc
 
   func add_income(self: Ledger, date: string, category: string, amount: float, note: string)
@@ -127,113 +156,89 @@ object Ledger
     return ok(1)
   endfunc
 
-  func income_total(self: Ledger) -> float
+  func list_entries(self: Ledger, category: string = "", kind: string = "", month: string = "", note_keyword: string = "") -> list[string]
+    lines := []
+    i := 0
+    for entry in self.entries do
+      if self.entry_matches(entry, category, kind, month, note_keyword) then
+        append(lines, str(i) + " | " + entry.describe())
+      endif
+      i := i + 1
+    endfor
+    return lines
+  endfunc
+
+  func delete_entry(self: Ledger, index: int) -> result[int]
+    if index < 0 or index >= len(self.entries) then
+      return err("entry index out of range: " + str(index))
+    endif
+
+    removeat(self.entries, index)
+    return ok(1)
+  endfunc
+
+  func update_entry_note(self: Ledger, index: int, note: string) -> result[int]
+    if index < 0 or index >= len(self.entries) then
+      return err("entry index out of range: " + str(index))
+    endif
+
+    entry := self.entries[index]
+    entry.update_note(note)
+    return ok(1)
+  endfunc
+
+  func income_total(self: Ledger, month: string = "") -> float
     total := 0.0
     for entry in self.entries do
-      if entry.get_kind() = "income" then
+      if self.entry_matches(entry, "", "income", month, "") then
         total := total + entry.get_amount()
       endif
     endfor
     return total
   endfunc
 
-  func expense_total(self: Ledger) -> float
+  func expense_total(self: Ledger, month: string = "") -> float
     total := 0.0
     for entry in self.entries do
-      if entry.get_kind() = "expense" then
+      if self.entry_matches(entry, "", "expense", month, "") then
         total := total + entry.get_amount()
       endif
     endfor
     return total
   endfunc
 
-  func balance(self: Ledger) -> float
-    return self.income_total() - self.expense_total()
+  func balance(self: Ledger, month: string = "") -> float
+    return self.income_total(month) - self.expense_total(month)
   endfunc
 
-  func category_totals(self: Ledger) -> dict[string, float]
+  func category_totals(self: Ledger, month: string = "") -> dict[string, float]
     totals := dict[string, float]{}
     for entry in self.entries do
-      category := entry.get_category()
-      if haskey(totals, category) then
-        totals[category] := totals[category] + entry.signed_amount()
-      else
-        totals[category] := entry.signed_amount()
+      if self.entry_matches(entry, "", "", month, "") then
+        category := entry.get_category()
+        if haskey(totals, category) then
+          totals[category] := totals[category] + entry.signed_amount()
+        else
+          totals[category] := entry.signed_amount()
+        endif
       endif
     endfor
     return totals
   endfunc
 
   func print_register(self: Ledger)
-    for entry in self.entries do
-      write(" -", entry.describe())
+    lines := self.list_entries()
+    for line in lines do
+      write(" -", line)
     endfor
   endfunc
 endobject
 
-module ledger_store
-  export func save(ledger: Ledger) -> result[int]
-    lines := ledger.export_lines()
-    body := join(lines, "\n")
-    if len(lines) > 0 then
-      body := body + "\n"
-    endif
-    return writefile(ledger.get_storage_path(), body)
-  endfunc
-
-  export func load(ledger: Ledger) -> result[int]
-    match readfile(ledger.get_storage_path())
-      when ok(content) =>
-        if trim(content) = "" then
-          return ok(0)
-        endif
-        lines := split(content, "\n")
-        loaded := 0
-        for line in lines do
-          if trim(line) != "" then
-            match ledger.import_line(line)
-              when ok(n) =>
-                loaded := loaded + n
-              when err(e) =>
-                return err("bad ledger line: " + e)
-            endmatch
-          endif
-        endfor
-        return ok(loaded)
-      when err(e) =>
-        return err(e)
-    endmatch
-  endfunc
-endmodule
-
-module ledger_report
-  export func print_summary(ledger: Ledger)
-    write("Owner:", ledger.get_owner())
-    write("Entry count:", ledger.entry_count())
-    write("Income total:", str(ledger.income_total()))
-    write("Expense total:", str(ledger.expense_total()))
-    write("Balance:", str(ledger.balance()))
-    totals := ledger.category_totals()
-    categories := sort(keys(totals), asc)
-    write("Category totals:")
-    for category in categories do
-      write("  ", category, "=>", str(totals[category]))
-    endfor
-  endfunc
-endmodule
-
-func seed_demo_data(ledger: Ledger)
-  ledger.add_income("2026-04-01", "salary", 5000.0, "monthly salary")
-  ledger.add_income("2026-04-05", "refund", 12.0, "book refund")
-  ledger.add_expense("2026-04-02", "food", 32.5, "lunch with team")
-  ledger.add_expense("2026-04-03", "transport", 8.0, "metro card")
-  ledger.add_expense("2026-04-04", "food", 18.0, "coffee beans")
-  ledger.add_expense("2026-04-06", "software", 19.99, "domain renewal")
-endfunc
-
 func main()
   use save, load from ledger_store
-  use print_summary from ledger_report
+  use print_summary, print_month_report from ledger_report
+  use print_query_results from ledger_queries
+  use seed_demo_data from ledger_seed
 
   path := "/tmp/gwen_ledger_app_demo.txt"
 
@@ -248,6 +253,50 @@ func main()
 
   write("")
   write("Register:")
+  ledger.print_register()
+
+  write("")
+  print_query_results(ledger, "Filtered expenses in food:", "food", "expense")
+
+  write("")
+  print_query_results(ledger, "April food expenses:", "food", "expense", "2026-04")
+
+  write("")
+  print_query_results(ledger, "Entries mentioning domain:", "", "", "", "domain")
+
+  write("")
+  match ledger.delete_entry(3)
+    when ok(n) =>
+      write("Deleted entries:", n)
+    when err(e) =>
+      write("Delete failed:", e)
+  endmatch
+
+  write("")
+  match ledger.update_entry_note(4, "renewed domain and DNS")
+    when ok(n) =>
+      write("Updated notes:", n)
+    when err(e) =>
+      write("Update failed:", e)
+  endmatch
+
+  write("")
+  write("Summary after delete:")
+  print_summary(ledger)
+
+  write("")
+  write("April report:")
+  print_month_report(ledger, "2026-04")
+
+  write("")
+  write("May report:")
+  print_month_report(ledger, "2026-05")
+
+  write("")
+  print_query_results(ledger, "Updated note search for renewed:", "", "", "", "renewed")
+
+  write("")
+  write("Register after delete:")
   ledger.print_register()
 
   write("")
@@ -266,6 +315,10 @@ func main()
       write("")
       write("Reloaded summary:")
       print_summary(reloaded)
+      write("")
+      print_query_results(reloaded, "Reloaded software expenses:", "software", "expense")
+      write("")
+      print_query_results(reloaded, "Reloaded note search for renewed:", "", "", "", "renewed")
     when err(e) =>
       write("Load failed:", e)
   endmatch

@@ -1,0 +1,35 @@
+module rules_report
+
+export func print_decision(request: Request, decision: Decision)
+  write("Request:", request.describe())
+  match decision.get_status()
+    when "approve" =>
+      write("Decision: approve")
+    when "review" =>
+      write("Decision: review")
+    when "reject" =>
+      write("Decision: reject")
+    else
+      write("Decision: unknown")
+  endmatch
+
+  reasons := decision.get_reasons()
+  if len(reasons) = 0 then
+    write("Reasons: (none)")
+  else
+    write("Reasons:")
+    for reason in reasons do
+      write(" -", reason)
+    endfor
+  endif
+endfunc
+
+export func print_batch_summary(approved: int, reviewed: int, rejected: int, errors: int)
+  write("Summary:")
+  write(" approve =", approved)
+  write(" review =", reviewed)
+  write(" reject =", rejected)
+  write(" error =", errors)
+endfunc
+
+endmodule
