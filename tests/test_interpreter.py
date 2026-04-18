@@ -492,7 +492,9 @@ def test_var_default_type_mismatch():
 endfunc""")
         assert False, "expected type mismatch"
     except Exception as e:
-        assert "Type mismatch" in str(e)
+        msg = str(e)
+        assert "cannot accept `default`" in msg
+        assert "a: int" in msg
 
 
 def test_var_default_zero_money():

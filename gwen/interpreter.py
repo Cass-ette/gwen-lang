@@ -466,7 +466,15 @@ class Interpreter:
                 elif stmt.default_mode == "value":
                     v = shared_value
                     if needs_type_check(type_name):
-                        v = coerce_to_type(v, type_name, d.line)
+                        try:
+                            v = coerce_to_type(v, type_name, d.line)
+                        except GwenError:
+                            raise GwenError(
+                                f"'{d.name}: {type_name}' cannot accept `default` value "
+                                f"of type {type(shared_value).__name__}; "
+                                f"use `{d.name}: {type_name} := ...` or switch to `var default` (zero values)",
+                                d.line,
+                            )
                 else:
                     v = UNINIT
                 env.set(d.name, v)
