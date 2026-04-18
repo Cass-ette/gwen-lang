@@ -1380,6 +1380,55 @@ def test_items_type_error():
         run('''x := items([1, 2, 3])''')
 
 
+# ---------- char range for (ASCII single-char strings) ----------
+
+def test_char_range_basic():
+    """for c in "a" to "f" iterates ASCII chars."""
+    out = run('''for c in "a" to "e" do
+  write(c)
+endfor''')
+    assert out == "a\nb\nc\nd\ne"
+
+
+def test_char_range_auto_reverse():
+    """Char range auto-detects direction (end < start means reverse)."""
+    out = run('''for c in "e" to "a" do
+  write(c)
+endfor''')
+    assert out == "e\nd\nc\nb\na"
+
+
+def test_char_range_explicit_order():
+    """Char range with explicit 'order' forces ascending regardless of bounds."""
+    out = run('''for c in "e" to "a" order do
+  write(c)
+endfor''')
+    assert out == "a\nb\nc\nd\ne"
+
+
+def test_char_range_explicit_reverse():
+    """Char range with explicit 'reverse' forces descending regardless of bounds."""
+    out = run('''for c in "a" to "e" reverse do
+  write(c)
+endfor''')
+    assert out == "e\nd\nc\nb\na"
+
+
+def test_char_range_digits():
+    """Char range works for digit chars too."""
+    out = run('''for c in "0" to "5" do
+  write(c)
+endfor''')
+    assert out == "0\n1\n2\n3\n4\n5"
+
+
+def test_char_range_rejects_non_ascii():
+    """Char range rejects non-ASCII chars (Unicode not supported)."""
+    import pytest
+    with pytest.raises(Exception, match="Char range only supports ASCII"):
+        run('''for c in "\u00e9" to "\u00f0" do write(c) endfor''')
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = 0

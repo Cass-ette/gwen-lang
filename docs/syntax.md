@@ -259,9 +259,14 @@ endwhile
 ### for
 
 ```
-// 范围遍历（包含两端）
+// 范围遍历（包含两端，int）
 for i in 1 to 10 do
   write(i)
+endfor
+
+// 范围遍历（ASCII 单字符字符串）
+for c in "a" to "z" do
+  write(c)  // c 是 1-char string
 endfor
 
 // 带步长

@@ -827,33 +827,63 @@ class Interpreter:
             end = self.eval_expr(stmt.end, env)
             step = self.eval_expr(stmt.step, env) if stmt.step else None
 
+            # Detect char range mode: both start and end are single-char strings
+            is_char_range = (
+                isinstance(start, str) and len(start) == 1
+                and isinstance(end, str) and len(end) == 1
+            )
+            if is_char_range:
+                # Convert to ord for numeric iteration
+                start_ord = ord(start)
+                end_ord = ord(end)
+                # ASCII safety: both should be in ASCII range for clarity
+                if not (0 <= start_ord <= 127 and 0 <= end_ord <= 127):
+                    raise GwenError(
+                        f"Char range only supports ASCII characters (0-127), "
+                        f"got ord(start)={start_ord}, ord(end)={end_ord}",
+                        stmt.line
+                    )
+
             # Determine direction based on direction field and auto-detection
             if stmt.direction == "asc":
                 # Force ascending: always iterate small -> large
                 if start > end:
                     start, end = end, start
+                    if is_char_range:
+                        start_ord, end_ord = end_ord, start_ord
                 step = 1 if step is None else abs(step)
-                compare = lambda i, end: i <= end
+                compare = lambda i, end_val: i <= end_val
             elif stmt.direction == "desc":
                 # Force descending: always iterate large -> small
                 if start < end:
                     start, end = end, start
+                    if is_char_range:
+                        start_ord, end_ord = end_ord, start_ord
                 step = -1 if step is None else -abs(step)
-                compare = lambda i, end: i >= end
+                compare = lambda i, end_val: i >= end_val
             else:
                 # Auto mode: infer from start/end
                 if step is None:
                     step = 1 if start <= end else -1
                 if step > 0:
-                    compare = lambda i, end: i <= end
+                    compare = lambda i, end_val: i <= end_val
                 else:
-                    compare = lambda i, end: i >= end
+                    compare = lambda i, end_val: i >= end_val
 
-            i = start
-            while compare(i, end):
-                env.update_local(stmt.var, i)
-                self.exec_block(stmt.body, env)
-                i += step
+            if is_char_range:
+                # Iterate using ord, yield char
+                i_ord = start_ord
+                while compare(i_ord, end_ord):
+                    env.update_local(stmt.var, chr(i_ord))
+                    self.exec_block(stmt.body, env)
+                    i_ord += step
+            else:
+                # Integer range (original behavior)
+                i = start
+                while compare(i, end):
+                    env.update_local(stmt.var, i)
+                    self.exec_block(stmt.body, env)
+                    i += step
 
         elif isinstance(stmt, ast.ForEachStmt):
             iterable = self.eval_expr(stmt.iterable, env)
