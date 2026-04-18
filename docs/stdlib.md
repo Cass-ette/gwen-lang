@@ -190,14 +190,14 @@ sorted := sort(users, (u1, u2) => u1.score < u2.score)  // 自定义字段
 |------|------|------|------|
 | `split` | `split(s: string, sep: string) -> list[string]` | 按分隔符拆分 | `sep` 为空时按字符拆 |
 | `join` | `join(parts: list[string], sep: string) -> string` | 用分隔符连接 | 空列表返回空串 |
-| `substring` | `substring(s: string, start: int, end: int) -> string` | 提取子串 | 越界按实际长度截断 |
+| `substring` | `substring(s: string, start: int, end: int) -> string` | 提取子串 | 越界报错 |
 | `contains` | `contains(s: string, substr: string) -> bool` | 子串存在检查 | 空串视为包含 |
 | `trim` | `trim(s: string) -> string` | 去首尾空白（space/tab/newline） | 返回新字符串 |
 | `replace` | `replace(s: string, old: string, new: string) -> string` | 替换所有出现 | 无匹配返回原串（但仍是新字符串对象） |
 
 **字符串函数哲学**：
 - 字符串**不可变**，所有函数返回新字符串，无副作用
-- `substring` 越界自动截断（不报错），审计友好
+- `substring` 越界**报错**（不截断），符合"错误不静默"
 - `join` 自动 `str()` 转换元素，方便数字拼接
 
 **待实现**：`split`/`join` 是否提供 `limit: int` 参数（限制分割次数）？暂不实现，按需再加。

@@ -147,8 +147,8 @@
 
 | 表达式 | 适用类型 | 结果类型 | 越界行为 |
 |--------|----------|----------|----------|
-| `list[i]` | `list[T]` | `T` | **报错**（越界检查） |
-| `string[i]` | `string` | `string` | 空串或截断？（待定义） |
+| `list[i]` | `list[T]` | `T` | **报错**（Index out of range） |
+| `string[i]` | `string` | `string` | **报错**（Index out of range） |
 | `dict[k]` | `dict[K,V]` | `V` | **报错**（Key not found） |
 
 ---
@@ -179,7 +179,7 @@
 |------|------|------|
 | `split(s, sep)` | `(string, string) -> list[string]` | `sep=""` 按字符拆 |
 | `join(parts, sep)` | `(list[string], string) -> string` | |
-| `substring(s, start, end)` | `(string, int, int) -> string` | 越界截断 |
+| `substring(s, start, end)` | `(string, int, int) -> string` | 越界报错 |
 | `contains(s, substr)` | `(string, string) -> bool` | |
 | `trim(s)` | `(string) -> string` | 去首尾空白 |
 | `replace(s, old, new)` | `(string, string, string) -> string` | 替换所有 |

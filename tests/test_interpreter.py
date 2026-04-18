@@ -696,21 +696,19 @@ endfunc""")
     assert lines[1] == "world"
 
 
-def test_substring_bounds():
-    out = run("""func main()
-  s := "abc"
-  // end > length clamps to end
-  a := substring(s, 0, 100)
-  // start == end returns empty (represented as -)
-  b := substring(s, 1, 1)
-  // start > length returns empty
-  c := substring(s, 5, 10)
-  marker := "-"
-  write(a, marker, b, marker, c)
-endfunc""")
-    # Output: abc - - -
-    assert "abc" in out
-    assert "- - -" in out or out.count("-") >= 2
+def test_substring_valid_cases():
+    """substring() valid cases: start==end gives empty string, normal extraction."""
+    out = run("""s := "abc"
+// start == end returns empty
+b := substring(s, 1, 1)
+// normal extraction [0,3) = "abc"
+a := substring(s, 0, 3)
+write(a)
+write(b)
+// [1,3) = "bc"
+write(substring(s, 1, 3))
+""")
+    assert out == "abc\n\nbc"
 
 
 def test_contains_basic():
@@ -1427,6 +1425,72 @@ def test_char_range_rejects_non_ascii():
     import pytest
     with pytest.raises(Exception, match="Char range only supports ASCII"):
         run('''for c in "\u00e9" to "\u00f0" do write(c) endfor''')
+
+
+# ---------- strict bounds checking for index operations ----------
+
+def test_string_index_basic():
+    """string[i] returns the character at index."""
+    out = run('''s := "abc"
+write(s[0])
+write(s[1])
+write(s[2])''')
+    assert out == "a\nb\nc"
+
+
+def test_string_index_out_of_bounds():
+    """string[i] out of bounds raises GwenError."""
+    import pytest
+    with pytest.raises(Exception, match="Index out of range"):
+        run('''s := "hi"
+write(s[10])''')
+
+
+def test_string_index_negative():
+    """string[i] with negative index raises GwenError (no Python-style negative)."""
+    import pytest
+    with pytest.raises(Exception, match="Index out of range"):
+        run('''s := "hi"
+write(s[-1])''')
+
+
+def test_list_index_out_of_bounds():
+    """list[i] out of bounds raises GwenError."""
+    import pytest
+    with pytest.raises(Exception, match="Index out of range"):
+        run('''lst := [1, 2, 3]
+write(lst[10])''')
+
+
+def test_substring_bounds_start_negative():
+    """substring() with negative start raises GwenError."""
+    import pytest
+    with pytest.raises(Exception, match=r"substring\(\) start out of bounds"):
+        run('''s := "hello"
+write(substring(s, -1, 3))''')
+
+
+def test_substring_bounds_end_over():
+    """substring() with end > length raises GwenError."""
+    import pytest
+    with pytest.raises(Exception, match=r"substring\(\) end out of bounds"):
+        run('''s := "hi"
+write(substring(s, 0, 10))''')
+
+
+def test_substring_bounds_start_greater_than_end():
+    """substring() with start > end raises GwenError."""
+    import pytest
+    with pytest.raises(Exception, match=r"substring\(\) start.*> end"):
+        run('''s := "hello"
+write(substring(s, 4, 2))''')
+
+
+def test_substring_valid():
+    """substring() works normally within bounds."""
+    out = run('''s := "hello"
+write(substring(s, 1, 4))''')
+    assert out == "ell"
 
 
 if __name__ == "__main__":

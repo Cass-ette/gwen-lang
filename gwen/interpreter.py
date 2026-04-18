@@ -482,21 +482,25 @@ class Interpreter:
         return a + b
 
     def _builtin_substring(self, s, start, end):
-        """Extract substring from start (inclusive) to end (exclusive)."""
+        """Extract substring from start (inclusive) to end (exclusive).
+
+        Bounds are strictly checked: out-of-bounds raises GwenError.
+        This aligns with Gwen's "errors not silent" philosophy.
+        """
         if not isinstance(s, str):
             raise GwenError(f"substring() requires a string, got {type(s).__name__}")
         if not isinstance(start, int):
             raise GwenError(f"substring() start must be an integer, got {type(start).__name__}")
         if not isinstance(end, int):
             raise GwenError(f"substring() end must be an integer, got {type(end).__name__}")
-        # Handle negative indices gracefully (clamp to bounds)
         length = len(s)
+        # Strict bounds checking: no silent clamping
         if start < 0:
-            start = 0
+            raise GwenError(f"substring() start out of bounds: {start} (string length: {length})")
         if end > length:
-            end = length
+            raise GwenError(f"substring() end out of bounds: {end} (string length: {length})")
         if start > end:
-            start = end
+            raise GwenError(f"substring() start ({start}) > end ({end})")
         return s[start:end]
 
     def _builtin_contains(self, s, substr):
@@ -1101,8 +1105,21 @@ class Interpreter:
                 if index not in obj:
                     raise GwenError(f"Key not found: {index!r}", expr.line)
                 return obj[index]
-            # Handle list (existing behavior)
-            return obj[index]
+            # Handle list with bounds check
+            if isinstance(obj, list):
+                if not isinstance(index, int):
+                    raise GwenError(f"List index must be an integer, got {type(index).__name__}", expr.line)
+                if index < 0 or index >= len(obj):
+                    raise GwenError(f"Index out of range: {index} (list length: {len(obj)})", expr.line)
+                return obj[index]
+            # Handle string with bounds check
+            if isinstance(obj, str):
+                if not isinstance(index, int):
+                    raise GwenError(f"String index must be an integer, got {type(index).__name__}", expr.line)
+                if index < 0 or index >= len(obj):
+                    raise GwenError(f"Index out of range: {index} (string length: {len(obj)})", expr.line)
+                return obj[index]
+            raise GwenError(f"Cannot index type {type(obj).__name__}", expr.line)
 
         if isinstance(expr, ast.Lambda):
             return GwenLambda(expr, env)
