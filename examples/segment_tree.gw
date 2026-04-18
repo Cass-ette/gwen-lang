@@ -41,14 +41,14 @@ export func query(tree: list, node: int, start: int, end: int, left: int, right:
   right_result := query(tree, right_child, mid + 1, end, left, right)
 
   match left_result
-    when ok(lval) then
+    when ok(lval) =>
       match right_result
-        when ok(rval) then
+        when ok(rval) =>
           return ok(lval + rval)
-        when err(e) then
+        when err(e) =>
           return err(e)
       endmatch
-    when err(e) then
+    when err(e) =>
       return err(e)
   endmatch
 endfunc
@@ -103,23 +103,23 @@ func main()
   write("Query tests:")
 
   match query(tree, 1, 0, n - 1, 0, 2)
-    when ok(sum) then
+    when ok(sum) =>
       write("Sum of range [0, 2]:", sum)
-    when err(e) then
+    when err(e) =>
       write("Query error:", e)
   endmatch
 
   match query(tree, 1, 0, n - 1, 1, 4)
-    when ok(sum) then
+    when ok(sum) =>
       write("Sum of range [1, 4]:", sum)
-    when err(e) then
+    when err(e) =>
       write("Query error:", e)
   endmatch
 
   match query(tree, 1, 0, n - 1, 0, 5)
-    when ok(sum) then
+    when ok(sum) =>
       write("Sum of range [0, 5]:", sum)
-    when err(e) then
+    when err(e) =>
       write("Query error:", e)
   endmatch
 
@@ -130,9 +130,9 @@ func main()
   update(tree, 1, 0, n - 1, 2, 10)
 
   match query(tree, 1, 0, n - 1, 0, 5)
-    when ok(sum) then
+    when ok(sum) =>
       write("New sum of range [0, 5]:", sum)
-    when err(e) then
+    when err(e) =>
       write("Query error:", e)
   endmatch
 

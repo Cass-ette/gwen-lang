@@ -2,7 +2,7 @@
 // 测试：递归、列表切片、合并
 
 // 合并两个有序列表
-func merge(left: list<int>, right: list<int>) -> list<int>
+func merge(left: list[int], right: list[int]) -> list[int]
   result := []
   i := 0
   j := 0
@@ -32,7 +32,7 @@ func merge(left: list<int>, right: list<int>) -> list<int>
 endfunc
 
 // 归并排序主函数
-func merge_sort(arr: list<int>) -> list<int>
+func merge_sort(arr: list[int]) -> list[int]
   if len(arr) <= 1 then
     return arr
   endif

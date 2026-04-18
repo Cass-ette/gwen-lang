@@ -2,7 +2,7 @@
 // 测试：动态规划、while 循环、列表操作、多返回值
 
 // 返回 LIS 长度和具体序列
-func lis(arr: list<int>) -> int, list<int>
+func lis(arr: list[int]) -> int, list[int]
   if len(arr) = 0 then
     return 0, []
   endif

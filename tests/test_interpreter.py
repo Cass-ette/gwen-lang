@@ -153,9 +153,9 @@ write(sum)""")
 def test_match():
     out = run("""x := 2
 match x
-  when 1 then
+  when 1 =>
     write("one")
-  when 2, 3 then
+  when 2, 3 =>
     write("two or three")
   else
     write("other")
@@ -166,9 +166,9 @@ endmatch""")
 def test_match_range():
     out = run("""x := 5
 match x
-  when 1 to 3 then
+  when 1 to 3 =>
     write("low")
-  when 4 to 6 then
+  when 4 to 6 =>
     write("mid")
   else
     write("high")
@@ -185,9 +185,9 @@ def test_ok_err():
 endfunc
 
 match safe_div(10, 2)
-  when ok(result) then
+  when ok(result) =>
     write(result)
-  when err(e) then
+  when err(e) =>
     write(e)
 endmatch""")
     assert out == "5"
@@ -202,9 +202,9 @@ def test_ok_err_error_case():
 endfunc
 
 match safe_div(10, 0)
-  when ok(result) then
+  when ok(result) =>
     write(result)
-  when err(e) then
+  when err(e) =>
     write(e)
 endmatch""")
     assert out == "division by zero"
@@ -303,19 +303,19 @@ endfunc""")
 
 def test_money_basic_arithmetic():
     out = run("""func main()
-  price: money<USD> := 19.99
-  tax: money<USD> := 1.5
+  price: money[USD] := 19.99
+  tax: money[USD] := 1.5
   total := price + tax
   write(total)
   write(type(total))
 endfunc""")
     assert "21.49 USD" in out
-    assert "money<USD>" in out
+    assert "money[USD]" in out
 
 
 def test_money_scalar_multiply():
     out = run("""func main()
-  price: money<USD> := 10
+  price: money[USD] := 10
   double := price * 2
   half := price / 2
   write(double)
@@ -328,8 +328,8 @@ endfunc""")
 def test_money_ratio():
     """money / money returns plain float."""
     out = run("""func main()
-  a: money<USD> := 10
-  b: money<USD> := 4
+  a: money[USD] := 10
+  b: money[USD] := 4
   ratio := a / b
   write(ratio)
 endfunc""")
@@ -340,8 +340,8 @@ def test_money_currency_mismatch():
     import pytest
     with pytest.raises(Exception, match="Currency mismatch"):
         run("""func main()
-  usd: money<USD> := 10
-  cny: money<CNY> := 70
+  usd: money[USD] := 10
+  cny: money[CNY] := 70
   bad := usd + cny
 endfunc""")
 
@@ -350,8 +350,8 @@ def test_money_mul_money_forbidden():
     import pytest
     with pytest.raises(Exception, match="Cannot multiply money by money"):
         run("""func main()
-  a: money<USD> := 5
-  b: money<USD> := 3
+  a: money[USD] := 5
+  b: money[USD] := 3
   c := a * b
 endfunc""")
 
@@ -360,7 +360,7 @@ def test_money_plus_scalar_forbidden():
     import pytest
     with pytest.raises(Exception, match="Cannot \\+ money with non-money"):
         run("""func main()
-  a: money<USD> := 5
+  a: money[USD] := 5
   c := a + 10
 endfunc""")
 
@@ -369,17 +369,17 @@ def test_money_overflow():
     import pytest
     with pytest.raises(Exception, match="Overflow"):
         run("""func main()
-  huge: money<USD> := 999999999999999
+  huge: money[USD] := 999999999999999
 endfunc""")
 
 
 def test_money_cross_currency_as_forbidden():
     out = run("""func main()
-  a: money<USD> := 5
-  b := a as money<EUR>
+  a: money[USD] := 5
+  b := a as money[EUR]
   match b
-    when ok(v) then write("ok")
-    when err(e) then write("err")
+    when ok(v) => write("ok")
+    when err(e) => write("err")
   endmatch
 endfunc""")
     assert out == "err"
@@ -387,11 +387,11 @@ endfunc""")
 
 def test_money_as_float():
     out = run("""func main()
-  a: money<USD> := 19.99
+  a: money[USD] := 19.99
   f := a as float64
   match f
-    when ok(v) then write(v)
-    when err(e) then write(e)
+    when ok(v) => write(v)
+    when err(e) => write(e)
   endmatch
 endfunc""")
     assert out == "19.99"
@@ -500,7 +500,7 @@ endfunc""")
 def test_var_default_zero_money():
     out = run("""func main()
   var default
-    m: money<USD>
+    m: money[USD]
   endvar
   write(m)
 endfunc""")
@@ -510,8 +510,8 @@ endfunc""")
 def test_var_default_zero_list_fresh():
     out = run("""func main()
   var default
-    a: list<int>
-    b: list<int>
+    a: list[int]
+    b: list[int]
   endvar
   append(a, 1)
   write(len(a), len(b))

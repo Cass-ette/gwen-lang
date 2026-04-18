@@ -70,9 +70,9 @@ x := x + 1   // 运行时错误：Overflow: 128 out of range for int8 [-128, 127
 
 ```
 match 3.7 as int
-  when ok(n) then
+  when ok(n) =>
     write(n)          // 3，截断
-  when err(e) then
+  when err(e) =>
     write("failed:", e)
 endmatch
 ```
@@ -107,9 +107,9 @@ c: int64 := 10 ^ 15   // 大整数，int64 范围内
 ## 泛型类型
 
 ```
-list<int>              // 整数列表
-list<list<int>>        // 整数矩阵
-list<string>           // 字符串列表
+list[int]              // 整数列表
+list[list[int]]        // 整数矩阵
+list[string]           // 字符串列表
 ```
 
 ---
@@ -124,13 +124,13 @@ list<string>           // 字符串列表
 
 ---
 
-## 货币类型 `money<Tag>`
+## 货币类型 `money[Tag]`
 
 带币种 tag 的定点数，专为金额/会计场景设计：
 
 ```
-price: money<USD> := 19.99
-cny:   money<CNY> := 144.0
+price: money[USD] := 19.99
+cny:   money[CNY] := 144.0
 
 total := price + price      // ok，同币种
 // bad := price + cny       // 报错：Currency mismatch
@@ -140,22 +140,22 @@ ratio   := price / price    // money ÷ money → float（比率）
 // p2    := price * price   // 报错：金额乘金额无语义
 
 f := price as float64       // 允许：丢掉币种，拿原始数值
-// e := price as money<EUR> // 返回 err：拒绝隐式汇率转换
+// e := price as money[EUR] // 返回 err：拒绝隐式汇率转换
 ```
 
 **规则**
 
 | 操作 | 行为 |
 |------|------|
-| `money<X> + money<X>` | ok |
-| `money<X> + money<Y>` | 报错（币种不匹配） |
-| `money<X> + scalar` | 报错 |
-| `money<X> * int/float` | ok，结果 `money<X>` |
-| `money<X> * money<*>` | 报错 |
-| `money<X> / int/float` | ok |
-| `money<X> / money<X>` | 结果 `float`（比率） |
+| `money[X] + money[X]` | ok |
+| `money[X] + money[Y]` | 报错（币种不匹配） |
+| `money[X] + scalar` | 报错 |
+| `money[X] * int/float` | ok，结果 `money[X]` |
+| `money[X] * money[*]` | 报错 |
+| `money[X] / int/float` | ok |
+| `money[X] / money[X]` | 结果 `float`（比率） |
 | 比较 `=` `<` `>` | 同币种才允许 |
-| `as money<Y>` | 不同币种时返回 `err`（不隐式换汇） |
+| `as money[Y]` | 不同币种时返回 `err`（不隐式换汇） |
 | `as float64` / `as int64` | 允许，丢掉币种 |
 
 **实现细节**
@@ -177,8 +177,8 @@ f := price as float64       // 允许：丢掉币种，拿原始数值
 | `float32` / `float64` | ✅ 已实现 | IEEE 754 精度模拟 |
 | 溢出检测与报错 | ✅ 已实现 | 所有精度类型 |
 | `as` 类型转换 | ✅ 已实现 | 返回 result 类型 |
-| `list<T>` 泛型 | ✅ 已实现 | 嵌套支持 |
+| `list[T]` 泛型 | ✅ 已实现 | 嵌套支持 |
 | 函数类型 `(T) -> T` | ✅ 已实现 | 匿名函数支持 |
 | 类型别名 `type` | ✅ 已实现 | 透明别名，继承精度约束 |
-| 货币类型 `money<Tag>` | ✅ 已实现 | int64×10_000，带币种 tag |
+| 货币类型 `money[Tag]` | ✅ 已实现 | int64×10_000，带币种 tag |
 | 混合精度运算检查 | 📋 设计阶段 | 目前允许混用 |

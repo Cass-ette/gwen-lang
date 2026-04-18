@@ -227,15 +227,15 @@ class Parser:
             self.advance()
             type_tok = self.expect(TokenType.IDENTIFIER)
             name = type_tok.value
-            # Optional generic tag: as money<USD>
-            if self.at(TokenType.LT):
+            # Optional generic tag: as money[USD]
+            if self.at(TokenType.LBRACKET):
                 self.advance()
                 parts = [self.expect(TokenType.IDENTIFIER).value]
                 while self.at(TokenType.COMMA):
                     self.advance()
                     parts.append(self.expect(TokenType.IDENTIFIER).value)
-                self.expect(TokenType.GT)
-                name = f"{name}<{','.join(parts)}>"
+                self.expect(TokenType.RBRACKET)
+                name = f"{name}[{','.join(parts)}]"
             expr = ast.AsExpr(expr, name, line=expr.line)
         return expr
 
@@ -432,13 +432,13 @@ class Parser:
 
         # Base type or generic type
         base = self.expect(TokenType.IDENTIFIER).value
-        if self.at(TokenType.LT):
+        if self.at(TokenType.LBRACKET):
             self.advance()
             params = [self.parse_type()]
             while self.at(TokenType.COMMA):
                 self.advance()
                 params.append(self.parse_type())
-            self.expect(TokenType.GT)
+            self.expect(TokenType.RBRACKET)
             return ast.GenericType(base=base, params=params, line=line)
         return ast.TypeName(name=base, line=line)
 
@@ -550,7 +550,7 @@ class Parser:
             while self.at(TokenType.COMMA):
                 self.advance()
                 patterns.append(self.parse_match_pattern())
-            self.expect(TokenType.THEN)
+            self.expect(TokenType.FAT_ARROW)
             case_body = self.parse_block_until(TokenType.WHEN, TokenType.ELSE, TokenType.ENDMATCH)
             cases.append(ast.WhenClause(patterns=patterns, body=case_body))
 

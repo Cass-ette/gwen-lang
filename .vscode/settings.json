@@ -1,0 +1,6 @@
+{
+  "code-runner.executorMap": {
+    "gwen": "cd $dir && python -m gwen $fileName"
+  },
+  "code-runner.runInTerminal": true
+}

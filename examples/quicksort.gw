@@ -1,7 +1,7 @@
 // QuickSort implementation in Gwen
 
 // Partition function: move elements smaller than pivot to left
-func partition(arr: list<int>, low: int, high: int) -> int
+func partition(arr: list[int], low: int, high: int) -> int
   pivot := arr[high]
   i := low - 1
 
@@ -24,7 +24,7 @@ func partition(arr: list<int>, low: int, high: int) -> int
 endfunc
 
 // Recursive quicksort
-func quicksort(arr: list<int>, low: int, high: int)
+func quicksort(arr: list[int], low: int, high: int)
   if low < high then
     pi := partition(arr, low, high)
     quicksort(arr, low, pi - 1)
@@ -33,7 +33,7 @@ func quicksort(arr: list<int>, low: int, high: int)
 endfunc
 
 // Wrapper for easier use
-func sort(arr: list<int>) -> list<int>
+func sort(arr: list[int]) -> list[int]
   if len(arr) > 1 then
     quicksort(arr, 0, len(arr) - 1)
   endif

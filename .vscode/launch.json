@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Gwen File",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "python -m gwen ${file}",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

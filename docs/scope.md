@@ -89,7 +89,7 @@ func example()
   // match 同理
   result := 0
   match ok(42)
-    when ok(v) then
+    when ok(v) =>
       result := v  // 修改外部 result
   endmatch
   write(result)  // 42

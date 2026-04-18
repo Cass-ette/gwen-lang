@@ -112,9 +112,9 @@ endfor""")
 
 def test_match():
     prog = parse("""match x
-  when 1 then
+  when 1 =>
     do_a()
-  when 2, 3 then
+  when 2, 3 =>
     do_b()
   else
     do_c()
@@ -202,9 +202,9 @@ def test_binary_ops():
 
 def test_ok_err():
     prog = parse("""match read_file()
-  when ok(data) then
+  when ok(data) =>
     print(data)
-  when err(e) then
+  when err(e) =>
     print(e)
 endmatch""")
     stmt = prog.statements[0]
@@ -235,7 +235,7 @@ endfunc"""
 
 
 def test_generic_list():
-    prog = parse('x: list<int> := [1, 2, 3]')
+    prog = parse('x: list[int] := [1, 2, 3]')
     stmt = prog.statements[0]
     assert isinstance(stmt, ast.VarDecl)
     assert isinstance(stmt.type_name, ast.GenericType)
@@ -245,7 +245,7 @@ def test_generic_list():
 
 
 def test_generic_dict():
-    prog = parse('x: dict<string, int> := []')
+    prog = parse('x: dict[string, int] := []')
     stmt = prog.statements[0]
     assert isinstance(stmt.type_name, ast.GenericType)
     assert stmt.type_name.base == "dict"
@@ -253,7 +253,7 @@ def test_generic_dict():
 
 
 def test_func_type_param():
-    prog = parse('func map(f: (int) -> int, arr: list<int>) -> list<int>\n  return arr\nendfunc')
+    prog = parse('func map(f: (int) -> int, arr: list[int]) -> list[int]\n  return arr\nendfunc')
     func = prog.statements[0]
     assert isinstance(func, ast.FuncDef)
     assert isinstance(func.params[0].type_name, ast.FuncType)

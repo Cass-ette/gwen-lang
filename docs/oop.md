@@ -114,8 +114,8 @@ cc.pay(100)        // 确定是 CreditCard.pay
 
 // 情况 2：需要多态时，显式分派
 match payment_type
-  when "credit" then CreditCard.pay(account, 100)
-  when "crypto" then Crypto.pay(account, 100)
+  when "credit" => CreditCard.pay(account, 100)
+  when "crypto" => Crypto.pay(account, 100)
 endmatch
 ```
 

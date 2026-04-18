@@ -1,5 +1,54 @@
 # Gwen 语法
 
+## 设计原则
+
+Gwen 的语法遵循以下几条硬性规则，读者可据此预测任何写法的含义。
+
+### 1. 符号 vs 关键字的分工
+
+- **符号** 负责**原子/短操作**：赋值、比较、算术、容器访问
+- **关键字** 负责**结构/控制流/逻辑**：`if/then/endif`、`while/do/endwhile`、`and/or/not/mod`
+- **块结束用 `endxxx`**，不用 `}`（Pascal/Ada 风格）
+
+### 2. `=` 符号家族区分
+
+四个同根符号通过形态区分语义，**互不重叠**：
+
+| 符号 | 含义 | 例子 |
+|------|------|------|
+| `=`  | 相等比较 | `if x = 10 then` |
+| `:=` | 赋值 / 绑定 | `x := 10` |
+| `=>` | 映射（lambda 体、match 分支） | `(x) => x * 2` / `when ok(v) => ...` |
+| `->` | 类型流向（函数返回类型） | `func f() -> int` |
+
+### 3. 括号哲学
+
+每种括号**一个语义域**，不重载：
+
+| 括号 | 用途 |
+|------|------|
+| `()` | 调用 / 分组 / 形参列表（一组**平级参数**） |
+| `[]` | 容器相关：列表字面量 `[1,2,3]`、索引 `a[i]`、类型参数 `list[int]` / `money[USD]` |
+| `<>` | **只做比较**（`<`、`>`、`<=`、`>=`），**不做泛型** |
+| `{}` | 语言里**不使用**；文档元语法占位符专用（见下） |
+
+### 4. 类型标注的前后位置
+
+- **前置 `:`** —— "某变量**是**某类型"：`x: int`、`func f(a: int)`
+- **后置 `->`** —— "函数**返回**某类型"：`func f() -> int`
+
+### 5. 文档元语法约定
+
+本文档（及 `docs/*.md`）里用 `{placeholder}` 表示"此处填一段具体内容"，**不是 Gwen 代码**。
+
+举例：
+- 写法说明：`var default {expr}`
+- 实际代码：`var default 0` / `var default x + 1`
+
+`{}` 在 Gwen 代码里不使用，借给文档当占位符专用，**不会与实际语法混淆**。
+
+---
+
 ## 注释
 
 ```
@@ -126,9 +175,9 @@ endfor
 
 ```
 match x
-  when 1 then do_a()
-  when 2, 3 then do_b()
-  when 4 to 10 then do_c()
+  when 1 => do_a()
+  when 2, 3 => do_b()
+  when 4 to 10 => do_c()
   else do_d()
 endmatch
 ```
@@ -234,9 +283,9 @@ endfunc
 
 ```
 match parse_int("42")
-  when ok(n) then
+  when ok(n) =>
     write(n)
-  when err(e) then
+  when err(e) =>
     write("error: ", e)
 endmatch
 ```
@@ -307,7 +356,7 @@ var default
   n: int          // 0
   s: string       // ""
   b: bool         // false
-  price: money<USD>   // 0.00 USD
+  price: money[USD]   // 0.00 USD
 endvar
 ```
 
@@ -318,12 +367,12 @@ endvar
 | `float` / `floatN` | `0.0` |
 | `string` | `""` |
 | `bool` | `false` |
-| `list<T>` | 新的空 list（每个变量独立） |
-| `money<Tag>` | `0` + 原币种 tag |
+| `list[T]` | 新的空 list（每个变量独立） |
+| `money[Tag]` | `0` + 原币种 tag |
 
 无预设零值的类型（例如函数类型）会在 `var default` 下报错——必须显式赋值。
 
-### var default <expr> 一键赋值
+### var default {expr} 一键赋值
 
 ```
 var default 1
@@ -333,7 +382,7 @@ var default 1
 endvar
 ```
 
-- `<expr>` 只求值一次，副作用不重复执行
+- `{expr}` 只求值一次，副作用不重复执行
 - 单项 `:= v` 优先级高于块级默认
 - 表达式类型需要能赋给每个变量类型；不匹配（`var default "hi"` + `a: int`）立即报错
 

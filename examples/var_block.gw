@@ -22,7 +22,7 @@ func main()
     n: int
     s: string
     b: bool
-    m: money<USD>
+    m: money[USD]
   endvar
   write(n, s, b, m)
 

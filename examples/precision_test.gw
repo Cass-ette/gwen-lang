@@ -59,13 +59,13 @@ func test_as_conversion()
   write("")
   write("=== as conversion ===")
   match 3.14159265 as float32
-    when ok(v) then
+    when ok(v) =>
       write("3.14159265 as float32:", v)
     else
       write("float32 conversion failed")
   endmatch
   match 3.14159265 as float64
-    when ok(v) then
+    when ok(v) =>
       write("3.14159265 as float64:", v)
     else
       write("float64 conversion failed")

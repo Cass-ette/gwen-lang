@@ -49,7 +49,7 @@ endfunc
 
 ```
 // 快速排序
-func sort(arr: list<int>) -> list<int>
+func sort(arr: list[int]) -> list[int]
   if len(arr) <= 1 then
     return arr
   endif

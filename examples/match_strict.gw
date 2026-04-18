@@ -2,7 +2,7 @@
 // A: Result 类型必须用 ok(x)/err(x) 模式
 // B: 必须有 else 分支兜底未匹配的情况
 
-func get_result() -> result<int, string>
+func get_result() -> result[int, string]
   return ok(42)
 endfunc
 
@@ -10,7 +10,7 @@ func test_ok_pattern()
   write("=== Test: ok(x) pattern ===")
   r := get_result()
   match r
-    when ok(val) then
+    when ok(val) =>
       write("Got value:", val)
     else
       write("No match")
@@ -22,7 +22,7 @@ func test_err_pattern()
   write("=== Test: err(x) pattern ===")
   bad := err("something wrong")
   match bad
-    when err(msg) then
+    when err(msg) =>
       write("Got error:", msg)
     else
       write("No match")
@@ -34,9 +34,9 @@ func test_ok_and_err_complete()
   write("=== Test: ok + err (complete, no else) ===")
   r := get_result()
   match r
-    when ok(val) then
+    when ok(val) =>
       write("Success:", val)
-    when err(msg) then
+    when err(msg) =>
       write("Failed:", msg)
   endmatch
   // 覆盖了 ok 和 err 所有情况，不需要 else
@@ -47,11 +47,11 @@ func test_literal_match_not_result()
   write("=== Test: literal match (not Result type, allowed) ===")
   x := 5
   match x
-    when 1 then
+    when 1 =>
       write("One")
-    when 5 then
+    when 5 =>
       write("Five")
-    when 10 then
+    when 10 =>
       write("Ten")
     else
       write("Other")
@@ -63,11 +63,11 @@ func test_range_pattern()
   write("=== Test: range pattern (not Result type, allowed) ===")
   score := 85
   match score
-    when 90 to 100 then
+    when 90 to 100 =>
       write("A")
-    when 80 to 89 then
+    when 80 to 89 =>
       write("B")
-    when 70 to 79 then
+    when 70 to 79 =>
       write("C")
     else
       write("D or F")

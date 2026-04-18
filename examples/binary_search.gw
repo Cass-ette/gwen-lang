@@ -2,7 +2,7 @@
 // 测试：循环、条件、索引、多返回值
 
 // 返回 (index, found)
-func binary_search(arr: list<int>, target: int) -> int, bool
+func binary_search(arr: list[int], target: int) -> int, bool
   left := 0
   right := len(arr) - 1
 

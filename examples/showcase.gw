@@ -23,7 +23,7 @@ endfunc
 
 func main()
   @setup
-  scores: list<int> := [88, 72, 95, 64, 100]
+  scores: list[int] := [88, 72, 95, 64, 100]
   total: int8 := 0   // int8 范围 [-128, 127]
 
   @sum_scaled
@@ -44,7 +44,7 @@ func main()
   @precision_demo
   // 强制解构：as 转换可能失败，必须 match 拿结果
   match 3.14159265358979 as float32
-    when ok(v) then write("float32 π:", v, " (精度已截断)")
+    when ok(v) => write("float32 π:", v, " (精度已截断)")
     else write("转换失败")
   endmatch
 

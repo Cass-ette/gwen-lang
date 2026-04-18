@@ -40,12 +40,12 @@ MONEY_MIN, MONEY_MAX = INT_RANGES["int64"]  # stored as int64
 
 
 def is_money_type(type_name: Optional[str]) -> bool:
-    return type_name is not None and type_name.startswith("money<") and type_name.endswith(">")
+    return type_name is not None and type_name.startswith("money[") and type_name.endswith("]")
 
 
 def money_currency(type_name: str) -> str:
-    """Extract currency tag from 'money<USD>' -> 'USD'."""
-    return type_name[len("money<"):-1]
+    """Extract currency tag from 'money[USD]' -> 'USD'."""
+    return type_name[len("money["):-1]
 
 
 def zero_value(type_name: Optional[str], line: int = 0) -> Any:
@@ -61,7 +61,7 @@ def zero_value(type_name: Optional[str], line: int = 0) -> Any:
         return ""
     if type_name == "bool":
         return False
-    if type_name == "list" or type_name.startswith("list<"):
+    if type_name == "list" or type_name.startswith("list["):
         return []  # fresh list per call
     if is_money_type(type_name):
         return MoneyValue(raw=0, currency=money_currency(type_name))
@@ -75,7 +75,7 @@ def coerce_to_type(value: Any, type_name: str, line: int = 0) -> Any:
         if isinstance(value, MoneyValue):
             if value.currency != currency:
                 raise GwenError(
-                    f"Currency mismatch: cannot assign money<{value.currency}> to money<{currency}>",
+                    f"Currency mismatch: cannot assign money[{value.currency}] to money[{currency}]",
                     line,
                 )
             return value
@@ -83,10 +83,10 @@ def coerce_to_type(value: Any, type_name: str, line: int = 0) -> Any:
         try:
             raw = round(float(value) * MONEY_SCALE)
         except (TypeError, ValueError):
-            raise GwenError(f"Cannot convert {type(value).__name__} to money<{currency}>", line)
+            raise GwenError(f"Cannot convert {type(value).__name__} to money[{currency}]", line)
         if raw < MONEY_MIN or raw > MONEY_MAX:
             raise GwenError(
-                f"Overflow: {value} out of range for money<{currency}> (int64-backed, scale=4)",
+                f"Overflow: {value} out of range for money[{currency}] (int64-backed, scale=4)",
                 line,
             )
         return MoneyValue(raw=raw, currency=currency)
@@ -137,11 +137,11 @@ def resolve_type_name(type_node: Any) -> Optional[str]:
     if isinstance(type_node, ast.TypeName):
         return type_node.name
     if isinstance(type_node, ast.GenericType):
-        # money<USD> -> "money<USD>"; list<int> -> "list"
+        # money[USD] -> "money[USD]"; list[int] -> "list"
         if type_node.base == "money" and len(type_node.params) == 1:
             inner = resolve_type_name(type_node.params[0])
             if inner:
-                return f"money<{inner}>"
+                return f"money[{inner}]"
         return type_node.base
     return None
 
@@ -352,7 +352,7 @@ class Interpreter:
         if isinstance(obj, list):
             return "list"
         if isinstance(obj, MoneyValue):
-            return f"money<{obj.currency}>"
+            return f"money[{obj.currency}]"
         if isinstance(obj, OkValue):
             return "ok"
         if isinstance(obj, ErrValue):
@@ -761,7 +761,7 @@ class Interpreter:
                 )
             if left.currency != right.currency:
                 raise GwenError(
-                    f"Currency mismatch: money<{left.currency}> {op} money<{right.currency}>",
+                    f"Currency mismatch: money[{left.currency}] {op} money[{right.currency}]",
                     line,
                 )
             a, b = left.raw, right.raw
@@ -778,7 +778,7 @@ class Interpreter:
                 )
             if left.currency != right.currency:
                 raise GwenError(
-                    f"Currency mismatch: money<{left.currency}> {op} money<{right.currency}>",
+                    f"Currency mismatch: money[{left.currency}] {op} money[{right.currency}]",
                     line,
                 )
             raw = left.raw + right.raw if op == "+" else left.raw - right.raw
@@ -803,7 +803,7 @@ class Interpreter:
                 # money / money -> float ratio (same currency required)
                 if left.currency != right.currency:
                     raise GwenError(
-                        f"Currency mismatch in division: money<{left.currency}> / money<{right.currency}>",
+                        f"Currency mismatch in division: money[{left.currency}] / money[{right.currency}]",
                         line,
                     )
                 if right.raw == 0:
@@ -875,12 +875,12 @@ class Interpreter:
     def eval_as(self, expr: ast.AsExpr, env: Environment) -> Any:
         value = self.eval_expr(expr.expr, env)
         target = expr.type_name
-        # Forbid money -> money<other_currency>
+        # Forbid money -> money[other_currency]
         if isinstance(value, MoneyValue) and is_money_type(target):
             target_currency = money_currency(target)
             if value.currency != target_currency:
                 return ErrValue(
-                    f"Cannot convert money<{value.currency}> to money<{target_currency}> "
+                    f"Cannot convert money[{value.currency}] to money[{target_currency}] "
                     f"(explicit exchange rate required)"
                 )
             return OkValue(value)
@@ -905,7 +905,7 @@ class Interpreter:
                 return OkValue(self.is_truthy(value))
             if target in PRECISION_TYPES:
                 return OkValue(coerce_to_type(value, target, expr.line))
-            # Numeric -> money<X>
+            # Numeric -> money[X]
             if is_money_type(target):
                 return OkValue(coerce_to_type(value, target, expr.line))
             return ErrValue(f"Unknown type: {target}")

@@ -1,6 +1,6 @@
 // Higher-order functions with generic types
 
-func map(f: (int) -> int, arr: list<int>) -> list<int>
+func map(f: (int) -> int, arr: list[int]) -> list[int]
   result := []
   for item in arr do
     append(result, f(item))
@@ -8,7 +8,7 @@ func map(f: (int) -> int, arr: list<int>) -> list<int>
   return result
 endfunc
 
-func filter(f: (int) -> bool, arr: list<int>) -> list<int>
+func filter(f: (int) -> bool, arr: list[int]) -> list[int]
   result := []
   for item in arr do
     if f(item) then
@@ -18,7 +18,7 @@ func filter(f: (int) -> bool, arr: list<int>) -> list<int>
   return result
 endfunc
 
-func reduce(f: (int, int) -> int, arr: list<int>, init: int) -> int
+func reduce(f: (int, int) -> int, arr: list[int], init: int) -> int
   acc := init
   for item in arr do
     acc := f(acc, item)
