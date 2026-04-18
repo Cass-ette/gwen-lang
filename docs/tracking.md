@@ -134,7 +134,7 @@
 
 ## 上次更新
 
-2026-04-18 - `for-in` 遍历规则明确化：字符串支持（字符作为 1-char strings），dict 直接迭代禁止（必须用 `keys()`/`values()`/`items()`），新增 `items()` 函数返回键值对列表；`for i in "a" to "z"` 支持 ASCII 单字符范围（ord 迭代）；加 12 个测试，全套 135 通过
+2026-04-18 - 操作符/区间统一化：substring 改为**双闭区间** [start, end]；list 支持 `+` 拼接（与 string 统一）；money[T] 禁止 * float（只允许 * int，防精度损失）；docs/semantics.md 同步更新；加 12 个测试，全套 147 通过
 2026-04-18 - 严格 bool 条件（Go 风格）：`if`/`elif`/`while`/`and`/`or`/`not`/`as bool` 不再接受 truthiness，必须是 `bool`；同时修复 `and`/`or` 短路求值（之前是 bug，两边都求值）；新增 13 个测试，全套 122 通过；文档说明未来转编译语言后要移到编译期检查
 2026-04-18 - `order`/`reverse` 重新定位为"意图声明"（不是断言）：变量边界场景推荐写法，文档移除"小魔法"警告
 

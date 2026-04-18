@@ -686,29 +686,31 @@ endfunc""")
 
 
 def test_substring_basic():
-    out = run("""func main()
-  s := "hello world"
-  write(substring(s, 0, 5))
-  write(substring(s, 6, 11))
-endfunc""")
+    """substring uses closed-closed interval [start, end] — both inclusive."""
+    out = run("""s := "hello world"
+// [0, 4] = "hello" (indices 0,1,2,3,4)
+write(substring(s, 0, 4))
+// [6, 10] = "world" (indices 6,7,8,9,10)
+write(substring(s, 6, 10))
+""")
     lines = out.split("\n")
     assert lines[0] == "hello"
     assert lines[1] == "world"
 
 
 def test_substring_valid_cases():
-    """substring() valid cases: start==end gives empty string, normal extraction."""
+    """substring() valid cases: closed-closed interval [start, end]."""
     out = run("""s := "abc"
-// start == end returns empty
+// start == end returns single char at that index
 b := substring(s, 1, 1)
-// normal extraction [0,3) = "abc"
-a := substring(s, 0, 3)
+// [0, 2] = "abc" (indices 0,1,2)
+a := substring(s, 0, 2)
 write(a)
 write(b)
-// [1,3) = "bc"
-write(substring(s, 1, 3))
+// [1, 2] = "bc" (indices 1,2)
+write(substring(s, 1, 2))
 """)
-    assert out == "abc\n\nbc"
+    assert out == "abc\nb\nbc"
 
 
 def test_contains_basic():
@@ -1471,11 +1473,12 @@ write(substring(s, -1, 3))''')
 
 
 def test_substring_bounds_end_over():
-    """substring() with end > length raises GwenError."""
+    """substring() with end >= length raises GwenError (end is inclusive)."""
     import pytest
+    # "hi" has length 2, max valid end is 1 (index of 'i')
     with pytest.raises(Exception, match=r"substring\(\) end out of bounds"):
         run('''s := "hi"
-write(substring(s, 0, 10))''')
+write(substring(s, 0, 2))''')
 
 
 def test_substring_bounds_start_greater_than_end():
@@ -1487,10 +1490,60 @@ write(substring(s, 4, 2))''')
 
 
 def test_substring_valid():
-    """substring() works normally within bounds."""
+    """substring() works normally within bounds (closed-closed interval)."""
     out = run('''s := "hello"
+// [1, 4] = indices 1,2,3,4 = "ello"
 write(substring(s, 1, 4))''')
-    assert out == "ell"
+    assert out == "ello"
+
+
+# ---------- list + operator (concatenation) ----------
+
+def test_list_plus_concatenation():
+    """list + list concatenates and returns new list."""
+    out = run('''a := [1, 2]
+b := [3, 4]
+c := a + b
+write(len(c))
+write(c[0])
+write(c[3])''')
+    assert out == "4\n1\n4"
+
+
+def test_list_plus_preserves_originals():
+    """list + list does not modify original lists (returns new list)."""
+    out = run('''a := [1, 2]
+b := [3, 4]
+c := a + b
+// originals unchanged
+write(len(a))
+write(len(b))''')
+    assert out == "2\n2"
+
+
+# ---------- money * float rejection ----------
+
+def test_money_times_float_rejected():
+    """money[T] * float is rejected — use explicit as float instead."""
+    import pytest
+    with pytest.raises(Exception, match="Cannot multiply money by float"):
+        run('''match 10.50 as money[USD]
+  when ok(price) =>
+    result := price * 1.5
+    write(result)
+  when err(e) => write("err")
+endmatch''')
+
+
+def test_money_times_int_allowed():
+    """money[T] * int is allowed."""
+    out = run('''match 10.00 as money[USD]
+  when ok(price) =>
+    result := price * 3
+    write(result)
+  when err(e) => write("err")
+endmatch''')
+    assert out == "30.00 USD"
 
 
 if __name__ == "__main__":

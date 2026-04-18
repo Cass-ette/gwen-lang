@@ -42,6 +42,7 @@
 | `+` | `float` | `float` | `float` | |
 | `+` | `int` | `float` | `float` | 自动提升 |
 | `+` | `string` | `string` | `string` | 拼接 |
+| `+` | `list[T]` | `list[T]` | `list[T]` | 拼接（返回新列表） |
 | `+` | `money[T]` | `money[T]` | `money[T]` | 同币种相加 |
 | `-` | `int` | `int` | `int` | |
 | `-` | `float` | `float` | `float` | |
@@ -49,7 +50,6 @@
 | `*` | `float` | `float` | `float` | |
 | `*` | `int` | `float` | `float` | 自动提升 |
 | `*` | `money[T]` | `int` | `money[T]` | 乘整数 |
-| `*` | `money[T]` | `float` | `money[T]` | 乘浮点（注意精度） |
 | `/` | `int` | `int` | `int` | 整数除法，向零取整 |
 | `/` | `float` | `float` | `float` | 浮点除法 |
 | `/` | `int` | `float` | `float` | 自动提升 |
@@ -61,6 +61,7 @@
 **禁止的运算**（报错）：
 - `money[T] + money[U]`（币种不匹配）
 - `money[T] * money[T]`（无意义）
+- `money[T] * float`（精度损失，需显式 `as float`）
 - `string + int`（必须显式 `str(n)`）
 - `list + list`（无 `+` 操作，用 `concat`）
 

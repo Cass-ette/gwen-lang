@@ -482,10 +482,12 @@ class Interpreter:
         return a + b
 
     def _builtin_substring(self, s, start, end):
-        """Extract substring from start (inclusive) to end (exclusive).
+        """Extract substring from start to end (both inclusive).
+
+        Gwen uses closed-closed intervals [start, end] for substring —
+        both endpoints are included. This is more intuitive than [start, end).
 
         Bounds are strictly checked: out-of-bounds raises GwenError.
-        This aligns with Gwen's "errors not silent" philosophy.
         """
         if not isinstance(s, str):
             raise GwenError(f"substring() requires a string, got {type(s).__name__}")
@@ -497,11 +499,13 @@ class Interpreter:
         # Strict bounds checking: no silent clamping
         if start < 0:
             raise GwenError(f"substring() start out of bounds: {start} (string length: {length})")
-        if end > length:
-            raise GwenError(f"substring() end out of bounds: {end} (string length: {length})")
+        # end is inclusive, so max valid end is length-1
+        if end >= length:
+            raise GwenError(f"substring() end out of bounds: {end} (string length: {length}, max valid: {length-1})")
         if start > end:
             raise GwenError(f"substring() start ({start}) > end ({end})")
-        return s[start:end]
+        # Closed-closed interval: include end, so slice to end+1
+        return s[start:end+1]
 
     def _builtin_contains(self, s, substr):
         """Check if substring exists in string."""
@@ -1188,9 +1192,15 @@ class Interpreter:
                 raise GwenError("Cannot multiply money by money", line)
             money = left if lm else right
             scalar = right if lm else left
-            if not isinstance(scalar, (int, float)) or isinstance(scalar, bool):
-                raise GwenError("Money can only be multiplied by int or float", line)
-            raw = round(money.raw * scalar)
+            # Only int allowed — float multiplication on fixed-point loses precision silently
+            if not isinstance(scalar, int) or isinstance(scalar, bool):
+                raise GwenError(
+                    "Cannot multiply money by float. "
+                    "Use explicit conversion: 'money as float' for float arithmetic, "
+                    "or divide into int steps instead.",
+                    line,
+                )
+            raw = money.raw * scalar
             if raw < MONEY_MIN or raw > MONEY_MAX:
                 raise GwenError("Money overflow in *", line)
             return MoneyValue(raw=raw, currency=money.currency)

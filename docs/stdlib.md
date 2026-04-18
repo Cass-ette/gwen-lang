@@ -190,7 +190,7 @@ sorted := sort(users, (u1, u2) => u1.score < u2.score)  // 自定义字段
 |------|------|------|------|
 | `split` | `split(s: string, sep: string) -> list[string]` | 按分隔符拆分 | `sep` 为空时按字符拆 |
 | `join` | `join(parts: list[string], sep: string) -> string` | 用分隔符连接 | 空列表返回空串 |
-| `substring` | `substring(s: string, start: int, end: int) -> string` | 提取子串 | 越界报错 |
+| `substring` | `substring(s: string, start: int, end: int) -> string` | 提取子串 [start, end] **双闭区间** | 越界报错 |
 | `contains` | `contains(s: string, substr: string) -> bool` | 子串存在检查 | 空串视为包含 |
 | `trim` | `trim(s: string) -> string` | 去首尾空白（space/tab/newline） | 返回新字符串 |
 | `replace` | `replace(s: string, old: string, new: string) -> string` | 替换所有出现 | 无匹配返回原串（但仍是新字符串对象） |
