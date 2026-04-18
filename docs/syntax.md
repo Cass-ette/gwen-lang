@@ -223,9 +223,24 @@ endmatch
 - 局部变量：可选（推导）
 
 ```
-x: int := 42         // 显式标注
-x := 42              // 类型推导
-
-name: string := "hello"
-name := "hello"
 ```
+
+---
+
+## 类型别名
+
+```
+type UserId = int64
+type Score  = int8
+
+id: UserId := 42     // 等价于 id: int64 := 42
+s: Score := 100      // 等价于 s: int8 := 100，溢出检测有效
+
+// 别名可以链式定义
+type Id = int32
+type UserId = Id
+```
+
+- 别名是**透明**的（transparent alias）：只是新名字，不产生新类型
+- 别名指向精度类型时，溢出检测照常生效
+- `type` 是上下文关键字，仅在语句开头 + 后跟标识符时触发

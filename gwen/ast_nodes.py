@@ -233,6 +233,12 @@ class TagStmt:
     line: int = 0
 
 @dataclass
+class TypeAlias:
+    name: str = ""
+    target: Any = None  # TypeNode
+    line: int = 0
+
+@dataclass
 class ExprStmt:
     expr: Any = None
     line: int = 0

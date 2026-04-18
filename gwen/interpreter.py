@@ -160,6 +160,7 @@ class Interpreter:
     def __init__(self):
         self.global_env = Environment()
         self.modules: Dict[str, Environment] = {}
+        self.type_aliases: Dict[str, str] = {}  # alias name -> canonical type name
         self._setup_builtins()
 
     def _setup_builtins(self):
@@ -171,6 +172,16 @@ class Interpreter:
         self.global_env.set("float", self._builtin_float)
         self.global_env.set("append", self._builtin_append)
         self.global_env.set("type", self._builtin_type)
+
+    def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
+        """Follow type alias chain to canonical type name."""
+        seen = set()
+        while type_name and type_name in self.type_aliases:
+            if type_name in seen:
+                break  # circular alias guard
+            seen.add(type_name)
+            type_name = self.type_aliases[type_name]
+        return type_name
 
     def _builtin_write(self, *args):
         print(*args)
@@ -286,13 +297,19 @@ class Interpreter:
             if env.is_const(stmt.name):
                 raise GwenError(f"Cannot redeclare const variable: {stmt.name}", stmt.line)
             value = self.eval_expr(stmt.value, env) if stmt.value else None
-            type_name = resolve_type_name(stmt.type_name)
+            type_name = self._resolve_alias(resolve_type_name(stmt.type_name))
             if value is not None and type_name and type_name in PRECISION_TYPES:
                 value = coerce_to_type(value, type_name, stmt.line)
             env.set(stmt.name, value)
             env.set_type(stmt.name, type_name)
             if stmt.is_const:
                 env.mark_const(stmt.name)
+
+        elif isinstance(stmt, ast.TypeAlias):
+            target_name = self._resolve_alias(resolve_type_name(stmt.target))
+            if target_name is None:
+                raise GwenError(f"Invalid type in alias '{stmt.name}'", stmt.line)
+            self.type_aliases[stmt.name] = target_name
 
         elif isinstance(stmt, ast.ReturnStmt):
             if stmt.value is None:

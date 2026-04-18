@@ -272,6 +272,35 @@ write(b)""")
     assert out == "2\n1"
 
 
+def test_type_alias_basic():
+    out = run("""type UserId = int
+func main()
+  id: UserId := 42
+  write(id)
+endfunc""")
+    assert out == "42"
+
+
+def test_type_alias_precision():
+    """Alias to precision type inherits overflow checking."""
+    import pytest
+    with pytest.raises(Exception, match="Overflow"):
+        run("""type TinyInt = int8
+func main()
+  x: TinyInt := 200
+endfunc""")
+
+
+def test_type_alias_chained():
+    out = run("""type Id = int32
+type UserId = Id
+func main()
+  x: UserId := 9999
+  write(x)
+endfunc""")
+    assert out == "9999"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = 0
