@@ -807,6 +807,37 @@ def test_min_max_type_mismatch():
 endfunc""")
 
 
+def test_floor_ceil():
+    out = run("""func main()
+  write(floor(3.14))
+  write(floor(3.99))
+  write(ceil(3.14))
+  write(ceil(3.01))
+  write(floor(-1.5))
+  write(ceil(-1.5))
+endfunc""")
+    lines = out.split("\n")
+    # floor returns float: 3.0, 3.0, ceil: 4.0, 4.0, floor(-1.5): -2.0, ceil(-1.5): -1.0
+    assert lines[0] == "3.0"
+    assert lines[1] == "3.0"
+    assert lines[2] == "4.0"
+    assert lines[3] == "4.0"
+    assert lines[4] == "-2.0"
+    assert lines[5] == "-1.0"
+
+
+def test_floor_ceil_requires_float():
+    import pytest
+    with pytest.raises(Exception, match="requires float"):
+        run("""func main()
+  x := floor(3)
+endfunc""")
+    with pytest.raises(Exception, match="requires float"):
+        run("""func main()
+  x := ceil(3)
+endfunc""")
+
+
 # --- Multiple return values tests ---
 
 def test_multiple_return_basic():

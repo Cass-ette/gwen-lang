@@ -95,7 +95,7 @@ home := env("HOME")
 |------|------|------|----------|
 | **阶段 1** | ✅ 完成 | 核心内置 | `write/read/len/append/str/int/float/type` |
 | **阶段 2** | ✅ 完成 | 列表+字符串核心 | **列表**: `sort`, `reversed`, `pop`, `insert`, `concat`<br>**字符串**: `split`, `join`, `substring`, `contains`, `trim`, `replace` |
-| **阶段 3** | 🚧 进行中 | 数学+字典 | **数学**: `abs`, `min`, `max`, `sqrt` ✅, `floor`, `ceil`, `pow`<br>**字典**: `dict[K,V]`, `has_key`, `keys`, `values` |
+| **阶段 3** | 🚧 进行中 | 数学+字典 | **数学**: `abs`, `min`, `max`, `sqrt`, `floor`, `ceil` ✅<br>**字典**: `dict[K,V]`, `has_key`, `keys`, `values` |
 | **阶段 4** | 📋 远期 | 文件+高级迭代 | **文件**: `read_file`, `write_file`<br>**迭代**: `map`, `filter`, `range`, `enumerate` |
 | **阶段 5** | 📋 远期 | 包管理器 | 第三方模块支持 |
 

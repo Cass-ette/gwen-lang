@@ -122,7 +122,9 @@ replace(s, old, new) // 替换
 abs(x)               // 绝对值（int/float）
 min(a, b)            // 最小值（同类型）
 max(a, b)            // 最大值（同类型）
-sqrt(x)              // 平方根（仅 float，需显式转换）
+sqrt(x)              // 平方根（仅 float）
+floor(x)             // 向下取整（仅 float，返回 float）
+ceil(x)              // 向上取整（仅 float，返回 float）
 
 // 类型
 str(x), int(x), float(x), type(x)

@@ -321,6 +321,8 @@ class Interpreter:
         self.global_env.set("min", self._builtin_min)
         self.global_env.set("max", self._builtin_max)
         self.global_env.set("sqrt", self._builtin_sqrt)
+        self.global_env.set("floor", self._builtin_floor)
+        self.global_env.set("ceil", self._builtin_ceil)
 
     def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
         """Follow type alias chain to canonical type name."""
@@ -547,6 +549,28 @@ class Interpreter:
         if isinstance(x, float):
             return math.sqrt(x)
         raise GwenError(f"sqrt() requires float, got {type(x).__name__}")
+
+    def _builtin_floor(self, x):
+        """Floor for float. Returns float (not int, for type consistency)."""
+        import math
+        if isinstance(x, bool):
+            raise GwenError("floor() does not accept bool")
+        if isinstance(x, int):
+            raise GwenError("floor() requires float, got int; use floor(float(x)) for explicit conversion")
+        if isinstance(x, float):
+            return float(math.floor(x))
+        raise GwenError(f"floor() requires float, got {type(x).__name__}")
+
+    def _builtin_ceil(self, x):
+        """Ceiling for float. Returns float (not int, for type consistency)."""
+        import math
+        if isinstance(x, bool):
+            raise GwenError("ceil() does not accept bool")
+        if isinstance(x, int):
+            raise GwenError("ceil() requires float, got int; use ceil(float(x)) for explicit conversion")
+        if isinstance(x, float):
+            return float(math.ceil(x))
+        raise GwenError(f"ceil() requires float, got {type(x).__name__}")
 
     def run(self, program: ast.Program):
         self.exec_block(program.statements, self.global_env)
