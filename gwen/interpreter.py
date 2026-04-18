@@ -1265,14 +1265,18 @@ class Interpreter:
             return left == right
         if op == "!=":
             return left != right
-        if op == "<":
-            return left < right
-        if op == ">":
-            return left > right
-        if op == "<=":
-            return left <= right
-        if op == ">=":
-            return left >= right
+        if op in ("<", ">", "<=", ">="):
+            # Gwen does not define ordering for composite types
+            if isinstance(left, (list, dict)) or isinstance(right, (list, dict)):
+                raise GwenError(
+                    f"Comparison '{op}' is not defined for {type(left).__name__} or {type(right).__name__}. "
+                    f"Use explicit element-wise comparison instead.",
+                    line
+                )
+            return left < right if op == "<" else \
+                   left > right if op == ">" else \
+                   left <= right if op == "<=" else \
+                   left >= right
         # Note: 'and' / 'or' are handled in eval_expr (short-circuit + strict bool)
         raise GwenError(f"Unknown operator: {op}", line)
 

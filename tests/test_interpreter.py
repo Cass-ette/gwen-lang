@@ -1546,6 +1546,37 @@ endmatch''')
     assert out == "30.00 USD"
 
 
+def test_money_divided_by_float_allowed():
+    """money[T] / float is allowed (returns money[T])."""
+    out = run('''match 10.00 as money[USD]
+  when ok(m) =>
+    result := m / 2.5
+    write(result)
+  when err(e) => write("err")
+endmatch''')
+    assert out == "4.00 USD"
+
+
+# ---------- list/dict comparison rejection ----------
+
+def test_list_less_than_list_rejected():
+    """list < list is not defined — use explicit element-wise comparison."""
+    import pytest
+    with pytest.raises(Exception, match="Comparison '<' is not defined for list"):
+        run('''a := [1, 2]
+b := [1, 3]
+write(a < b)''')
+
+
+def test_dict_comparison_rejected():
+    """dict comparisons (<, >, <=, >=) are not defined."""
+    import pytest
+    with pytest.raises(Exception, match="Comparison.*is not defined for dict"):
+        run('''d1 := dict[string, int]{"a": 1}
+d2 := dict[string, int]{"b": 2}
+write(d1 > d2)''')
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = 0

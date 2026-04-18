@@ -54,6 +54,7 @@
 | `/` | `float` | `float` | `float` | 浮点除法 |
 | `/` | `int` | `float` | `float` | 自动提升 |
 | `/` | `money[T]` | `int` | `money[T]` | 除整数 |
+| `/` | `money[T]` | `float` | `money[T]` | 除浮点（定点→浮点定点转换） |
 | `mod` | `int` | `int` | `int` | 取模（同 Python %） |
 | `^` | `int` | `int` | `int` | 幂运算 |
 | `^` | `float` | `float` | `float` | 幂运算 |
