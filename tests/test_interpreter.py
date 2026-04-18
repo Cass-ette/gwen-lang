@@ -1318,6 +1318,68 @@ endmatch''')
     assert out == "True"
 
 
+# ---------- for-in iterable rules ----------
+
+def test_for_in_string_iterates_chars():
+    """for c in string iterates each character (1-char string)."""
+    out = run('''for c in "abc" do
+  write(c)
+endfor''')
+    assert out == "a\nb\nc"
+
+
+def test_for_in_dict_rejected():
+    """Cannot iterate directly over a dict; must use keys/values/items."""
+    import pytest
+    with pytest.raises(Exception, match="Cannot iterate directly over a dict"):
+        run('''d := dict[string, int]{"a": 1, "b": 2}
+for x in d do write(x) endfor''')
+
+
+def test_for_in_keys_works():
+    """Iterate dict via keys() is the recommended way."""
+    out = run('''d := dict[string, int]{"x": 10, "y": 20}
+for k in keys(d) do
+  write(k)
+endfor''')
+    # Note: dict iteration order not guaranteed; check both present
+    assert set(out.split("\n")) == {"x", "y"}
+
+
+def test_for_in_values_works():
+    """Iterate dict via values()."""
+    out = run('''d := dict[string, int]{"x": 10, "y": 20}
+for v in values(d) do
+  write(v)
+endfor''')
+    assert set(out.split("\n")) == {"10", "20"}
+
+
+def test_for_in_items_works():
+    """Iterate dict via items() — each pair is a 2-element list."""
+    out = run('''d := dict[string, int]{"x": 10, "y": 20}
+for pair in items(d) do
+  write(pair[0], pair[1])
+endfor''')
+    lines = set(out.split("\n"))
+    assert lines == {"x 10", "y 20"}
+
+
+def test_for_in_string_with_index():
+    """for c in string with index gives char and index."""
+    out = run('''for c in "hi" with index i do
+  write(i, c)
+endfor''')
+    assert out == "0 h\n1 i"
+
+
+def test_items_type_error():
+    """items() on a non-dict raises."""
+    import pytest
+    with pytest.raises(Exception, match=r"items\(\) requires a dict"):
+        run('''x := items([1, 2, 3])''')
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = 0

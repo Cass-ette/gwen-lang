@@ -327,6 +327,7 @@ class Interpreter:
         self.global_env.set("get", self._builtin_get)
         self.global_env.set("keys", self._builtin_keys)
         self.global_env.set("values", self._builtin_values)
+        self.global_env.set("items", self._builtin_items)
         self.global_env.set("readfile", self._builtin_readfile)
         self.global_env.set("writefile", self._builtin_writefile)
         self.global_env.set("appendfile", self._builtin_appendfile)
@@ -607,6 +608,16 @@ class Interpreter:
             raise GwenError(f"values() requires a dict, got {type(d).__name__}")
         return list(d.values())
 
+    def _builtin_items(self, d):
+        """Return list of [key, value] pairs from a dict.
+
+        Each pair is a two-element list: ["key", value].
+        Use `for pair in items(d) do ... endfor` to iterate dict entries.
+        """
+        if not isinstance(d, dict):
+            raise GwenError(f"items() requires a dict, got {type(d).__name__}")
+        return [[k, v] for k, v in d.items()]
+
     # --- File I/O built-in functions ---
     # 全部返回 result[T]：错误不静默，调用方必须 match 处理。
 
@@ -846,6 +857,14 @@ class Interpreter:
 
         elif isinstance(stmt, ast.ForEachStmt):
             iterable = self.eval_expr(stmt.iterable, env)
+            if isinstance(iterable, dict):
+                raise GwenError(
+                    "Cannot iterate directly over a dict. "
+                    "Use 'for k in keys(d) do ... endfor', "
+                    "'for v in values(d) do ... endfor', "
+                    "or 'for pair in items(d) do ... endfor' instead.",
+                    stmt.line
+                )
             for idx, item in enumerate(iterable):
                 env.update_local(stmt.var, item)
                 if stmt.index_var:

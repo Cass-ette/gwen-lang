@@ -292,7 +292,35 @@ endfor
 for item in list with index i do
   write(i, item)
 endfor
+
+// 字符串遍历（每个字符作为 1-char string）
+for c in "hello" do
+  write(c)
+endfor
+
+// 字典：不能直接 for-in，必须用 keys()/values()/items()
+// ❌ 报错：Cannot iterate directly over a dict
+for k in d do ... endfor
+
+// ✅ 遍历 key
+for k in keys(d) do write(k) endfor
+
+// ✅ 遍历 value
+for v in values(d) do write(v) endfor
+
+// ✅ 遍历键值对（items() 返回 [[k, v], ...]）
+for pair in items(d) do
+  key := pair[0]
+  val := pair[1]
+  write(key, val)
+endfor
 ```
+
+**为什么 dict 不能直接 for-in？**
+
+- 遍历 keys / values / items 三种选择，不默认选任何一种是显式优先
+- `for k in d` 容易让人误以为遍历的是 items；`keys(d)` 明确表示"我只关心 key"
+- dict 是无序容器，遍历它本身容易给人错觉；显式函数提醒自己这一点
 
 **`order` / `reverse` 什么时候必须写？**
 
