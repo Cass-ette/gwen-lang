@@ -187,6 +187,51 @@ len(scores)                // 键值对数量
 
 ## 控制流
 
+### 条件必须是 bool（严格类型，无 truthiness）
+
+Gwen 跟 Go / Rust / Swift 一样：**`if` / `elif` / `while` 的条件必须是 `bool`**，其他类型一律报错。
+
+```
+// ❌ 报错：'if' condition must be bool, got int
+x := 1
+if x then ... endif
+
+// ❌ 报错：'while' condition must be bool, got int
+n := 3
+while n do ... endwhile
+
+// ✅ 显式比较
+if x != 0 then ... endif
+while n > 0 do ... endwhile
+if len(lst) > 0 then ... endif
+if s != "" then ... endif
+```
+
+**`and` / `or` / `not` 同样严格**：操作数必须是 `bool`，结果是 `bool`。
+
+```
+// ❌ 报错：left side of 'and' must be bool
+if x and y > 0 then ... endif
+
+// ✅ 显式
+if x != 0 and y > 0 then ... endif
+```
+
+**`and` / `or` 短路求值**：右侧只在必要时求值，可安全用于守卫。
+
+```
+if x != 0 and 100 / x > 5 then ...   // x = 0 时右侧不算，安全
+if cache_hit or expensive_lookup() then ...  // 命中缓存就跳过查询
+```
+
+**为什么这样设计**：
+- `if x` 在不同语言里有 5 种以上语义（C 的 0/非 0、Python 的 truthiness、Ruby 的 nil/false 等），读者无法直接看出
+- 显式比较 `if x != 0` 多写几个字，但意图毫不含糊——这是 Gwen "拒绝魔法" 的硬性要求
+- 已有 `result[T]` 强制 match 覆盖错误；条件位置严格 bool 是同一哲学的另一条腿
+
+> **当前实现**：错误在**运行时**报。Gwen 现阶段是动态类型解释器，无静态类型推导。
+> **未来**：转编译型语言后，这类错误必须**编译期**就报，类似 Go。
+
 ### if
 
 ```
@@ -251,26 +296,30 @@ endfor
 
 **`order` / `reverse` 什么时候必须写？**
 
-一般不用写——自动识别够用了。但当边界是**变量**时，**推荐显式写方向**防御意外：
+当边界是**变量**时，**强烈推荐显式写方向**——这是 Gwen 鼓励的防御性写法：
 
 ```
-// 危险：a 和 b 谁大不确定，方向依赖运行期值
+// 不推荐：a 和 b 谁大不确定，循环方向依赖运行期值（读代码时不显然）
 for i in a to b do ... endfor
 
-// 显式升序：无论 a、b 谁大，总是从小的遍历到大的
+// 推荐：声明意图——"无论 a、b 谁大，我都要从小到大遍历"
 for i in a to b order do ... endfor
 
-// 显式降序：无论 a、b 谁大，总是从大的遍历到小的
+// 推荐：声明意图——"无论 a、b 谁大，我都要从大到小遍历"
 for i in a to b reverse do ... endfor
 ```
 
-当前语义（⚠️ 小魔法，可能调整）：
+**语义定义**：
 
-- `order` = 强制升序，边界会被**隐式归一化**（取 min..max）
-- `reverse` = 强制降序，边界会被**隐式归一化**（取 max..min）
-- 不满足时不会"循环 0 次"——而是按强制方向跑
+- `order` = 升序意图声明：等价于 `for i in min(a,b) to max(a,b) do`
+- `reverse` = 降序意图声明：等价于 `for i in max(a,b) to min(a,b) do`
+- 字面量场景（`1 to 10 order`）方向天然一致，行为不变
 
-这违反了"拒绝魔法"——边界被悄悄重排。未来可能改为"边界必须和方向一致，否则循环 0 次 + 警告"。字面量边界场景（`1 to 10 order`）不受影响。
+**为什么不报错也不"循环 0 次"？**
+
+`order`/`reverse` 是**意图声明**，不是断言。它的语义是"我要的方向，请帮我处理边界顺序"——这是显式表达的便利，不是隐式魔法。读到 `a to b order` 的人立刻知道："这一定是从小遍历到大"。
+
+不写 `order`/`reverse` 时是**自动模式**（按 start/end 大小推方向），那才是依赖运行期值的写法。所以：变量边界 → 写方向，是 Gwen 推荐的代码风格。
 
 ### match
 

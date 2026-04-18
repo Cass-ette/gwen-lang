@@ -787,12 +787,16 @@ class Interpreter:
                 raise ReturnSignal(value)
 
         elif isinstance(stmt, ast.IfStmt):
-            if self.is_truthy(self.eval_expr(stmt.condition, env)):
+            cond_val = self.eval_expr(stmt.condition, env)
+            self.require_bool(cond_val, "'if' condition", stmt.line)
+            if cond_val:
                 self.exec_block(stmt.body, env)
             else:
                 matched = False
                 for cond, body in stmt.elifs:
-                    if self.is_truthy(self.eval_expr(cond, env)):
+                    elif_val = self.eval_expr(cond, env)
+                    self.require_bool(elif_val, "'elif' condition", stmt.line)
+                    if elif_val:
                         self.exec_block(body, env)
                         matched = True
                         break
@@ -800,7 +804,11 @@ class Interpreter:
                     self.exec_block(stmt.else_body, env)
 
         elif isinstance(stmt, ast.WhileStmt):
-            while self.is_truthy(self.eval_expr(stmt.condition, env)):
+            while True:
+                cond_val = self.eval_expr(stmt.condition, env)
+                self.require_bool(cond_val, "'while' condition", stmt.line)
+                if not cond_val:
+                    break
                 self.exec_block(stmt.body, env)
 
         elif isinstance(stmt, ast.ForRangeStmt):
@@ -999,6 +1007,22 @@ class Interpreter:
             return [self.eval_expr(e, env) for e in expr.elements]
 
         if isinstance(expr, ast.BinaryOp):
+            # Short-circuit for and/or: only evaluate right side if needed
+            if expr.op in ("and", "or"):
+                left = self.eval_expr(expr.left, env)
+                self.require_bool(left, f"left side of '{expr.op}'", expr.line)
+                if expr.op == "and":
+                    if not left:
+                        return False
+                    right = self.eval_expr(expr.right, env)
+                    self.require_bool(right, f"right side of 'and'", expr.line)
+                    return right
+                else:  # or
+                    if left:
+                        return True
+                    right = self.eval_expr(expr.right, env)
+                    self.require_bool(right, f"right side of 'or'", expr.line)
+                    return right
             left = self.eval_expr(expr.left, env)
             right = self.eval_expr(expr.right, env)
             return self.eval_binary(expr.op, left, right, expr.line)
@@ -1008,7 +1032,8 @@ class Interpreter:
             if expr.op == "-":
                 return -operand
             if expr.op == "not":
-                return not self.is_truthy(operand)
+                self.require_bool(operand, "'not' operand", expr.line)
+                return not operand
 
         if isinstance(expr, ast.FuncCall):
             return self.eval_call(expr, env)
@@ -1172,10 +1197,7 @@ class Interpreter:
             return left <= right
         if op == ">=":
             return left >= right
-        if op == "and":
-            return self.is_truthy(left) and self.is_truthy(right)
-        if op == "or":
-            return self.is_truthy(left) or self.is_truthy(right)
+        # Note: 'and' / 'or' are handled in eval_expr (short-circuit + strict bool)
         raise GwenError(f"Unknown operator: {op}", line)
 
     def eval_as(self, expr: ast.AsExpr, env: Environment) -> Any:
@@ -1208,7 +1230,15 @@ class Interpreter:
             if target == "string":
                 return OkValue(str(value))
             if target == "bool":
-                return OkValue(self.is_truthy(value))
+                # Strict: only bool -> bool. No truthiness conversion.
+                # Use explicit comparison instead (e.g., 'x != 0', 's != ""').
+                if not isinstance(value, bool):
+                    raise GwenError(
+                        f"Cannot convert {type(value).__name__} to bool. "
+                        f"Use explicit comparison instead (e.g., 'x != 0', 's != \"\"', 'len(lst) > 0')",
+                        expr.line
+                    )
+                return OkValue(value)
             if target in PRECISION_TYPES:
                 return OkValue(coerce_to_type(value, target, expr.line))
             # Numeric -> money[X]
@@ -1300,17 +1330,19 @@ class Interpreter:
         val = self.eval_expr(pattern, env)
         return subject == val
 
-    def is_truthy(self, value: Any) -> bool:
-        if value is None:
-            return False
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, int):
-            return value != 0
-        if isinstance(value, float):
-            return value != 0.0
-        if isinstance(value, str):
-            return len(value) > 0
-        if isinstance(value, list):
-            return len(value) > 0
-        return True
+    def require_bool(self, value: Any, context: str, line: int) -> None:
+        """Strict bool check: raise if value is not exactly a bool.
+
+        Gwen follows Go-style strict typing for conditions. No truthiness.
+        Use explicit comparisons (x != 0, s != "", len(lst) > 0) instead.
+
+        TODO: When Gwen transitions from interpreted to compiled, this check
+        should move to compile-time type checking instead of runtime.
+        """
+        if not isinstance(value, bool):
+            type_name = type(value).__name__
+            raise GwenError(
+                f"{context} must be bool, got {type_name}. "
+                f"Use explicit comparison (e.g., 'x != 0', 's != \"\"', 'len(lst) > 0')",
+                line
+            )

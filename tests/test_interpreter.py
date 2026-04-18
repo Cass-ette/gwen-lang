@@ -1142,6 +1142,182 @@ endmatch''')
     assert out == "got err"
 
 
+# ---------- match exhaustiveness on Result ----------
+
+def test_match_result_with_non_ok_err_pattern_rejected():
+    """match on Result must use ok(x)/err(x), not literals or ranges."""
+    import pytest
+    with pytest.raises(Exception, match="Match on Result type must use ok"):
+        run('''func f() -> result[int]
+  return ok(1)
+endfunc
+
+match f()
+  when 1 => write("one")
+  else write("other")
+endmatch''')
+
+
+def test_match_result_only_ok_raises_on_err_value():
+    """match with only when ok(x) raises at runtime if value is err."""
+    import pytest
+    with pytest.raises(Exception, match="no matching case"):
+        run('''func f() -> result[int]
+  return err("boom")
+endfunc
+
+match f()
+  when ok(n) => write(n)
+endmatch''')
+
+
+def test_match_result_only_err_raises_on_ok_value():
+    """match with only when err(e) raises at runtime if value is ok."""
+    import pytest
+    with pytest.raises(Exception, match="no matching case"):
+        run('''func f() -> result[int]
+  return ok(42)
+endfunc
+
+match f()
+  when err(e) => write(e)
+endmatch''')
+
+
+def test_match_result_ok_plus_else_covers_err():
+    """match with when ok(x) + else is exhaustive (else covers err)."""
+    out = run('''func f() -> result[int]
+  return err("boom")
+endfunc
+
+match f()
+  when ok(n) => write(n)
+  else write("fallback")
+endmatch''')
+    assert out == "fallback"
+
+
+# ---------- Strict bool conditions (Go-style, no truthiness) ----------
+
+def test_if_non_bool_int_rejected():
+    """if condition must be bool, not int."""
+    import pytest
+    with pytest.raises(Exception, match="'if' condition must be bool, got int"):
+        run('''x := 1
+if x then write("yes") endif''')
+
+
+def test_if_non_bool_string_rejected():
+    """if condition must be bool, not string."""
+    import pytest
+    with pytest.raises(Exception, match="'if' condition must be bool, got str"):
+        run('''s := "hi"
+if s then write("yes") endif''')
+
+
+def test_if_non_bool_list_rejected():
+    """if condition must be bool, not list."""
+    import pytest
+    with pytest.raises(Exception, match="'if' condition must be bool, got list"):
+        run('''lst := [1, 2, 3]
+if lst then write("yes") endif''')
+
+
+def test_elif_non_bool_rejected():
+    """elif condition must be bool too."""
+    import pytest
+    with pytest.raises(Exception, match="'elif' condition must be bool"):
+        run('''x := 5
+if x = 0 then
+  write("zero")
+elif x then
+  write("nonzero")
+endif''')
+
+
+def test_while_non_bool_rejected():
+    """while condition must be bool."""
+    import pytest
+    with pytest.raises(Exception, match="'while' condition must be bool, got int"):
+        run('''n := 3
+while n do
+  n := n - 1
+endwhile''')
+
+
+def test_not_non_bool_rejected():
+    """'not' operand must be bool."""
+    import pytest
+    with pytest.raises(Exception, match="'not' operand must be bool, got int"):
+        run('''x := 0
+if not x then write("hi") endif''')
+
+
+def test_and_non_bool_left_rejected():
+    """'and' left side must be bool."""
+    import pytest
+    with pytest.raises(Exception, match="left side of 'and' must be bool"):
+        run('''x := 1
+if x and true then write("hi") endif''')
+
+
+def test_and_non_bool_right_rejected():
+    """'and' right side must be bool when left is true."""
+    import pytest
+    with pytest.raises(Exception, match="right side of 'and' must be bool"):
+        run('''x := 1
+if true and x then write("hi") endif''')
+
+
+def test_or_non_bool_left_rejected():
+    """'or' left side must be bool."""
+    import pytest
+    with pytest.raises(Exception, match="left side of 'or' must be bool"):
+        run('''x := 0
+if x or true then write("hi") endif''')
+
+
+def test_and_short_circuit_skips_right():
+    """'and' must short-circuit: right not evaluated when left is false."""
+    # If right side were evaluated, division by zero would crash.
+    out = run('''x := 0
+if x != 0 and 100 / x > 5 then
+  write("never")
+else
+  write("safe")
+endif''')
+    assert out == "safe"
+
+
+def test_or_short_circuit_skips_right():
+    """'or' must short-circuit: right not evaluated when left is true."""
+    out = run('''x := 0
+if x = 0 or 100 / x > 5 then
+  write("safe")
+else
+  write("never")
+endif''')
+    assert out == "safe"
+
+
+def test_as_bool_from_int_rejected():
+    """'as bool' rejects non-bool (no truthiness conversion)."""
+    import pytest
+    with pytest.raises(Exception, match="Cannot convert int to bool"):
+        run('''x := 1
+b := x as bool
+write(b)''')
+
+
+def test_as_bool_from_bool_works():
+    """'as bool' on a bool is a no-op (returns ok(bool))."""
+    out = run('''match true as bool
+  when ok(b) => write(b)
+  when err(e) => write("err")
+endmatch''')
+    assert out == "True"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = 0
