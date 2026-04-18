@@ -519,6 +519,100 @@ endfunc""")
     assert out == "1 0"
 
 
+# --- Multiple return values tests ---
+
+def test_multiple_return_basic():
+    out = run("""func divide(a: int, b: int) -> int, int
+  q := a / b
+  r := a mod b
+  return q, r
+endfunc
+
+func main()
+  q, r := divide(17, 5)
+  write(q, r)
+endfunc""")
+    assert out == "3 2"
+
+
+def test_multiple_return_with_types():
+    out = run("""func stats(a: int, b: int, c: int) -> int, int, float
+  min_val := a
+  if b < min_val then min_val := b endif
+  if c < min_val then min_val := c endif
+  max_val := a
+  if b > max_val then max_val := b endif
+  if c > max_val then max_val := c endif
+  total := a + b + c
+  avg := total / 3.0
+  return min_val, max_val, avg
+endfunc
+
+func main()
+  lo, hi, mean := stats(3, 7, 5)
+  write(lo, hi, mean)
+endfunc""")
+    assert out == "3 7 5.0"
+
+
+def test_multiple_return_destructure_partial():
+    out = run("""func pair() -> int, int
+  return 1, 2
+endfunc
+
+func main()
+  first, _ := pair()
+  write(first)
+endfunc""")
+    assert out == "1"
+
+
+def test_multiple_return_pass_as_args():
+    out = run("""func inner() -> int, int
+  return 10, 20
+endfunc
+
+func outer(x: int, y: int) -> int
+  return x + y
+endfunc
+
+func main()
+  a, b := inner()
+  sum := outer(a, b)
+  write(sum)
+endfunc""")
+    assert out == "30"
+
+
+def test_multiple_return_recursive():
+    out = run("""func fib_pair(n: int) -> int, int
+  if n = 0 then return 0, 1 endif
+  a, b := fib_pair(n - 1)
+  return b, a + b
+endfunc
+
+func main()
+  f, _ := fib_pair(10)
+  write(f)
+endfunc""")
+    assert out == "55"
+
+
+def test_multiple_return_swap():
+    """Use multi-return for swap idiom."""
+    out = run("""func swap(a: int, b: int) -> int, int
+  return b, a
+endfunc
+
+func main()
+  x, y := swap(1, 2)
+  write(x, y)
+  x, y := swap(x, y)
+  write(x, y)
+endfunc""")
+    assert out == "2 1\n1 2"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = 0
