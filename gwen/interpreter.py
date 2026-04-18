@@ -307,6 +307,9 @@ class Interpreter:
         self.global_env.set("sort", self._builtin_sort)
         self.global_env.set("asc", self._builtin_asc)
         self.global_env.set("desc", self._builtin_desc)
+        self.global_env.set("reversed", self._builtin_reverse)
+        self.global_env.set("split", self._builtin_split)
+        self.global_env.set("join", self._builtin_join)
 
     def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
         """Follow type alias chain to canonical type name."""
@@ -397,6 +400,33 @@ class Interpreter:
     def _builtin_desc(self, a, b):
         """Descending comparison: a > b"""
         return a > b
+
+    def _builtin_reverse(self, lst):
+        """Return a new list with elements in reverse order."""
+        if not isinstance(lst, list):
+            raise GwenError(f"reverse() requires a list, got {type(lst).__name__}")
+        return lst[::-1]
+
+    def _builtin_split(self, s, sep):
+        """Split string by separator."""
+        if not isinstance(s, str):
+            raise GwenError(f"split() requires a string, got {type(s).__name__}")
+        if not isinstance(sep, str):
+            raise GwenError(f"split() separator must be a string, got {type(sep).__name__}")
+        if sep == "":
+            # Split into characters
+            return list(s)
+        return s.split(sep)
+
+    def _builtin_join(self, parts, sep):
+        """Join list of strings with separator."""
+        if not isinstance(parts, list):
+            raise GwenError(f"join() requires a list, got {type(parts).__name__}")
+        if not isinstance(sep, str):
+            raise GwenError(f"join() separator must be a string, got {type(sep).__name__}")
+        # Convert all parts to strings
+        str_parts = [str(p) for p in parts]
+        return sep.join(str_parts)
 
     def run(self, program: ast.Program):
         self.exec_block(program.statements, self.global_env)

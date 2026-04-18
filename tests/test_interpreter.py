@@ -580,6 +580,62 @@ endfunc""")
     assert out == "[]"
 
 
+def test_reversed():
+    out = run("""func main()
+  lst := [1, 2, 3, 4]
+  rev := reversed(lst)
+  write(rev)
+  write(lst)  // original unchanged
+endfunc""")
+    lines = out.split("\n")
+    assert lines[0] == "[4, 3, 2, 1]"
+    assert lines[1] == "[1, 2, 3, 4]"
+
+
+def test_split_basic():
+    out = run("""func main()
+  parts := split("a,b,c", ",")
+  write(parts)
+endfunc""")
+    assert out == "['a', 'b', 'c']"
+
+
+def test_split_empty_sep():
+    out = run("""func main()
+  chars := split("abc", "")
+  write(chars)
+endfunc""")
+    assert out == "['a', 'b', 'c']"
+
+
+def test_join_basic():
+    out = run("""func main()
+  parts := ["Hello", "World"]
+  text := join(parts, " ")
+  write(text)
+endfunc""")
+    assert out == "Hello World"
+
+
+def test_join_auto_convert():
+    out = run("""func main()
+  nums := [1, 2, 3]
+  text := join(nums, "-")
+  write(text)
+endfunc""")
+    assert out == "1-2-3"
+
+
+def test_split_join_roundtrip():
+    out = run("""func main()
+  original := "apple,banana,cherry"
+  parts := split(original, ",")
+  back := join(parts, ",")
+  write(back)
+endfunc""")
+    assert out == "apple,banana,cherry"
+
+
 # --- Multiple return values tests ---
 
 def test_multiple_return_basic():

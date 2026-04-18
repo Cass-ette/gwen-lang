@@ -27,7 +27,7 @@
 ### `list.gw` - 列表操作
 
 ```
-use pop, insert, sort, reverse, map, filter from list
+use pop, insert, sort, reversed, map, filter from list
 
 // 弹出末尾
 last := pop(items)
@@ -94,7 +94,7 @@ home := env("HOME")
 | 阶段 | 状态 | 内容 | 具体函数 |
 |------|------|------|----------|
 | **阶段 1** | ✅ 完成 | 核心内置 | `write/read/len/append/str/int/float/type` |
-| **阶段 2** | 🚧 进行中 | 列表+字符串核心 | **列表**: `sort`, `reverse`, `pop`, `insert`, `concat`<br>**字符串**: `split`, `join`, `substring`, `contains`, `trim`, `replace` |
+| **阶段 2** | 🚧 进行中 | 列表+字符串核心 | **列表**: `sort`, `reversed`, `pop`, `insert`, `concat`<br>**字符串**: `split`, `join`, `substring`, `contains`, `trim`, `replace` |
 | **阶段 3** | 📋 待设计 | 数学+字典 | **数学**: `abs`, `min`, `max`, `sqrt`, `floor`, `ceil`, `pow`<br>**字典**: `dict[K,V]`, `has_key`, `keys`, `values` |
 | **阶段 4** | 📋 远期 | 文件+高级迭代 | **文件**: `read_file`, `write_file`<br>**迭代**: `map`, `filter`, `range`, `enumerate` |
 | **阶段 5** | 📋 远期 | 包管理器 | 第三方模块支持 |
@@ -108,7 +108,7 @@ home := env("HOME")
 | `sort` | `sort(lst: list[T], cmp: (T,T)->bool) -> list[T]` | **稳定排序**，返回新列表，原列表不变，**必须显式比较器** | O(n log n) |
 | `asc` | 比较器 | 预定义 `(a, b) => a < b` | O(1) |
 | `desc` | 比较器 | 预定义 `(a, b) => a > b` | O(1) |
-| `reverse` | `reverse(lst: list[T]) -> list[T]` | 返回逆序新列表 | O(n) |
+| `reversed` | `reversed(lst: list[T]) -> list[T]` | 返回逆序新列表（名称为 `reversed`，`reverse` 是 for 循环关键字） | O(n) |
 | `pop` | `pop(lst: list[T]) -> T` | 移除并返回末尾元素 | O(1) |
 | `insert` | `insert(lst: list[T], idx: int, item: T) -> void` | 在索引处插入 | O(n) |
 | `concat` | `concat(a: list[T], b: list[T]) -> list[T]` | 连接两个列表 | O(a+b) |
