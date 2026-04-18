@@ -119,6 +119,14 @@ class AsExpr:
     line: int = 0
 
 
+@dataclass
+class ObjectLiteral:
+    """ObjectName{field1 := value1, field2 := value2, ...}"""
+    name: str = ""  # Object type name
+    fields: List[Any] = field(default_factory=list)  # [(field_name, value_expr), ...]
+    line: int = 0
+
+
 # --- Statements ---
 
 @dataclass
@@ -241,6 +249,46 @@ class ArenaStmt:
     """arena name do ... endarena - explicit memory region."""
     name: str = ""
     body: List[Any] = field(default_factory=list)
+    line: int = 0
+
+
+# --- Object System ---
+
+@dataclass
+class FieldDef:
+    """Object field definition: name: Type"""
+    name: str = ""
+    type_annotation: Optional[Any] = None  # TypeNode
+    line: int = 0
+
+
+@dataclass
+class MethodDef:
+    """Object method definition: func name(self: Type, ...) -> Type ... endfunc"""
+    name: str = ""
+    params: List[Any] = field(default_factory=list)  # [ParamDef, ...]
+    return_type: Optional[Any] = None  # TypeNode
+    body: List[Any] = field(default_factory=list)  # statements
+    line: int = 0
+
+
+@dataclass
+class ConstructorDef:
+    """Object constructor: new(params) -> Type ... endnew"""
+    name: str = ""  # always same as object name
+    params: List[Any] = field(default_factory=list)  # [ParamDef, ...]
+    return_type: Optional[Any] = None  # TypeNode
+    body: List[Any] = field(default_factory=list)  # statements
+    line: int = 0
+
+
+@dataclass
+class ObjectDef:
+    """object Name ... endobject"""
+    name: str = ""
+    fields: List[FieldDef] = field(default_factory=list)  # field definitions
+    constructor: Optional[ConstructorDef] = None  # optional new() method
+    methods: List[MethodDef] = field(default_factory=list)
     line: int = 0
 
 @dataclass

@@ -212,6 +212,59 @@ class ErrValue:
         return f"err({self.value!r})"
 
 
+class ObjectType:
+    """Registered object type (class-like). Holds field defs, constructor, methods."""
+    __slots__ = ("name", "fields", "field_types", "constructor", "methods", "closure")
+
+    def __init__(self, name, fields, field_types, constructor, methods, closure):
+        self.name = name
+        self.fields = fields  # ordered list of field names
+        self.field_types = field_types  # dict: name -> resolved type name
+        self.constructor = constructor  # ConstructorDef or None
+        self.methods = methods  # dict: name -> MethodDef
+        self.closure = closure  # Environment where object was defined
+
+    def __repr__(self):
+        return f"<object type {self.name}>"
+
+
+class ObjectValue:
+    """An instance of a Gwen object."""
+    __slots__ = ("type_name", "fields", "_object_type")
+
+    def __init__(self, type_name, fields, object_type):
+        self.type_name = type_name
+        self.fields = fields  # dict: name -> value
+        self._object_type = object_type
+
+    def __repr__(self):
+        return f"<{self.type_name} {self.fields}>"
+
+
+class _BoundMethod:
+    """Method bound to an instance: acc.deposit -> bound method."""
+    __slots__ = ("instance", "obj_type", "method_name")
+    def __init__(self, instance, obj_type, method_name):
+        self.instance = instance
+        self.obj_type = obj_type
+        self.method_name = method_name
+
+
+class _StaticMethodRef:
+    """Type-level method reference: Account.deposit (requires explicit self)."""
+    __slots__ = ("obj_type", "method_name")
+    def __init__(self, obj_type, method_name):
+        self.obj_type = obj_type
+        self.method_name = method_name
+
+
+class _ConstructorRef:
+    """Type-level constructor reference: Account.new."""
+    __slots__ = ("obj_type",)
+    def __init__(self, obj_type):
+        self.obj_type = obj_type
+
+
 class GwenFunction:
     def __init__(self, node: ast.FuncDef, closure: 'Environment'):
         self.node = node
@@ -229,13 +282,20 @@ class GwenLambda:
 
 
 class Environment:
-    def __init__(self, parent: Optional['Environment'] = None, is_call_frame: bool = False, func_name: Optional[str] = None):
+    def __init__(
+        self,
+        parent: Optional['Environment'] = None,
+        is_call_frame: bool = False,
+        func_name: Optional[str] = None,
+        method_self: Optional[Any] = None,
+    ):
         self.vars: Dict[str, Any] = {}
         self.types: Dict[str, str] = {}  # variable name -> type name (e.g. "int8")
         self.consts: set = set()  # set of variable names that are const (immutable)
         self.parent = parent
         self.is_call_frame = is_call_frame  # True for function call environments
         self.func_name = func_name  # Function name for this call frame
+        self.method_self = method_self  # Bound receiver when executing an object method
 
     def get(self, name: str) -> Any:
         if name in self.vars:
@@ -287,12 +347,21 @@ class Environment:
         # Always update/create in current scope (local behavior)
         self.vars[name] = value
 
+    def get_method_self(self) -> Optional[Any]:
+        """Look up the active method receiver across nested scopes."""
+        if self.method_self is not None:
+            return self.method_self
+        if self.parent:
+            return self.parent.get_method_self()
+        return None
+
 
 class Interpreter:
     def __init__(self):
         self.global_env = Environment()
         self.modules: Dict[str, Environment] = {}
         self.type_aliases: Dict[str, str] = {}  # alias name -> canonical type name
+        self.objects: Dict[str, ObjectType] = {}  # object name -> ObjectType
         self._setup_builtins()
 
     def _setup_builtins(self):
@@ -388,6 +457,10 @@ class Interpreter:
             return "err"
         if isinstance(obj, (GwenFunction, GwenLambda)):
             return "func"
+        if isinstance(obj, ObjectValue):
+            return obj.type_name
+        if isinstance(obj, ObjectType):
+            return f"object<{obj.name}>"
         return "unknown"
 
     def _builtin_sort(self, lst, cmp):
@@ -709,6 +782,8 @@ class Interpreter:
                         obj = self.eval_expr(target.obj, env)
                         index = self.eval_expr(target.index, env)
                         obj[index] = val
+                    elif isinstance(target, ast.MemberAccess):
+                        self._assign_member(target, val, env, stmt.line)
                     else:
                         raise GwenError("Invalid assignment target", stmt.line)
             elif len(stmt.targets) == 1 and len(values) == 1:
@@ -719,6 +794,8 @@ class Interpreter:
                     obj = self.eval_expr(target.obj, env)
                     index = self.eval_expr(target.index, env)
                     obj[index] = values[0]
+                elif isinstance(target, ast.MemberAccess):
+                    self._assign_member(target, values[0], env, stmt.line)
                 else:
                     raise GwenError("Invalid assignment target", stmt.line)
             elif len(stmt.targets) == len(values):
@@ -730,6 +807,8 @@ class Interpreter:
                         obj = self.eval_expr(target.obj, env)
                         index = self.eval_expr(target.index, env)
                         obj[index] = val
+                    elif isinstance(target, ast.MemberAccess):
+                        self._assign_member(target, val, env, stmt.line)
                     else:
                         raise GwenError("Invalid assignment target", stmt.line)
             else:
@@ -1036,6 +1115,26 @@ class Interpreter:
         elif isinstance(stmt, ast.ExprStmt):
             self.eval_expr(stmt.expr, env)
 
+        elif isinstance(stmt, ast.ObjectDef):
+            if stmt.name in self.objects:
+                raise GwenError(f"Object '{stmt.name}' already defined", stmt.line)
+            field_names = []
+            field_types = {}
+            for f in stmt.fields:
+                if f.name in field_types:
+                    raise GwenError(f"Duplicate field '{f.name}' in object '{stmt.name}'", f.line)
+                field_names.append(f.name)
+                field_types[f.name] = self._resolve_alias(resolve_type_name(f.type_annotation))
+            methods_dict = {}
+            for m in stmt.methods:
+                if m.name in methods_dict:
+                    raise GwenError(f"Duplicate method '{m.name}' in object '{stmt.name}'", m.line)
+                methods_dict[m.name] = m
+            obj_type = ObjectType(stmt.name, field_names, field_types,
+                                  stmt.constructor, methods_dict, env)
+            self.objects[stmt.name] = obj_type
+            env.set(stmt.name, obj_type)
+
         else:
             raise GwenError(f"Unknown statement type: {type(stmt).__name__}")
 
@@ -1045,6 +1144,31 @@ class Interpreter:
         if needs_type_check(type_name):
             return coerce_to_type(value, type_name, line)
         return value
+
+    def _assign_member(self, target: ast.MemberAccess, value: Any, env: Environment, line: int):
+        """Assign to a MemberAccess target. Only allowed via 'self.field := ...' inside methods."""
+        if not (isinstance(target.obj, ast.Identifier) and target.obj.name == "self"):
+            raise GwenError(
+                f"Cannot assign to field '{target.member}' from outside; "
+                f"use 'self.{target.member} := ...' inside a method",
+                line,
+            )
+        obj = self.eval_expr(target.obj, env)
+        method_self = env.get_method_self()
+        if method_self is None or obj is not method_self:
+            raise GwenError(
+                f"Cannot assign to field '{target.member}' from outside; "
+                f"use 'self.{target.member} := ...' inside a method",
+                line,
+            )
+        if not isinstance(obj, ObjectValue):
+            raise GwenError(f"'self' is not an object instance", line)
+        if target.member not in obj.fields:
+            raise GwenError(f"Object '{obj.type_name}' has no field '{target.member}'", line)
+        ftype = obj._object_type.field_types.get(target.member)
+        if needs_type_check(ftype):
+            value = coerce_to_type(value, ftype, line)
+        obj.fields[target.member] = value
 
     def eval_expr(self, expr: Any, env: Environment) -> Any:
         if isinstance(expr, ast.IntLiteral):
@@ -1096,7 +1220,49 @@ class Interpreter:
             return self.eval_call(expr, env)
 
         if isinstance(expr, ast.MemberAccess):
+            # Type-side access: Account.new / Account.method
+            if isinstance(expr.obj, ast.Identifier) and expr.obj.name in self.objects:
+                obj_type = self.objects[expr.obj.name]
+                if expr.member == "new":
+                    if obj_type.constructor is None:
+                        raise GwenError(f"Object '{obj_type.name}' has no constructor", expr.line)
+                    return _ConstructorRef(obj_type)
+                if expr.member in obj_type.methods:
+                    return _StaticMethodRef(obj_type, expr.member)
+                raise GwenError(f"Object '{obj_type.name}' has no member '{expr.member}'", expr.line)
+
             obj = self.eval_expr(expr.obj, env)
+            if isinstance(obj, ObjectValue):
+                # Method access: bound method
+                if expr.member in obj._object_type.methods:
+                    return _BoundMethod(obj, obj._object_type, expr.member)
+                # Field access: only allowed via 'self' identifier
+                if isinstance(expr.obj, ast.Identifier) and expr.obj.name == "self":
+                    method_self = env.get_method_self()
+                    if method_self is None or obj is not method_self:
+                        raise GwenError(
+                            f"Cannot access private field '{expr.member}' of '{obj.type_name}' "
+                            f"from outside; use a method instead",
+                            expr.line,
+                        )
+                    if expr.member in obj.fields:
+                        return obj.fields[expr.member]
+                    raise GwenError(f"Object '{obj.type_name}' has no field '{expr.member}'", expr.line)
+                if expr.member in obj.fields:
+                    raise GwenError(
+                        f"Cannot access private field '{expr.member}' of '{obj.type_name}' "
+                        f"from outside; use a method instead",
+                        expr.line,
+                    )
+                raise GwenError(f"Object '{obj.type_name}' has no member '{expr.member}'", expr.line)
+            if isinstance(obj, ObjectType):
+                if expr.member == "new":
+                    if obj.constructor is None:
+                        raise GwenError(f"Object '{obj.name}' has no constructor", expr.line)
+                    return _ConstructorRef(obj)
+                if expr.member in obj.methods:
+                    return _StaticMethodRef(obj, expr.member)
+                raise GwenError(f"Object '{obj.name}' has no member '{expr.member}'", expr.line)
             if isinstance(obj, Environment):
                 return obj.get(expr.member)
             raise GwenError(f"Cannot access member '{expr.member}' on {type(obj)}", expr.line)
@@ -1147,6 +1313,31 @@ class Interpreter:
                     raise GwenError(f"Dict keys must be string or int, got {type(key).__name__}", expr.line)
                 result[key] = val
             return result
+
+        if isinstance(expr, ast.ObjectLiteral):
+            if expr.name not in self.objects:
+                raise GwenError(f"Unknown object type: {expr.name}", expr.line)
+            obj_type = self.objects[expr.name]
+            fields = {}
+            provided = set()
+            for fname, fexpr in expr.fields:
+                if fname in provided:
+                    raise GwenError(f"Duplicate field '{fname}' in '{expr.name}' literal", expr.line)
+                if fname not in obj_type.field_types:
+                    raise GwenError(f"Object '{expr.name}' has no field '{fname}'", expr.line)
+                provided.add(fname)
+                val = self.eval_expr(fexpr, env)
+                ftype = obj_type.field_types[fname]
+                if needs_type_check(ftype):
+                    val = coerce_to_type(val, ftype, expr.line)
+                fields[fname] = val
+            missing = [f for f in obj_type.fields if f not in provided]
+            if missing:
+                raise GwenError(
+                    f"Object '{expr.name}' literal missing fields: {', '.join(missing)}",
+                    expr.line,
+                )
+            return ObjectValue(expr.name, fields, obj_type)
 
         raise GwenError(f"Unknown expression type: {type(expr).__name__}")
 
@@ -1334,6 +1525,30 @@ class Interpreter:
         callee = self.eval_expr(call.name, env)
         args = [self.eval_expr(a, env) for a in call.args]
 
+        if isinstance(callee, _BoundMethod):
+            method_def = callee.obj_type.methods[callee.method_name]
+            return self._call_method(method_def, callee.instance, args, callee.obj_type, call.line)
+
+        if isinstance(callee, _StaticMethodRef):
+            method_def = callee.obj_type.methods[callee.method_name]
+            if not args:
+                raise GwenError(
+                    f"Method '{callee.obj_type.name}.{callee.method_name}' "
+                    f"requires explicit self as first argument",
+                    call.line,
+                )
+            instance = args[0]
+            if not (isinstance(instance, ObjectValue) and instance.type_name == callee.obj_type.name):
+                raise GwenError(
+                    f"First argument to '{callee.obj_type.name}.{callee.method_name}' "
+                    f"must be a '{callee.obj_type.name}' instance",
+                    call.line,
+                )
+            return self._call_method(method_def, instance, args[1:], callee.obj_type, call.line)
+
+        if isinstance(callee, _ConstructorRef):
+            return self._call_constructor(callee.obj_type, args, call.line)
+
         if callable(callee):
             return callee(*args)
 
@@ -1344,6 +1559,67 @@ class Interpreter:
             return self.call_lambda(callee, args)
 
         raise GwenError(f"'{callee}' is not callable", call.line)
+
+    def _call_method(self, method_def, instance, args, obj_type, line):
+        call_env = Environment(
+            parent=obj_type.closure,
+            is_call_frame=True,
+            func_name=method_def.name,
+            method_self=instance,
+        )
+        params = method_def.params
+        if not params:
+            raise GwenError(
+                f"Method '{obj_type.name}.{method_def.name}' must declare 'self' as first parameter",
+                line,
+            )
+        # Bind self
+        call_env.set(params[0].name, instance)
+        # Bind remaining params
+        rest = params[1:]
+        for i, param in enumerate(rest):
+            if i < len(args):
+                val = args[i]
+                ptype = self._resolve_alias(resolve_type_name(param.type_name))
+                if ptype and ptype in PRECISION_TYPES:
+                    val = coerce_to_type(val, ptype, param.line)
+                call_env.set(param.name, val)
+            elif param.default is not None:
+                call_env.set(param.name, self.eval_expr(param.default, obj_type.closure))
+            else:
+                raise GwenError(f"Missing argument: {param.name}", line)
+        try:
+            self.exec_block(method_def.body, call_env)
+        except ReturnSignal as r:
+            return r.value
+        return None
+
+    def _call_constructor(self, obj_type, args, line):
+        ctor = obj_type.constructor
+        if ctor is None:
+            raise GwenError(f"Object '{obj_type.name}' has no constructor", line)
+        call_env = Environment(parent=obj_type.closure, is_call_frame=True, func_name=f"{obj_type.name}.new")
+        for i, param in enumerate(ctor.params):
+            if i < len(args):
+                val = args[i]
+                ptype = self._resolve_alias(resolve_type_name(param.type_name))
+                if ptype and ptype in PRECISION_TYPES:
+                    val = coerce_to_type(val, ptype, param.line)
+                call_env.set(param.name, val)
+            elif param.default is not None:
+                call_env.set(param.name, self.eval_expr(param.default, obj_type.closure))
+            else:
+                raise GwenError(f"Missing argument: {param.name}", line)
+        try:
+            self.exec_block(ctor.body, call_env)
+        except ReturnSignal as r:
+            if not isinstance(r.value, ObjectValue) or r.value.type_name != obj_type.name:
+                raise GwenError(
+                    f"Constructor '{obj_type.name}.new' must return a '{obj_type.name}' instance",
+                    line,
+                )
+            return r.value
+        raise GwenError(f"Constructor '{obj_type.name}.new' did not return a value", line)
 
     def call_function(self, fn: GwenFunction, args: List[Any]) -> Any:
         call_env = Environment(parent=fn.closure, is_call_frame=True, func_name=fn.node.name)

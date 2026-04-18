@@ -61,6 +61,10 @@ class TokenType(Enum):
     VAR = auto()           # var
     ENDVAR = auto()        # endvar
     DEFAULT = auto()       # default
+    OBJECT = auto()          # object
+    ENDOBJECT = auto()       # endobject
+    NEW = auto()             # new
+    ENDNEW = auto()          # endnew
 
     # Operators
     ASSIGN = auto()        # :=
@@ -142,6 +146,10 @@ KEYWORDS = {
     "default": TokenType.DEFAULT,
     "order": TokenType.ORDER,
     "reverse": TokenType.REVERSE,
+    "object": TokenType.OBJECT,
+    "endobject": TokenType.ENDOBJECT,
+    "new": TokenType.NEW,
+    "endnew": TokenType.ENDNEW,
 }
 
 

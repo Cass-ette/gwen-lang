@@ -37,6 +37,46 @@ class Parser:
         while self.at(TokenType.NEWLINE):
             self.advance()
 
+    def _peek_next(self):
+        """Look at the token after current, if exists."""
+        if self.pos + 1 < len(self.tokens):
+            return self.tokens[self.pos + 1]
+        return None
+
+    def parse_object_literal(self) -> ast.ObjectLiteral:
+        """Parse ObjectName{field1 := value1, field2 := value2, ...}."""
+        tok = self.advance()  # ObjectName (IDENTIFIER)
+        name = tok.value
+        line = tok.line
+        self.expect(TokenType.LBRACE)
+
+        fields = []
+        self.skip_newlines()
+        if not self.at(TokenType.RBRACE):
+            # First field: field_name := value
+            field_name = self.expect(TokenType.IDENTIFIER).value
+            self.expect(TokenType.ASSIGN)  # :=
+            value = self.parse_expr()
+            fields.append((field_name, value))
+
+            while True:
+                self.skip_newlines()
+                if self.at(TokenType.RBRACE):
+                    break
+                if self.at(TokenType.COMMA):
+                    self.advance()
+                    self.skip_newlines()
+                    if self.at(TokenType.RBRACE):  # Trailing comma
+                        break
+                    field_name = self.expect(TokenType.IDENTIFIER).value
+                    self.expect(TokenType.ASSIGN)  # :=
+                    value = self.parse_expr()
+                    fields.append((field_name, value))
+                else:
+                    break
+        self.expect(TokenType.RBRACE)
+        return ast.ObjectLiteral(name=name, fields=fields, line=line)
+
     def parse(self) -> ast.Program:
         stmts = self.parse_block_until(TokenType.EOF)
         return ast.Program(statements=stmts)
@@ -83,6 +123,8 @@ class Parser:
             return self.parse_arena()
         if tok.type == TokenType.VAR:
             return self.parse_var_block()
+        if tok.type == TokenType.OBJECT:
+            return self.parse_object_def()
         # contextual keyword: type Alias = ExistingType
         if tok.type == TokenType.IDENTIFIER and tok.value == "type":
             next_tok = self.tokens[self.pos + 1] if self.pos + 1 < len(self.tokens) else None
@@ -110,28 +152,31 @@ class Parser:
                 targets = [expr.name]
             elif isinstance(expr, ast.IndexAccess):
                 targets = [expr]
+            elif isinstance(expr, ast.MemberAccess):
+                # Support self.field := value (member access assignment)
+                targets = [expr]
             else:
-                raise ParseError("Expected identifier or index access in assignment", self.peek())
+                raise ParseError("Expected identifier, index access, or member access in assignment", self.peek())
             values = [self.parse_expr()]
             return ast.Assignment(targets=targets, values=values, line=tok.line)
 
         # Check for multi-target: a, b := x, y  or  arr[i], arr[j] := x, y
-        if self.at(TokenType.COMMA) and isinstance(expr, (ast.Identifier, ast.IndexAccess)):
+        if self.at(TokenType.COMMA) and isinstance(expr, (ast.Identifier, ast.IndexAccess, ast.MemberAccess)):
             targets = []
             if isinstance(expr, ast.Identifier):
                 targets = [expr.name]
-            else:  # IndexAccess
+            else:  # IndexAccess or MemberAccess
                 targets = [expr]
             while self.at(TokenType.COMMA):
                 self.advance()
-                # Parse next target: identifier or index access
+                # Parse next target: identifier, index access, or member access
                 target_expr = self.parse_expr()
                 if isinstance(target_expr, ast.Identifier):
                     targets.append(target_expr.name)
-                elif isinstance(target_expr, ast.IndexAccess):
+                elif isinstance(target_expr, (ast.IndexAccess, ast.MemberAccess)):
                     targets.append(target_expr)
                 else:
-                    raise ParseError("Expected identifier or index access in multi-assignment", self.peek())
+                    raise ParseError("Expected identifier, index access, or member access in multi-assignment", self.peek())
             self.expect(TokenType.ASSIGN)
             values = [self.parse_expr()]
             while self.at(TokenType.COMMA):
@@ -246,8 +291,12 @@ class Parser:
                 expr = self.parse_call(expr)
             elif self.at(TokenType.DOT):
                 self.advance()
-                member = self.expect(TokenType.IDENTIFIER)
-                expr = ast.MemberAccess(expr, member.value, line=expr.line)
+                # Allow `new` (keyword) as a member name: e.g. Account.new(...)
+                if self.at(TokenType.NEW):
+                    member_tok = self.advance()
+                else:
+                    member_tok = self.expect(TokenType.IDENTIFIER)
+                expr = ast.MemberAccess(expr, member_tok.value, line=expr.line)
             elif self.at(TokenType.LBRACKET):
                 self.advance()
                 index = self.parse_expr()
@@ -308,6 +357,10 @@ class Parser:
         # Dict literal: dict[string, int]{"a": 1, "b": 2}
         if tok.type == TokenType.IDENTIFIER and tok.value == "dict":
             return self.parse_dict_literal()
+
+        # Object literal: ObjectName{field := value, ...}
+        if tok.type == TokenType.IDENTIFIER and self._peek_next() and self._peek_next().type == TokenType.LBRACE:
+            return self.parse_object_literal()
 
         if tok.type in (TokenType.IDENTIFIER, TokenType.INDEX):
             self.advance()
@@ -752,6 +805,113 @@ class Parser:
         body = self.parse_block_until(TokenType.ENDARENA)
         self.expect(TokenType.ENDARENA)
         return ast.ArenaStmt(name=name, body=body, line=tok.line)
+
+    def parse_object_def(self) -> ast.ObjectDef:
+        """Parse object Name ... endobject."""
+        tok = self.expect(TokenType.OBJECT)
+        name = self.expect(TokenType.IDENTIFIER).value
+        line = tok.line
+
+        fields: List[ast.FieldDef] = []
+        constructor: Optional[ast.ConstructorDef] = None
+        methods: List[ast.MethodDef] = []
+
+        # Parse fields (name: Type), methods (func name...endfunc), and constructor (new...endnew)
+        while not self.at(TokenType.ENDOBJECT):
+            # Skip newlines
+            while self.at(TokenType.NEWLINE):
+                self.advance()
+            if self.at(TokenType.ENDOBJECT):
+                break
+            if self.at(TokenType.IDENTIFIER):
+                # Field definition: field_name: Type
+                field_name = self.expect(TokenType.IDENTIFIER).value
+                self.expect(TokenType.COLON)
+                type_node = self.parse_type()
+                fields.append(ast.FieldDef(name=field_name, type_annotation=type_node, line=line))
+                # Optional newline
+                if self.at(TokenType.NEWLINE):
+                    self.advance()
+            elif self.at(TokenType.FUNC):
+                # Method definition
+                methods.append(self.parse_method_def())
+            elif self.at(TokenType.NEW):
+                # Constructor definition
+                constructor = self.parse_constructor_def(name)
+            else:
+                raise ParseError(f"Unexpected token in object definition: {self.peek()}", self.peek())
+
+        self.expect(TokenType.ENDOBJECT)
+        return ast.ObjectDef(
+            name=name,
+            fields=fields,
+            constructor=constructor,
+            methods=methods,
+            line=line
+        )
+
+    def parse_constructor_def(self, object_name: str) -> ast.ConstructorDef:
+        """Parse new(params) -> Type ... endnew (constructor)."""
+        tok = self.expect(TokenType.NEW)
+        line = tok.line
+
+        self.expect(TokenType.LPAREN)
+        params = []
+        while not self.at(TokenType.RPAREN):
+            params.append(self._parse_param())
+            if self.at(TokenType.COMMA):
+                self.advance()
+        self.expect(TokenType.RPAREN)
+
+        # Optional return type annotation: -> Type
+        return_type = None
+        if self.at(TokenType.ARROW):
+            self.advance()
+            return_type = self.parse_type()
+
+        # Body: parse statements until endnew
+        body = self.parse_block_until(TokenType.ENDNEW)
+        self.expect(TokenType.ENDNEW)
+
+        return ast.ConstructorDef(
+            name=object_name,  # same as object name
+            params=params,
+            return_type=return_type,
+            body=body,
+            line=line
+        )
+
+    def parse_method_def(self) -> ast.MethodDef:
+        """Parse func name(params) -> Type ... endfunc (method)."""
+        tok = self.expect(TokenType.FUNC)
+        line = tok.line
+
+        method_name = self.expect(TokenType.IDENTIFIER).value
+        self.expect(TokenType.LPAREN)
+        params = []
+        while not self.at(TokenType.RPAREN):
+            params.append(self._parse_param())
+            if self.at(TokenType.COMMA):
+                self.advance()
+        self.expect(TokenType.RPAREN)
+
+        # Optional return type annotation: -> Type
+        return_type = None
+        if self.at(TokenType.ARROW):
+            self.advance()
+            return_type = self.parse_type()
+
+        # Body: parse statements until endfunc
+        body = self.parse_block_until(TokenType.ENDFUNC)
+        self.expect(TokenType.ENDFUNC)
+
+        return ast.MethodDef(
+            name=method_name,
+            params=params,
+            return_type=return_type,
+            body=body,
+            line=line
+        )
 
 
 def parse(source: str) -> ast.Program:
