@@ -58,6 +58,9 @@ class TokenType(Enum):
     CONST = auto()         # const
     ARENA = auto()         # arena
     ENDARENA = auto()      # endarena
+    VAR = auto()           # var
+    ENDVAR = auto()        # endvar
+    DEFAULT = auto()       # default
 
     # Operators
     ASSIGN = auto()        # :=
@@ -132,6 +135,9 @@ KEYWORDS = {
     "const": TokenType.CONST,
     "arena": TokenType.ARENA,
     "endarena": TokenType.ENDARENA,
+    "var": TokenType.VAR,
+    "endvar": TokenType.ENDVAR,
+    "default": TokenType.DEFAULT,
     "order": TokenType.ORDER,
     "reverse": TokenType.REVERSE,
 }

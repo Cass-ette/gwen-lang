@@ -33,6 +33,7 @@ endfunc
 | 模块 | `module` | `endmodule` |
 | 并行 | `parallel do` | `endparallel` |
 | 内存域 | `arena` | `endarena` |
+| 变量块 | `var` | `endvar` |
 | 匿名函数 | `=> ...` | `endfunc`（块体）/ 无（单行） |
 | 类型转换 | `as` | — |
 
@@ -69,6 +70,8 @@ endfunc
 | `mod` | 取模运算 | 已实现 |
 | `global` | 全局变量声明 | 已实现 |
 | `const` | 不可变绑定 | 已实现 |
+| `var`, `endvar` | 变量批量声明块 | 已实现 |
+| `default` | `var` 块默认值（零值或统一初值） | 已实现 |
 | `module`, `endmodule` | 模块定义 | 已实现 |
 | `export` | 导出函数 | 已实现 |
 | `use`, `from` | 模块导入 | 已实现 |

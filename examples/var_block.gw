@@ -1,0 +1,47 @@
+// var / default / uninit 初始化机制示例
+
+func main()
+  // 1. var 块批量声明（推荐写在函数开头）
+  var
+    name: string := "Alice"
+    age: int := 30
+    active: bool := true
+  endvar
+  write(name, age, active)
+
+  // 2. var default <expr> —— 一键赋同一值
+  var default 0
+    total: int
+    count: int
+    rest: int
+  endvar
+  write(total, count, rest)
+
+  // 3. var default —— 每种类型的零值
+  var default
+    n: int
+    s: string
+    b: bool
+    m: money<USD>
+  endvar
+  write(n, s, b, m)
+
+  // 4. 单项可覆盖块级默认
+  var default 1
+    a: int
+    b: int := 99
+    c: int
+  endvar
+  write(a, b, c)
+
+  // 5. 未初始化声明：读前必须赋值，否则运行期报错
+  var
+    deferred: int
+  endvar
+  deferred := compute()
+  write(deferred)
+endfunc
+
+func compute() -> int
+  return 42
+endfunc

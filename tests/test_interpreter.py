@@ -397,6 +397,126 @@ endfunc""")
     assert out == "19.99"
 
 
+# --- Var block / uninit tests ---
+
+def test_uninit_read_errors():
+    try:
+        run("""func main()
+  x: int
+  write(x)
+endfunc""")
+        assert False, "expected error"
+    except Exception as e:
+        assert "read before assignment" in str(e)
+
+
+def test_uninit_then_assign_works():
+    out = run("""func main()
+  x: int
+  x := 42
+  write(x)
+endfunc""")
+    assert out == "42"
+
+
+def test_var_block_basic():
+    out = run("""func main()
+  var
+    a: int := 1
+    b: int := 2
+  endvar
+  write(a, b)
+endfunc""")
+    assert out == "1 2"
+
+
+def test_var_block_uninit_read_errors():
+    try:
+        run("""func main()
+  var
+    x: int
+    y: int
+  endvar
+  x := 10
+  write(x, y)
+endfunc""")
+        assert False, "expected error"
+    except Exception as e:
+        assert "read before assignment" in str(e)
+
+
+def test_var_default_zero():
+    out = run("""func main()
+  var default
+    n: int
+    s: string
+    b: bool
+  endvar
+  write(n)
+  write(s)
+  write(b)
+endfunc""")
+    assert out.split("\n") == ["0", "", "False"]
+
+
+def test_var_default_value():
+    out = run("""func main()
+  var default 7
+    a: int
+    b: int
+    c: int
+  endvar
+  write(a, b, c)
+endfunc""")
+    assert out == "7 7 7"
+
+
+def test_var_default_per_decl_override():
+    out = run("""func main()
+  var default 1
+    a: int
+    b: int := 99
+    c: int
+  endvar
+  write(a, b, c)
+endfunc""")
+    assert out == "1 99 1"
+
+
+def test_var_default_type_mismatch():
+    try:
+        run("""func main()
+  var default "hello"
+    a: int
+  endvar
+endfunc""")
+        assert False, "expected type mismatch"
+    except Exception as e:
+        assert "Type mismatch" in str(e)
+
+
+def test_var_default_zero_money():
+    out = run("""func main()
+  var default
+    m: money<USD>
+  endvar
+  write(m)
+endfunc""")
+    assert out == "0.00 USD"
+
+
+def test_var_default_zero_list_fresh():
+    out = run("""func main()
+  var default
+    a: list<int>
+    b: list<int>
+  endvar
+  append(a, 1)
+  write(len(a), len(b))
+endfunc""")
+    assert out == "1 0"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in globals().items() if k.startswith("test_")]
     passed = 0

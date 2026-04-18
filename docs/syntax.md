@@ -271,3 +271,70 @@ type UserId = Id
 - 别名是**透明**的（transparent alias）：只是新名字，不产生新类型
 - 别名指向精度类型时，溢出检测照常生效
 - `type` 是上下文关键字，仅在语句开头 + 后跟标识符时触发
+
+---
+
+## 变量初始化（var / default / uninit）
+
+Gwen 要求变量有明确的类型与初始值；若声明了类型但不赋值，**读取前必须先赋值**，否则运行期抛 `'x' read before assignment`。
+
+### 单个声明
+
+```
+x: int := 10        // 声明并赋值
+y: int              // 未初始化；读取前必须 y := ... 否则报错
+y := 5
+write(y)
+```
+
+### var ... endvar 批量声明
+
+```
+var
+  a: int := 1
+  b: string := "hi"
+  c: bool              // 未初始化
+endvar
+```
+
+- 推荐写在函数 / 模块开头，但**不强制限制位置**
+- 块内每条和单独 `x: T := v` 等价
+
+### var default 一键零值
+
+```
+var default
+  n: int          // 0
+  s: string       // ""
+  b: bool         // false
+  price: money<USD>   // 0.00 USD
+endvar
+```
+
+零值表：
+| 类型 | 零值 |
+|------|------|
+| `int` / `intN` / `uintN` | `0` |
+| `float` / `floatN` | `0.0` |
+| `string` | `""` |
+| `bool` | `false` |
+| `list<T>` | 新的空 list（每个变量独立） |
+| `money<Tag>` | `0` + 原币种 tag |
+
+无预设零值的类型（例如函数类型）会在 `var default` 下报错——必须显式赋值。
+
+### var default <expr> 一键赋值
+
+```
+var default 1
+  a: int      // 1
+  b: int := 99 // 覆盖块级默认 -> 99
+  c: int      // 1
+endvar
+```
+
+- `<expr>` 只求值一次，副作用不重复执行
+- 单项 `:= v` 优先级高于块级默认
+- 表达式类型需要能赋给每个变量类型；不匹配（`var default "hi"` + `a: int`）立即报错
+
+---

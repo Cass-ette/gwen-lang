@@ -133,6 +133,15 @@ class VarDecl:
     type_name: Optional[Any] = None
     value: Any = None
     is_const: bool = False
+    is_uninit: bool = False  # declared without value, reads before assign error
+    line: int = 0
+
+@dataclass
+class VarBlock:
+    """var [default [<expr>]] ... endvar - batch declarations."""
+    decls: List[Any] = field(default_factory=list)  # list of VarDecl
+    default_mode: str = "none"  # "none" | "zero" | "value"
+    default_value: Any = None   # expr when mode == "value"
     line: int = 0
 
 @dataclass

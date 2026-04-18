@@ -81,6 +81,8 @@ class Parser:
             return self.parse_const()
         if tok.type == TokenType.ARENA:
             return self.parse_arena()
+        if tok.type == TokenType.VAR:
+            return self.parse_var_block()
         # contextual keyword: type Alias = ExistingType
         if tok.type == TokenType.IDENTIFIER and tok.value == "type":
             next_tok = self.tokens[self.pos + 1] if self.pos + 1 < len(self.tokens) else None
@@ -137,15 +139,18 @@ class Parser:
                 values.append(self.parse_expr())
             return ast.Assignment(targets=targets, values=values, line=tok.line)
 
-        # Check for typed var decl: x: int := 42
+        # Check for typed var decl: x: int := 42  OR  x: int  (uninit)
         if self.at(TokenType.COLON) and isinstance(expr, ast.Identifier):
             self.advance()
             type_node = self.parse_type()
             value = None
+            is_uninit = True
             if self.at(TokenType.ASSIGN):
                 self.advance()
                 value = self.parse_expr()
-            return ast.VarDecl(name=expr.name, type_name=type_node, value=value, line=tok.line)
+                is_uninit = False
+            return ast.VarDecl(name=expr.name, type_name=type_node, value=value,
+                               is_uninit=is_uninit, line=tok.line)
 
         return ast.ExprStmt(expr=expr, line=tok.line)
 
@@ -643,6 +648,40 @@ class Parser:
         self.expect(TokenType.EQ)
         target = self.parse_type()
         return ast.TypeAlias(name=name, target=target, line=tok.line)
+
+    def parse_var_block(self) -> ast.VarBlock:
+        """Parse var [default [<expr>]] NAME : TYPE (newline ...)* endvar."""
+        tok = self.expect(TokenType.VAR)
+        default_mode = "none"
+        default_value = None
+        if self.at(TokenType.DEFAULT):
+            self.advance()
+            default_mode = "zero"
+            # Peek: if next non-newline token is an expression (not NEWLINE), parse it
+            if not self.at(TokenType.NEWLINE):
+                default_mode = "value"
+                default_value = self.parse_expr()
+        self.skip_newlines()
+        decls: List[ast.VarDecl] = []
+        while not self.at(TokenType.ENDVAR):
+            if self.at(TokenType.EOF):
+                raise ParseError("Unexpected EOF in var block", self.peek())
+            name_tok = self.expect(TokenType.IDENTIFIER)
+            self.expect(TokenType.COLON)
+            type_node = self.parse_type()
+            value = None
+            is_uninit = True
+            if self.at(TokenType.ASSIGN):
+                self.advance()
+                value = self.parse_expr()
+                is_uninit = False
+            decls.append(ast.VarDecl(name=name_tok.value, type_name=type_node,
+                                     value=value, is_uninit=is_uninit,
+                                     line=name_tok.line))
+            self.skip_newlines()
+        self.expect(TokenType.ENDVAR)
+        return ast.VarBlock(decls=decls, default_mode=default_mode,
+                            default_value=default_value, line=tok.line)
 
     def parse_parallel(self) -> ast.ParallelStmt:
         tok = self.expect(TokenType.PARALLEL)

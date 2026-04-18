@@ -21,6 +21,19 @@ INT_RANGES = {
 PRECISION_TYPES = {"float32", "float64", "int8", "int16", "int32", "int64",
                    "uint8", "uint16", "uint32", "uint64"}
 
+BASE_CHECKED_TYPES = {"int", "float", "string", "bool"}
+
+
+def needs_type_check(type_name: Optional[str]) -> bool:
+    """Whether coerce_to_type should validate values against this type."""
+    if type_name is None:
+        return False
+    if type_name in PRECISION_TYPES or type_name in BASE_CHECKED_TYPES:
+        return True
+    if is_money_type(type_name):
+        return True
+    return False
+
 # --- Money type ---
 MONEY_SCALE = 10_000  # 4 decimal places
 MONEY_MIN, MONEY_MAX = INT_RANGES["int64"]  # stored as int64
@@ -33,6 +46,26 @@ def is_money_type(type_name: Optional[str]) -> bool:
 def money_currency(type_name: str) -> str:
     """Extract currency tag from 'money<USD>' -> 'USD'."""
     return type_name[len("money<"):-1]
+
+
+def zero_value(type_name: Optional[str], line: int = 0) -> Any:
+    """Return the zero value for a type. Raises for types without well-defined zeros."""
+    if type_name is None:
+        raise GwenError("Cannot infer zero value without type annotation", line)
+    if type_name in ("int", "int8", "int16", "int32", "int64",
+                     "uint8", "uint16", "uint32", "uint64"):
+        return 0
+    if type_name in ("float", "float32", "float64"):
+        return 0.0
+    if type_name == "string":
+        return ""
+    if type_name == "bool":
+        return False
+    if type_name == "list" or type_name.startswith("list<"):
+        return []  # fresh list per call
+    if is_money_type(type_name):
+        return MoneyValue(raw=0, currency=money_currency(type_name))
+    raise GwenError(f"No default zero value for type '{type_name}'", line)
 
 
 def coerce_to_type(value: Any, type_name: str, line: int = 0) -> Any:
@@ -70,9 +103,29 @@ def coerce_to_type(value: Any, type_name: str, line: int = 0) -> Any:
             raise GwenError(f"Overflow: {i} out of range for {type_name} [{lo}, {hi}]", line)
         return i
     elif type_name == "int":
-        return int(value)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise GwenError(
+                f"Type mismatch: expected int, got {type(value).__name__}", line
+            )
+        return value
     elif type_name == "float":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise GwenError(
+                f"Type mismatch: expected float, got {type(value).__name__}", line
+            )
         return float(value)
+    elif type_name == "string":
+        if not isinstance(value, str):
+            raise GwenError(
+                f"Type mismatch: expected string, got {type(value).__name__}", line
+            )
+        return value
+    elif type_name == "bool":
+        if not isinstance(value, bool):
+            raise GwenError(
+                f"Type mismatch: expected bool, got {type(value).__name__}", line
+            )
+        return value
     else:
         return value  # unknown type, pass through
 
@@ -103,6 +156,20 @@ class ReturnSignal(Exception):
     """Used to unwind the call stack on return."""
     def __init__(self, value: Any):
         self.value = value
+
+
+class _UninitType:
+    """Sentinel for variables declared without value."""
+    _instance = None
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+    def __repr__(self):
+        return "<uninit>"
+
+
+UNINIT = _UninitType()
 
 
 class MoneyValue:
@@ -363,14 +430,47 @@ class Interpreter:
         elif isinstance(stmt, ast.VarDecl):
             if env.is_const(stmt.name):
                 raise GwenError(f"Cannot redeclare const variable: {stmt.name}", stmt.line)
-            value = self.eval_expr(stmt.value, env) if stmt.value else None
             type_name = self._resolve_alias(resolve_type_name(stmt.type_name))
-            if value is not None and type_name and (type_name in PRECISION_TYPES or is_money_type(type_name)):
-                value = coerce_to_type(value, type_name, stmt.line)
-            env.set(stmt.name, value)
-            env.set_type(stmt.name, type_name)
-            if stmt.is_const:
-                env.mark_const(stmt.name)
+            if stmt.is_uninit:
+                # Declared without value -> mark uninit; reads will error
+                env.set(stmt.name, UNINIT)
+                env.set_type(stmt.name, type_name)
+                if stmt.is_const:
+                    raise GwenError(f"Const variable '{stmt.name}' must be initialized", stmt.line)
+            else:
+                value = self.eval_expr(stmt.value, env) if stmt.value is not None else None
+                if value is not None and needs_type_check(type_name):
+                    value = coerce_to_type(value, type_name, stmt.line)
+                env.set(stmt.name, value)
+                env.set_type(stmt.name, type_name)
+                if stmt.is_const:
+                    env.mark_const(stmt.name)
+
+        elif isinstance(stmt, ast.VarBlock):
+            # Evaluate default_value once (for "value" mode); fresh for each var would
+            # surprise users since expression may have side effects.
+            shared_value = None
+            if stmt.default_mode == "value":
+                shared_value = self.eval_expr(stmt.default_value, env)
+            for d in stmt.decls:
+                if env.is_const(d.name):
+                    raise GwenError(f"Cannot redeclare const variable: {d.name}", d.line)
+                type_name = self._resolve_alias(resolve_type_name(d.type_name))
+                # Per-decl resolution: explicit := wins over block default
+                if d.value is not None:
+                    v = self.eval_expr(d.value, env)
+                    if needs_type_check(type_name):
+                        v = coerce_to_type(v, type_name, d.line)
+                elif stmt.default_mode == "zero":
+                    v = zero_value(type_name, d.line)
+                elif stmt.default_mode == "value":
+                    v = shared_value
+                    if needs_type_check(type_name):
+                        v = coerce_to_type(v, type_name, d.line)
+                else:
+                    v = UNINIT
+                env.set(d.name, v)
+                env.set_type(d.name, type_name)
 
         elif isinstance(stmt, ast.TypeAlias):
             target_name = self._resolve_alias(resolve_type_name(stmt.target))
@@ -522,7 +622,7 @@ class Interpreter:
                 if stmt.name in search_env.vars:
                     # Check type annotation and coerce if needed
                     type_name = search_env.get_type(stmt.name)
-                    if type_name and (type_name in PRECISION_TYPES or is_money_type(type_name)):
+                    if needs_type_check(type_name):
                         value = coerce_to_type(value, type_name, stmt.line)
                     search_env.vars[stmt.name] = value
                     found = True
@@ -531,7 +631,7 @@ class Interpreter:
                     # Found a call frame - check if it has the variable
                     if stmt.name in search_env.vars:
                         type_name = search_env.get_type(stmt.name)
-                        if type_name and (type_name in PRECISION_TYPES or is_money_type(type_name)):
+                        if needs_type_check(type_name):
                             value = coerce_to_type(value, type_name, stmt.line)
                         search_env.vars[stmt.name] = value
                         found = True
@@ -580,7 +680,7 @@ class Interpreter:
     def _coerce_if_typed(self, name: str, value: Any, line: int, env: Environment) -> Any:
         """If variable has a precision type annotation, coerce value to it."""
         type_name = env.get_local_type(name)
-        if type_name and (type_name in PRECISION_TYPES or is_money_type(type_name)):
+        if needs_type_check(type_name):
             return coerce_to_type(value, type_name, line)
         return value
 
@@ -594,7 +694,10 @@ class Interpreter:
         if isinstance(expr, ast.BoolLiteral):
             return expr.value
         if isinstance(expr, ast.Identifier):
-            return env.get(expr.name)
+            val = env.get(expr.name)
+            if val is UNINIT:
+                raise GwenError(f"'{expr.name}' read before assignment", expr.line)
+            return val
         if isinstance(expr, ast.ListLiteral):
             return [self.eval_expr(e, env) for e in expr.elements]
 
