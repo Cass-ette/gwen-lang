@@ -304,6 +304,9 @@ class Interpreter:
         self.global_env.set("float", self._builtin_float)
         self.global_env.set("append", self._builtin_append)
         self.global_env.set("type", self._builtin_type)
+        self.global_env.set("sort", self._builtin_sort)
+        self.global_env.set("asc", self._builtin_asc)
+        self.global_env.set("desc", self._builtin_desc)
 
     def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
         """Follow type alias chain to canonical type name."""
@@ -360,6 +363,40 @@ class Interpreter:
         if isinstance(obj, (GwenFunction, GwenLambda)):
             return "func"
         return "unknown"
+
+    def _builtin_sort(self, lst, cmp):
+        """Stable sort returning new list. cmp is a Gwen function (a, b) -> bool meaning a < b."""
+        import functools
+        if not isinstance(lst, list):
+            raise GwenError(f"sort() requires a list, got {type(lst).__name__}")
+        # cmp is a GwenLambda or GwenFunction that returns bool
+        def key_func(a, b):
+            # Call the Gwen comparison function
+            if isinstance(cmp, GwenLambda):
+                return self.call_lambda(cmp, [a, b])
+            elif isinstance(cmp, GwenFunction):
+                return self.call_function(cmp, [a, b])
+            else:
+                # cmp is a Python callable (for asc/desc builtins)
+                return cmp(a, b)
+        # Use cmp_to_key for Python sorted with custom comparator
+        # Our cmp returns bool (a < b), convert to -1/0/1 for cmp_to_key
+        def py_cmp(a, b):
+            if key_func(a, b):  # a < b
+                return -1
+            if key_func(b, a):  # b < a (a > b)
+                return 1
+            return 0
+        return sorted(lst, key=functools.cmp_to_key(py_cmp))
+
+    def _builtin_asc(self, a, b):
+        """Ascending comparison: a < b"""
+        # Support for primitive types
+        return a < b
+
+    def _builtin_desc(self, a, b):
+        """Descending comparison: a > b"""
+        return a > b
 
     def run(self, program: ast.Program):
         self.exec_block(program.statements, self.global_env)

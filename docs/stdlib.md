@@ -91,10 +91,54 @@ home := env("HOME")
 
 ## 实现计划
 
-1. **阶段 1**（当前）：核心内置稳定
-2. **阶段 2**：实现 `list.gw`、`string.gw`
-3. **阶段 3**：`math.gw`、`io.gw`
-4. **阶段 4**：包管理器支持第三方模块
+| 阶段 | 状态 | 内容 | 具体函数 |
+|------|------|------|----------|
+| **阶段 1** | ✅ 完成 | 核心内置 | `write/read/len/append/str/int/float/type` |
+| **阶段 2** | 🚧 进行中 | 列表+字符串核心 | **列表**: `sort`, `reverse`, `pop`, `insert`, `concat`<br>**字符串**: `split`, `join`, `substring`, `contains`, `trim`, `replace` |
+| **阶段 3** | 📋 待设计 | 数学+字典 | **数学**: `abs`, `min`, `max`, `sqrt`, `floor`, `ceil`, `pow`<br>**字典**: `dict[K,V]`, `has_key`, `keys`, `values` |
+| **阶段 4** | 📋 远期 | 文件+高级迭代 | **文件**: `read_file`, `write_file`<br>**迭代**: `map`, `filter`, `range`, `enumerate` |
+| **阶段 5** | 📋 远期 | 包管理器 | 第三方模块支持 |
+
+### 阶段 2 详细设计（实现中）
+
+#### 列表函数（`use from list`）
+
+| 函数 | 签名 | 行为 | 复杂度 |
+|------|------|------|--------|
+| `sort` | `sort(lst: list[T], cmp: (T,T)->bool) -> list[T]` | **稳定排序**，返回新列表，原列表不变，**必须显式比较器** | O(n log n) |
+| `asc` | 比较器 | 预定义 `(a, b) => a < b` | O(1) |
+| `desc` | 比较器 | 预定义 `(a, b) => a > b` | O(1) |
+| `reverse` | `reverse(lst: list[T]) -> list[T]` | 返回逆序新列表 | O(n) |
+| `pop` | `pop(lst: list[T]) -> T` | 移除并返回末尾元素 | O(1) |
+| `insert` | `insert(lst: list[T], idx: int, item: T) -> void` | 在索引处插入 | O(n) |
+| `concat` | `concat(a: list[T], b: list[T]) -> list[T]` | 连接两个列表 | O(a+b) |
+
+**sort 设计哲学**：
+- ✅ **必须显式比较器**：无默认排序规则，不写 `cmp` 报错（审计友好）
+- ✅ **返回新列表**：原列表不变，数据流可追踪
+- ✅ **稳定排序**：相等元素相对顺序保持（Timsort）
+- ✅ **预定义比较器**：`asc`/`desc` 显式引入，减少重复但意图明确
+
+```gwen
+use sort, asc, desc from list
+
+sorted := sort(nums, asc)                    // 升序
+sorted := sort(nums, desc)                   // 降序
+sorted := sort(users, (u1, u2) => u1.score < u2.score)  // 自定义字段
+```
+
+#### 字符串函数（`use from string`）
+
+| 函数 | 签名 | 行为 | 边界 |
+|------|------|------|------|
+| `split` | `split(s: string, sep: string) -> list[string]` | 按分隔符拆分 | `sep` 为空时按字符拆 |
+| `join` | `join(parts: list[string], sep: string) -> string` | 用分隔符连接 | 空列表返回空串 |
+| `substring` | `substring(s: string, start: int, end: int) -> string` | 提取子串 | 越界按实际长度截断 |
+| `contains` | `contains(s: string, substr: string) -> bool` | 子串存在检查 | 空串视为包含 |
+| `trim` | `trim(s: string) -> string` | 去首尾空白 | 空白 = space/tab/newline |
+| `replace` | `replace(s: string, old: string, new: string) -> string` | 替换所有出现 | 无匹配返回原串 |
+
+**待实现**：`split`/`join` 是否提供 `limit: int` 参数（限制分割次数）？暂不实现，按需再加。
 
 ## 与 OOP 的关系
 

@@ -519,6 +519,67 @@ endfunc""")
     assert out == "1 0"
 
 
+# --- Sort tests ---
+
+def test_sort_basic_asc():
+    out = run("""func main()
+  nums := [3, 1, 4, 1, 5, 9, 2, 6]
+  sorted := sort(nums, asc)
+  write(sorted)
+  write(nums)  // original unchanged
+endfunc""")
+    lines = out.split("\n")
+    assert lines[0] == "[1, 1, 2, 3, 4, 5, 6, 9]"
+    assert lines[1] == "[3, 1, 4, 1, 5, 9, 2, 6]"
+
+
+def test_sort_desc():
+    out = run("""func main()
+  nums := [3, 1, 4, 1, 5]
+  sorted := sort(nums, desc)
+  write(sorted)
+endfunc""")
+    assert out == "[5, 4, 3, 1, 1]"
+
+
+def test_sort_custom_comparator():
+    # Sort by second element of inner list
+    out = run("""func by_second(a: list[int], b: list[int]) -> bool
+  return a[1] < b[1]
+endfunc
+
+func main()
+  pairs := [[3, 10], [1, 5], [2, 7]]
+  sorted := sort(pairs, by_second)
+  write(sorted)
+endfunc""")
+    assert "[1, 5]" in out
+
+
+def test_sort_stable():
+    # Stable sort: equal elements keep relative order
+    out = run("""func by_first(a: list, b: list) -> bool
+  return a[0] < b[0]
+endfunc
+
+func main()
+  items := [[1, 10], [2, 20], [1, 30], [2, 40]]
+  sorted := sort(items, by_first)
+  write(sorted)
+endfunc""")
+    # Should preserve order: [1, 10] before [1, 30], [2, 20] before [2, 40]
+    assert "[1, 10]" in out and "[1, 30]" in out
+
+
+def test_sort_empty():
+    out = run("""func main()
+  empty := []
+  sorted := sort(empty, asc)
+  write(sorted)
+endfunc""")
+    assert out == "[]"
+
+
 # --- Multiple return values tests ---
 
 def test_multiple_return_basic():
