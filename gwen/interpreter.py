@@ -21,9 +21,42 @@ INT_RANGES = {
 PRECISION_TYPES = {"float32", "float64", "int8", "int16", "int32", "int64",
                    "uint8", "uint16", "uint32", "uint64"}
 
+# --- Money type ---
+MONEY_SCALE = 10_000  # 4 decimal places
+MONEY_MIN, MONEY_MAX = INT_RANGES["int64"]  # stored as int64
+
+
+def is_money_type(type_name: Optional[str]) -> bool:
+    return type_name is not None and type_name.startswith("money<") and type_name.endswith(">")
+
+
+def money_currency(type_name: str) -> str:
+    """Extract currency tag from 'money<USD>' -> 'USD'."""
+    return type_name[len("money<"):-1]
+
 
 def coerce_to_type(value: Any, type_name: str, line: int = 0) -> Any:
     """Coerce a value to the specified explicit precision type."""
+    if is_money_type(type_name):
+        currency = money_currency(type_name)
+        if isinstance(value, MoneyValue):
+            if value.currency != currency:
+                raise GwenError(
+                    f"Currency mismatch: cannot assign money<{value.currency}> to money<{currency}>",
+                    line,
+                )
+            return value
+        # float / int literal -> MoneyValue
+        try:
+            raw = round(float(value) * MONEY_SCALE)
+        except (TypeError, ValueError):
+            raise GwenError(f"Cannot convert {type(value).__name__} to money<{currency}>", line)
+        if raw < MONEY_MIN or raw > MONEY_MAX:
+            raise GwenError(
+                f"Overflow: {value} out of range for money<{currency}> (int64-backed, scale=4)",
+                line,
+            )
+        return MoneyValue(raw=raw, currency=currency)
     if type_name == "float32":
         # Truncate to IEEE 754 single precision
         f = float(value)
@@ -51,6 +84,11 @@ def resolve_type_name(type_node: Any) -> Optional[str]:
     if isinstance(type_node, ast.TypeName):
         return type_node.name
     if isinstance(type_node, ast.GenericType):
+        # money<USD> -> "money<USD>"; list<int> -> "list"
+        if type_node.base == "money" and len(type_node.params) == 1:
+            inner = resolve_type_name(type_node.params[0])
+            if inner:
+                return f"money<{inner}>"
         return type_node.base
     return None
 
@@ -65,6 +103,33 @@ class ReturnSignal(Exception):
     """Used to unwind the call stack on return."""
     def __init__(self, value: Any):
         self.value = value
+
+
+class MoneyValue:
+    """Money value with currency tag, stored as int64 scaled by MONEY_SCALE."""
+    __slots__ = ("raw", "currency")
+
+    def __init__(self, raw: int, currency: str):
+        self.raw = raw
+        self.currency = currency
+
+    def as_float(self) -> float:
+        return self.raw / MONEY_SCALE
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __str__(self) -> str:
+        # "19.99 USD" or "20 USD"
+        s = f"{self.as_float():.4f}"
+        # strip trailing zeros but keep at least 2 decimals
+        if "." in s:
+            s = s.rstrip("0")
+            if s.endswith("."):
+                s += "00"
+            elif len(s.split(".")[1]) == 1:
+                s += "0"
+        return f"{s} {self.currency}"
 
 
 class OkValue:
@@ -219,6 +284,8 @@ class Interpreter:
             return "string"
         if isinstance(obj, list):
             return "list"
+        if isinstance(obj, MoneyValue):
+            return f"money<{obj.currency}>"
         if isinstance(obj, OkValue):
             return "ok"
         if isinstance(obj, ErrValue):
@@ -298,7 +365,7 @@ class Interpreter:
                 raise GwenError(f"Cannot redeclare const variable: {stmt.name}", stmt.line)
             value = self.eval_expr(stmt.value, env) if stmt.value else None
             type_name = self._resolve_alias(resolve_type_name(stmt.type_name))
-            if value is not None and type_name and type_name in PRECISION_TYPES:
+            if value is not None and type_name and (type_name in PRECISION_TYPES or is_money_type(type_name)):
                 value = coerce_to_type(value, type_name, stmt.line)
             env.set(stmt.name, value)
             env.set_type(stmt.name, type_name)
@@ -455,7 +522,7 @@ class Interpreter:
                 if stmt.name in search_env.vars:
                     # Check type annotation and coerce if needed
                     type_name = search_env.get_type(stmt.name)
-                    if type_name and type_name in PRECISION_TYPES:
+                    if type_name and (type_name in PRECISION_TYPES or is_money_type(type_name)):
                         value = coerce_to_type(value, type_name, stmt.line)
                     search_env.vars[stmt.name] = value
                     found = True
@@ -464,7 +531,7 @@ class Interpreter:
                     # Found a call frame - check if it has the variable
                     if stmt.name in search_env.vars:
                         type_name = search_env.get_type(stmt.name)
-                        if type_name and type_name in PRECISION_TYPES:
+                        if type_name and (type_name in PRECISION_TYPES or is_money_type(type_name)):
                             value = coerce_to_type(value, type_name, stmt.line)
                         search_env.vars[stmt.name] = value
                         found = True
@@ -513,7 +580,7 @@ class Interpreter:
     def _coerce_if_typed(self, name: str, value: Any, line: int, env: Environment) -> Any:
         """If variable has a precision type annotation, coerce value to it."""
         type_name = env.get_local_type(name)
-        if type_name and type_name in PRECISION_TYPES:
+        if type_name and (type_name in PRECISION_TYPES or is_money_type(type_name)):
             return coerce_to_type(value, type_name, line)
         return value
 
@@ -571,7 +638,85 @@ class Interpreter:
 
         raise GwenError(f"Unknown expression type: {type(expr).__name__}")
 
+    def _eval_money_binary(self, op: str, left: Any, right: Any, line: int) -> Any:
+        lm = isinstance(left, MoneyValue)
+        rm = isinstance(right, MoneyValue)
+
+        # Comparisons: require same currency
+        if op in ("=", "!=", "<", ">", "<=", ">="):
+            if not (lm and rm):
+                raise GwenError(
+                    f"Cannot compare money with non-money value ({op})", line,
+                )
+            if left.currency != right.currency:
+                raise GwenError(
+                    f"Currency mismatch: money<{left.currency}> {op} money<{right.currency}>",
+                    line,
+                )
+            a, b = left.raw, right.raw
+            return {
+                "=": a == b, "!=": a != b,
+                "<": a < b, ">": a > b,
+                "<=": a <= b, ">=": a >= b,
+            }[op]
+
+        if op in ("+", "-"):
+            if not (lm and rm):
+                raise GwenError(
+                    f"Cannot {op} money with non-money value", line,
+                )
+            if left.currency != right.currency:
+                raise GwenError(
+                    f"Currency mismatch: money<{left.currency}> {op} money<{right.currency}>",
+                    line,
+                )
+            raw = left.raw + right.raw if op == "+" else left.raw - right.raw
+            if raw < MONEY_MIN or raw > MONEY_MAX:
+                raise GwenError(f"Money overflow in {op}", line)
+            return MoneyValue(raw=raw, currency=left.currency)
+
+        if op == "*":
+            if lm and rm:
+                raise GwenError("Cannot multiply money by money", line)
+            money = left if lm else right
+            scalar = right if lm else left
+            if not isinstance(scalar, (int, float)) or isinstance(scalar, bool):
+                raise GwenError("Money can only be multiplied by int or float", line)
+            raw = round(money.raw * scalar)
+            if raw < MONEY_MIN or raw > MONEY_MAX:
+                raise GwenError("Money overflow in *", line)
+            return MoneyValue(raw=raw, currency=money.currency)
+
+        if op == "/":
+            if lm and rm:
+                # money / money -> float ratio (same currency required)
+                if left.currency != right.currency:
+                    raise GwenError(
+                        f"Currency mismatch in division: money<{left.currency}> / money<{right.currency}>",
+                        line,
+                    )
+                if right.raw == 0:
+                    raise GwenError("Division by zero", line)
+                return left.raw / right.raw
+            if rm:
+                raise GwenError("Cannot divide non-money by money", line)
+            # money / scalar
+            if not isinstance(right, (int, float)) or isinstance(right, bool):
+                raise GwenError("Money can only be divided by int or float", line)
+            if right == 0:
+                raise GwenError("Division by zero", line)
+            raw = round(left.raw / right)
+            if raw < MONEY_MIN or raw > MONEY_MAX:
+                raise GwenError("Money overflow in /", line)
+            return MoneyValue(raw=raw, currency=left.currency)
+
+        raise GwenError(f"Operator {op} not supported on money values", line)
+
     def eval_binary(self, op: str, left: Any, right: Any, line: int) -> Any:
+        # Money arithmetic dispatch (before numeric promotion)
+        if isinstance(left, MoneyValue) or isinstance(right, MoneyValue):
+            return self._eval_money_binary(op, left, right, line)
+
         # Type promotion: if one side is float, promote the other to float
         if op in ("+", "-", "*", "/"):
             if isinstance(left, int) and isinstance(right, float):
@@ -619,6 +764,25 @@ class Interpreter:
     def eval_as(self, expr: ast.AsExpr, env: Environment) -> Any:
         value = self.eval_expr(expr.expr, env)
         target = expr.type_name
+        # Forbid money -> money<other_currency>
+        if isinstance(value, MoneyValue) and is_money_type(target):
+            target_currency = money_currency(target)
+            if value.currency != target_currency:
+                return ErrValue(
+                    f"Cannot convert money<{value.currency}> to money<{target_currency}> "
+                    f"(explicit exchange rate required)"
+                )
+            return OkValue(value)
+        # Money -> numeric: strip currency, give raw float/int
+        if isinstance(value, MoneyValue):
+            if target == "float" or target == "float64":
+                return OkValue(value.as_float())
+            if target == "float32":
+                return OkValue(coerce_to_type(value.as_float(), "float32", expr.line))
+            if target in INT_RANGES:
+                return OkValue(coerce_to_type(round(value.as_float()), target, expr.line))
+            if target == "int":
+                return OkValue(round(value.as_float()))
         try:
             if target == "int":
                 return OkValue(int(value))
@@ -629,6 +793,9 @@ class Interpreter:
             if target == "bool":
                 return OkValue(self.is_truthy(value))
             if target in PRECISION_TYPES:
+                return OkValue(coerce_to_type(value, target, expr.line))
+            # Numeric -> money<X>
+            if is_money_type(target):
                 return OkValue(coerce_to_type(value, target, expr.line))
             return ErrValue(f"Unknown type: {target}")
         except GwenError:

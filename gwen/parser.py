@@ -221,7 +221,17 @@ class Parser:
         while self.at(TokenType.AS):
             self.advance()
             type_tok = self.expect(TokenType.IDENTIFIER)
-            expr = ast.AsExpr(expr, type_tok.value, line=expr.line)
+            name = type_tok.value
+            # Optional generic tag: as money<USD>
+            if self.at(TokenType.LT):
+                self.advance()
+                parts = [self.expect(TokenType.IDENTIFIER).value]
+                while self.at(TokenType.COMMA):
+                    self.advance()
+                    parts.append(self.expect(TokenType.IDENTIFIER).value)
+                self.expect(TokenType.GT)
+                name = f"{name}<{','.join(parts)}>"
+            expr = ast.AsExpr(expr, name, line=expr.line)
         return expr
 
     def parse_postfix(self) -> Any:

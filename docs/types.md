@@ -124,6 +124,49 @@ list<string>           // 字符串列表
 
 ---
 
+## 货币类型 `money<Tag>`
+
+带币种 tag 的定点数，专为金额/会计场景设计：
+
+```
+price: money<USD> := 19.99
+cny:   money<CNY> := 144.0
+
+total := price + price      // ok，同币种
+// bad := price + cny       // 报错：Currency mismatch
+
+doubled := price * 2        // money × 标量 → money
+ratio   := price / price    // money ÷ money → float（比率）
+// p2    := price * price   // 报错：金额乘金额无语义
+
+f := price as float64       // 允许：丢掉币种，拿原始数值
+// e := price as money<EUR> // 返回 err：拒绝隐式汇率转换
+```
+
+**规则**
+
+| 操作 | 行为 |
+|------|------|
+| `money<X> + money<X>` | ok |
+| `money<X> + money<Y>` | 报错（币种不匹配） |
+| `money<X> + scalar` | 报错 |
+| `money<X> * int/float` | ok，结果 `money<X>` |
+| `money<X> * money<*>` | 报错 |
+| `money<X> / int/float` | ok |
+| `money<X> / money<X>` | 结果 `float`（比率） |
+| 比较 `=` `<` `>` | 同币种才允许 |
+| `as money<Y>` | 不同币种时返回 `err`（不隐式换汇） |
+| `as float64` / `as int64` | 允许，丢掉币种 |
+
+**实现细节**
+
+- 内部存 `int64`，值 = 实际金额 × 10_000（scale=4）
+- 溢出按 int64 范围检测，超出报错
+- Tag 是自由字符串（`USD`/`CNY`/`JPY`/`BTC` 都行），无白名单
+- 不自带汇率表，跨币种转换请写显式函数
+
+---
+
 ## 实现状态
 
 | 特性 | 状态 | 备注 |
@@ -137,4 +180,5 @@ list<string>           // 字符串列表
 | `list<T>` 泛型 | ✅ 已实现 | 嵌套支持 |
 | 函数类型 `(T) -> T` | ✅ 已实现 | 匿名函数支持 |
 | 类型别名 `type` | ✅ 已实现 | 透明别名，继承精度约束 |
+| 货币类型 `money<Tag>` | ✅ 已实现 | int64×10_000，带币种 tag |
 | 混合精度运算检查 | 📋 设计阶段 | 目前允许混用 |

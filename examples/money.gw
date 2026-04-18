@@ -1,0 +1,41 @@
+// money 类型示例：带币种 tag 的定点数
+//
+// - 内部 int64 × 10_000（4 位小数）
+// - 不同币种不能互相运算（审计友好）
+// - 不自带汇率表，跨币种转换需显式函数
+
+func main()
+  @basics
+  price: money<USD> := 19.99
+  tax:   money<USD> := 1.5
+  total := price + tax
+  write(total)               // 21.49 USD
+  write(type(total))         // money<USD>
+
+  @scalar_ops
+  doubled := price * 2       // 金额 × 数值 → money<USD>
+  half    := price / 2
+  write(doubled)             // 39.98 USD
+  write(half)                // 9.995 USD
+
+  @ratio
+  ratio := tax / price       // 同币种相除 → float（比率）
+  write(ratio)
+
+  @cross_currency_forbidden
+  cny: money<CNY> := 144.0
+  // total2 := price + cny   // 报错：Currency mismatch
+
+  @conversion
+  raw := price as float64
+  match raw
+    when ok(v) then write("raw: ", v)
+    when err(e) then write("err: ", e)
+  endmatch
+
+  bad := price as money<EUR>
+  match bad
+    when ok(v) then write("converted: ", v)
+    when err(e) then write("correctly rejected: ", e)
+  endmatch
+endfunc
