@@ -750,6 +750,63 @@ endfunc""")
     assert out == "hello world"
 
 
+def test_abs_int():
+    out = run("""func main()
+  write(abs(-5))
+  write(abs(5))
+  write(abs(0))
+endfunc""")
+    lines = out.split("\n")
+    assert lines == ["5", "5", "0"]
+
+
+def test_abs_float():
+    out = run("""func main()
+  write(abs(-3.14))
+  write(abs(2.71))
+endfunc""")
+    lines = out.split("\n")
+    assert lines == ["3.14", "2.71"]
+
+
+def test_min_max():
+    out = run("""func main()
+  write(min(3, 5))
+  write(max(3, 5))
+  write(min("apple", "banana"))
+  write(max("apple", "banana"))
+endfunc""")
+    lines = out.split("\n")
+    assert lines == ["3", "5", "apple", "banana"]
+
+
+def test_sqrt_basic():
+    out = run("""func main()
+  write(sqrt(4.0))
+  write(sqrt(2.0))
+endfunc""")
+    lines = out.split("\n")
+    # sqrt(4.0) = 2.0, sqrt(2.0) ≈ 1.414
+    assert float(lines[0]) == 2.0
+    assert 1.41 < float(lines[1]) < 1.42
+
+
+def test_sqrt_requires_float():
+    import pytest
+    with pytest.raises(Exception, match="requires float"):
+        run("""func main()
+  x := sqrt(4)
+endfunc""")
+
+
+def test_min_max_type_mismatch():
+    import pytest
+    with pytest.raises(Exception, match="same type"):
+        run("""func main()
+  x := min(1, 2.0)
+endfunc""")
+
+
 # --- Multiple return values tests ---
 
 def test_multiple_return_basic():

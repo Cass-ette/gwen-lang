@@ -317,6 +317,10 @@ class Interpreter:
         self.global_env.set("contains", self._builtin_contains)
         self.global_env.set("trim", self._builtin_trim)
         self.global_env.set("replace", self._builtin_replace)
+        self.global_env.set("abs", self._builtin_abs)
+        self.global_env.set("min", self._builtin_min)
+        self.global_env.set("max", self._builtin_max)
+        self.global_env.set("sqrt", self._builtin_sqrt)
 
     def _resolve_alias(self, type_name: Optional[str]) -> Optional[str]:
         """Follow type alias chain to canonical type name."""
@@ -506,6 +510,43 @@ class Interpreter:
         if not isinstance(new, str):
             raise GwenError(f"replace() new must be a string, got {type(new).__name__}")
         return s.replace(old, new)
+
+    def _builtin_abs(self, x):
+        """Absolute value for int and float."""
+        if isinstance(x, bool):
+            raise GwenError("abs() does not accept bool")
+        if isinstance(x, int):
+            return abs(x)
+        if isinstance(x, float):
+            return abs(x)
+        raise GwenError(f"abs() requires int or float, got {type(x).__name__}")
+
+    def _builtin_min(self, a, b):
+        """Minimum of two values (supports int, float, string by < comparison)."""
+        if type(a) != type(b):
+            raise GwenError(f"min() arguments must be same type, got {type(a).__name__} and {type(b).__name__}")
+        if a < b:
+            return a
+        return b
+
+    def _builtin_max(self, a, b):
+        """Maximum of two values (supports int, float, string by > comparison)."""
+        if type(a) != type(b):
+            raise GwenError(f"max() arguments must be same type, got {type(a).__name__} and {type(b).__name__}")
+        if a > b:
+            return a
+        return b
+
+    def _builtin_sqrt(self, x):
+        """Square root for float. Requires explicit float input (no implicit int conversion)."""
+        import math
+        if isinstance(x, bool):
+            raise GwenError("sqrt() does not accept bool")
+        if isinstance(x, int):
+            raise GwenError("sqrt() requires float, got int; use sqrt(float(x)) for explicit conversion")
+        if isinstance(x, float):
+            return math.sqrt(x)
+        raise GwenError(f"sqrt() requires float, got {type(x).__name__}")
 
     def run(self, program: ast.Program):
         self.exec_block(program.statements, self.global_env)

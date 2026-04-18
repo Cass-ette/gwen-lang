@@ -97,11 +97,35 @@ endfunc
 ## 内置函数
 
 ```
+// I/O
 write(x, ...)        // 输出到标准输出
-read(prompt)         // 读取一行输入（可选提示语）
-len(list)            // 列表长度
-append(list, item)   // 向列表追加元素
-str(x), int(x), float(x), type(x)  // 类型相关函数
+read(prompt)         // 读取一行输入
+
+// 列表
+len(list)            // 长度
+append(list, item)   // 追加
+pop(list)            // 弹出末尾
+insert(list, idx, item)  // 插入
+sort(list, cmp)      // 稳定排序（返回新列表）
+reversed(list)       // 逆序（返回新列表）
+concat(a, b)         // 连接（返回新列表）
+
+// 字符串
+split(s, sep)        // 拆分
+join(parts, sep)     // 连接
+substring(s, start, end)  // 子串
+contains(s, substr) // 包含检查
+trim(s)              // 去空白
+replace(s, old, new) // 替换
+
+// 数学
+abs(x)               // 绝对值（int/float）
+min(a, b)            // 最小值（同类型）
+max(a, b)            // 最大值（同类型）
+sqrt(x)              // 平方根（仅 float，需显式转换）
+
+// 类型
+str(x), int(x), float(x), type(x)
 ```
 
 ---
