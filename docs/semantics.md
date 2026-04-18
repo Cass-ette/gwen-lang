@@ -63,7 +63,7 @@
 - `money[T] * money[T]`（无意义）
 - `money[T] * float`（精度损失，需显式 `as float`）
 - `string + int`（必须显式 `str(n)`）
-- `list + list`（无 `+` 操作，用 `concat`）
+- `list + non-list`（类型不匹配）
 
 ### 2.2 比较运算
 
@@ -73,6 +73,7 @@
 | `<`, `>`, `<=`, `>=` | `int/int`, `float/float`, `int/float`, `string/string` | 全序比较 |
 
 **注意**：
+- `string` 比较按**字典序（lexicographical）**，逐字符比较 Unicode 码点值
 - 复合类型（list/dict）**不支持** `<` 等比较（无全序定义）
 - `money[T]` 仅支持同币种比较
 
@@ -165,6 +166,8 @@
 
 ### 6.2 列表操作
 
+**拼接**：`list + list` 是主要拼写（返回新列表）。`concat(a, b)` 保留作为函数式备选，两者等价。
+
 | 函数 | 签名 | 副作用 |
 |------|------|--------|
 | `append(lst, item)` | `(list[T], T) -> void` | ✅ 原地修改 |
@@ -172,7 +175,7 @@
 | `insert(lst, idx, item)` | `(list[T], int, T) -> void` | ✅ 原地修改 |
 | `sort(lst, cmp)` | `(list[T], (T,T)->bool) -> list[T]` | ❌ 返回新列表 |
 | `reversed(lst)` | `(list[T]) -> list[T]` | ❌ 返回新列表 |
-| `concat(a, b)` | `(list[T], list[T]) -> list[T]` | ❌ 返回新列表 |
+| `concat(a, b)` | `(list[T], list[T]) -> list[T]` | ❌ 返回新列表（同 `a + b`） |
 
 ### 6.3 字符串操作
 
@@ -180,7 +183,7 @@
 |------|------|------|
 | `split(s, sep)` | `(string, string) -> list[string]` | `sep=""` 按字符拆 |
 | `join(parts, sep)` | `(list[string], string) -> string` | |
-| `substring(s, start, end)` | `(string, int, int) -> string` | 越界报错 |
+| `substring(s, start, end)` | `(string, int, int) -> string` | **双闭区间** `[start, end]`，越界报错 |
 | `contains(s, substr)` | `(string, string) -> bool` | |
 | `trim(s)` | `(string) -> string` | 去首尾空白 |
 | `replace(s, old, new)` | `(string, string, string) -> string` | 替换所有 |
