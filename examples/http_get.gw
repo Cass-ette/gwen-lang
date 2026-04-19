@@ -1,0 +1,8 @@
+use http
+
+func main()
+  match http.get("https://example.com")
+    when ok(body) => write("bytes:", len(body))
+    when err(e) => write("http failed:", e)
+  endmatch
+endfunc

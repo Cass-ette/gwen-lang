@@ -16,7 +16,7 @@ Gwen 现在的标准库还处在**过渡态**：
 - 语言已经有一批稳定可用的“标准能力”
 - 但其中很多能力当前还是**解释器内建**
 - `list/string/math/dict/io` 今天仍默认可用，不需要 `use`
-- 同时，官方 `list/string/math/dict/io` 模块名现在也已经可导入
+- 同时，官方 `list/string/math/dict/io/http` 模块名现在也已经可导入
 - Go runtime 现在也已经接通第一批真正依赖宿主环境的基础模块：`os` / `time`
 - `os` / `time` 已经收口为**模块专属能力**，需要显式 `use`
 - 也**不需要**任何 `#include` / 头文件 / C++ 风格声明
@@ -75,11 +75,12 @@ use append from list
 | `io` | `readfile` `writefile` `appendfile` | 已 builtin，并已支持官方 `io` 模块导入 |
 | `os` | `args` `cwd` `getenv` | Go runtime 官方模块；已要求显式 `use` |
 | `time` | `sleep` `nowunix` `nowunixms` `nowrfc3339` | Go runtime 官方模块；已要求显式 `use` |
+| `http` | `get` | Go runtime 官方模块；当前提供最小 HTTP client，引导后端基础设施起步 |
 
 **推荐迁移策略**：
 
 1. `v0.1`：`list/string/math/dict/io` 继续允许默认可用，避免今天的代码全量破坏。
-2. `v0.1`：`os/time` 先收口为模块专属，验证运行时模块边界和导入模型。
+2. `v0.1`：`os/time/http` 先收口为模块专属，验证运行时模块边界和导入模型。
 3. `v0.2+`：可以考虑让更多 builtin 只保留兼容别名，逐步鼓励显式导入。
 
 ### C. 应等编译器 / runtime 阶段再做
@@ -90,17 +91,17 @@ use append from list
 | 模块 / 能力 | 原因 |
 |-------------|------|
 | `arena` / `in arena` / `Arena` | 真实区域内存必须和运行时/分配器一起设计 |
-| `net` / `http` | 套接字 / 请求生命周期 / 超时 / 并发 / 错误模型都需要在 runtime 层统一定口径 |
+| `net` / 服务端 `http` / socket | 套接字 / 请求生命周期 / 超时 / 并发 / 错误模型都需要在 runtime 层统一定口径 |
 | 包管理器 / 第三方模块系统 | 依赖编译器、构建和发布流程一起收口 |
 
-**结论**：`os` / `time` 的基础层已经可以在 Go runtime 里落地；`net/http` 和更深的 runtime 能力仍然不要抢跑。
+**结论**：`os` / `time` 已经落地，`http` 也可以先从最小 client 面起步；更深的 `net` / 服务端 HTTP / socket runtime 仍然不要抢跑。
 
 ---
 
 ## 推荐导入形态（已支持，未来推荐）
 
 今天大多数 stdlib 能力仍是 builtin，所以**`list/string/math/dict/io` 现在不强制导入**。  
-但 `os/time` 已经要求显式导入。为了让后续模块化迁移平滑，官方文档建议逐步朝下面的形态写；这批导入形态现在已经可用：
+但 `os/time/http` 已经要求显式导入。为了让后续模块化迁移平滑，官方文档建议逐步朝下面的形态写；这批导入形态现在已经可用：
 
 ```gwen
 use append, pop, insert, sort, reversed, map, filter, range, enumerate from list
@@ -110,7 +111,11 @@ use haskey, get, keys from dict
 use readfile, writefile from io
 use args, cwd, getenv from os
 use sleep, nowunix, nowunixms, nowrfc3339 from time
+use http
 ```
+
+`http` 当前推荐直接 `use http` 做命名空间导入。  
+原因很简单：`http.get` 和现有 `dict.get` 同名，如果在顶层直接 `use get from http`，会和全局 `get` 发生冲突。
 
 这不是 C/C++ 的头文件系统，也不是文本 include。
 
@@ -289,6 +294,26 @@ sleep(50)
 **设计说明**：
 - 给日志、超时、重试、轮询、简单守护脚本提供最小时间原语
 - 当前先做 wall-clock 和 sleep；timer/channel/event-loop 还不急着冻结
+
+### `http.gw` - HTTP 客户端（Go runtime 已实现，bootstrap 版）
+
+```gwen
+use http
+
+match http.get("https://example.com")
+  when ok(body) => write("bytes:", len(body))
+  when err(e) => write("http failed:", e)
+endmatch
+```
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `get` | `http.get(url: string, timeoutms: int = 5000) -> result[string]` | 发起 GET 请求；2xx 返回响应体字符串，网络错误或非 2xx 返回 `err(msg)` |
+
+**设计说明**：
+- 这是后端基础设施的第一步，只先给最小可用的 client 读路径
+- 当前刻意不急着冻结 `post` / header / 请求对象 / 响应对象 / 流式 body 这些更重的设计
+- 当前推荐用命名空间调用 `http.get(...)`，避免和 `dict.get(...)` 顶层导入冲突
 
 ## 对比：内置 vs 标准库 vs 第三方
 

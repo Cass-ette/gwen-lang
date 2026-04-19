@@ -179,6 +179,7 @@ var stdlibModules = map[string][]string{
 		"nowunixms",
 		"nowrfc3339",
 	},
+	"http": {},
 }
 
 var moduleOnlyBuiltins = map[string]struct{}{
@@ -235,6 +236,9 @@ func (c *Checker) AddModuleSearchPath(path string) {
 
 func (c *Checker) setupBuiltins() {
 	for name, signature := range builtinSignatures() {
+		if signature.DefinitionScope == nil {
+			signature.DefinitionScope = c.globalScope
+		}
 		c.globalScope.defineValue(name, &ValueInfo{
 			Kind:         "builtin",
 			TypeName:     signature.typeName(),
@@ -245,19 +249,46 @@ func (c *Checker) setupBuiltins() {
 
 func (c *Checker) setupStdlibModules() {
 	for moduleName, names := range stdlibModules {
-		module := newModuleInfo(moduleName)
+		module := c.ensureStdlibModule(moduleName)
 		for _, name := range names {
 			if value, ok := c.globalScope.resolveLocalValue(name); ok {
 				module.RuntimeExports[name] = value
 			}
 		}
-		c.modules[moduleName] = module
 	}
+	c.addStdlibModuleCallable("http", "get", &CallableInfo{
+		Label: "get",
+		Params: []ParamInfo{
+			{Name: "url", TypeName: "string"},
+			{Name: "timeoutms", TypeName: "int", HasDefault: true},
+		},
+		ReturnTypeNames: []string{"result[string]"},
+	})
 }
 
 func (c *Checker) hideModuleOnlyBuiltins() {
 	for name := range moduleOnlyBuiltins {
 		delete(c.globalScope.values, name)
+	}
+}
+
+func (c *Checker) ensureStdlibModule(name string) *ModuleInfo {
+	if module, ok := c.modules[name]; ok {
+		return module
+	}
+	module := newModuleInfo(name)
+	c.modules[name] = module
+	return module
+}
+
+func (c *Checker) addStdlibModuleCallable(moduleName, exportName string, signature *CallableInfo) {
+	if signature.DefinitionScope == nil {
+		signature.DefinitionScope = c.globalScope
+	}
+	c.ensureStdlibModule(moduleName).RuntimeExports[exportName] = &ValueInfo{
+		Kind:         "builtin",
+		TypeName:     signature.typeName(),
+		CallableInfo: signature,
 	}
 }
 

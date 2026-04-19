@@ -577,6 +577,15 @@ func main()
 endfunc`)
 }
 
+func TestHTTPModuleNamespaceImportTypeCheck(t *testing.T) {
+	requireOK(t, `use http
+
+func main()
+  body: result[string] := http.get("https://example.com")
+  write(body)
+endfunc`)
+}
+
 func TestOSTimeModuleOnlyBuiltinsRequireImport(t *testing.T) {
 	requireErrorContains(t, `func main()
   argv := args()
@@ -599,6 +608,15 @@ func TestSleepArgumentTypeRejected(t *testing.T) {
 func main()
   sleep("10")
 endfunc`, "Argument 'ms' to 'sleep' expects int, got string")
+}
+
+func TestHTTPGetTimeoutTypeRejected(t *testing.T) {
+	requireErrorContains(t, `use http
+
+func main()
+  body := http.get("https://example.com", "fast")
+  write(body)
+endfunc`, "Argument 'timeoutms' to 'get' expects int, got string")
 }
 
 func TestExampleEntrypointsCheck(t *testing.T) {

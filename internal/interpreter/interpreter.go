@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -93,6 +94,7 @@ var officialStdlibModules = map[string][]string{
 		"nowunixms",
 		"nowrfc3339",
 	},
+	"http": {},
 }
 
 var moduleOnlyBuiltins = map[string]struct{}{
@@ -917,8 +919,8 @@ type cloneContext struct {
 
 func newCloneContext(parent *Interpreter, child *Interpreter) *cloneContext {
 	return &cloneContext{
-		parentBuiltinPtrs: builtinPointerNames(parent.GlobalEnv),
-		childBuiltins:     builtinValues(child.GlobalEnv),
+		parentBuiltinPtrs: builtinPointerNames(parent),
+		childBuiltins:     builtinValues(child),
 		envs:              map[*Environment]*Environment{parent.GlobalEnv: child.GlobalEnv},
 		envPopulating:     map[*Environment]struct{}{},
 		envPopulated:      map[*Environment]struct{}{},
@@ -937,28 +939,42 @@ func newCloneContext(parent *Interpreter, child *Interpreter) *cloneContext {
 	}
 }
 
-func builtinPointerNames(env *Environment) map[uintptr]string {
+func builtinPointerNames(interp *Interpreter) map[uintptr]string {
 	names := map[uintptr]string{}
-	for name, value := range env.vars {
-		builtin, ok := value.(Builtin)
-		if !ok {
-			continue
-		}
-		names[reflect.ValueOf(builtin).Pointer()] = name
+	collectBuiltinPointers(names, "global", interp.GlobalEnv)
+	for moduleName, moduleEnv := range interp.Modules {
+		collectBuiltinPointers(names, "module:"+moduleName, moduleEnv)
 	}
 	return names
 }
 
-func builtinValues(env *Environment) map[string]Builtin {
+func builtinValues(interp *Interpreter) map[string]Builtin {
 	values := map[string]Builtin{}
+	collectBuiltinValues(values, "global", interp.GlobalEnv)
+	for moduleName, moduleEnv := range interp.Modules {
+		collectBuiltinValues(values, "module:"+moduleName, moduleEnv)
+	}
+	return values
+}
+
+func collectBuiltinPointers(dst map[uintptr]string, prefix string, env *Environment) {
 	for name, value := range env.vars {
 		builtin, ok := value.(Builtin)
 		if !ok {
 			continue
 		}
-		values[name] = builtin
+		dst[reflect.ValueOf(builtin).Pointer()] = prefix + ":" + name
 	}
-	return values
+}
+
+func collectBuiltinValues(dst map[string]Builtin, prefix string, env *Environment) {
+	for name, value := range env.vars {
+		builtin, ok := value.(Builtin)
+		if !ok {
+			continue
+		}
+		dst[prefix+":"+name] = builtin
+	}
 }
 
 func (c *cloneContext) cloneEnv(src *Environment) *Environment {
@@ -1008,19 +1024,14 @@ func (c *cloneContext) cloneEnv(src *Environment) *Environment {
 
 func (c *cloneContext) cloneNamedValue(name string, value any) any {
 	if builtin, ok := value.(Builtin); ok {
-		if childBuiltin, ok := c.remapBuiltin(name, builtin); ok {
+		if childBuiltin, ok := c.remapBuiltin(builtin); ok {
 			return childBuiltin
 		}
 	}
 	return c.cloneValue(value)
 }
 
-func (c *cloneContext) remapBuiltin(name string, builtin Builtin) (Builtin, bool) {
-	if name != "" {
-		if childBuiltin, ok := c.childBuiltins[name]; ok {
-			return childBuiltin, true
-		}
-	}
+func (c *cloneContext) remapBuiltin(builtin Builtin) (Builtin, bool) {
 	builtinName, ok := c.parentBuiltinPtrs[reflect.ValueOf(builtin).Pointer()]
 	if !ok {
 		return nil, false
@@ -1034,7 +1045,7 @@ func (c *cloneContext) cloneValue(value any) any {
 	case nil, int64, float64, string, bool, uninitialized:
 		return value
 	case Builtin:
-		if childBuiltin, ok := c.remapBuiltin("", value); ok {
+		if childBuiltin, ok := c.remapBuiltin(value); ok {
 			return childBuiltin
 		}
 		return value
@@ -2559,7 +2570,7 @@ func (i *Interpreter) setupBuiltins() {
 
 func (i *Interpreter) setupStdlibModules() {
 	for moduleName, names := range officialStdlibModules {
-		moduleEnv := NewEnvironment(nil)
+		moduleEnv := i.ensureStdlibModule(moduleName)
 		for _, name := range names {
 			value, err := i.GlobalEnv.Get(name)
 			if err != nil {
@@ -2567,14 +2578,77 @@ func (i *Interpreter) setupStdlibModules() {
 			}
 			moduleEnv.Set(name, value)
 		}
-		i.Modules[moduleName] = moduleEnv
 	}
+	i.addStdlibModuleBuiltin("http", "get", i.httpGetBuiltin())
 }
 
 func (i *Interpreter) hideModuleOnlyBuiltins() {
 	for name := range moduleOnlyBuiltins {
 		delete(i.GlobalEnv.vars, name)
 	}
+}
+
+func (i *Interpreter) ensureStdlibModule(name string) *Environment {
+	if moduleEnv, ok := i.Modules[name]; ok {
+		return moduleEnv
+	}
+	moduleEnv := NewEnvironment(nil)
+	i.Modules[name] = moduleEnv
+	return moduleEnv
+}
+
+func (i *Interpreter) addStdlibModuleBuiltin(moduleName, exportName string, builtin Builtin) {
+	i.ensureStdlibModule(moduleName).Set(exportName, builtin)
+}
+
+func (i *Interpreter) httpGetBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 && len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.get() expects 1 or 2 arguments, got %d", len(args))
+		}
+
+		url, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.get() requires string url, got %s", typeNameOf(args[0]))
+		}
+
+		timeoutMS := int64(5000)
+		if len(args) == 2 {
+			value, ok := args[1].(int64)
+			if !ok {
+				return nil, runtimeErrorf(0, "http.get() requires int timeoutms, got %s", typeNameOf(args[1]))
+			}
+			if value < 0 {
+				return nil, runtimeErrorf(0, "http.get() timeoutms must be >= 0")
+			}
+			timeoutMS = value
+		}
+
+		client := &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond}
+		resp, err := client.Get(url)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			message := fmt.Sprintf("http.get() returned status %s", resp.Status)
+			if snippet := strings.TrimSpace(string(body)); snippet != "" {
+				if len(snippet) > 120 {
+					snippet = snippet[:117] + "..."
+				}
+				message += ": " + snippet
+			}
+			return &ErrValue{Value: message}, nil
+		}
+
+		return &OkValue{Value: string(body)}, nil
+	})
 }
 
 func (i *Interpreter) callCallable(callee any, args []any, line int) (any, error) {

@@ -100,7 +100,7 @@
 
 | 功能 | 文档 | 代码 | 测试 | 示例 | 状态 |
 |------|------|------|------|------|------|
-| 官方 stdlib 模块导入 `list/string/math/dict/io` | ✅ | ✅ | ✅ | ✅ | 已实现（兼容 builtin 直用，支持 `use module` 与 `use ... from module`） |
+| 官方 stdlib 模块导入 `list/string/math/dict/io/http` | ✅ | ✅ | ✅ | ✅ | 已实现（兼容 builtin 直用，支持 `use module` 与 `use ... from module`；`http` 当前推荐命名空间导入） |
 | `map/filter/range/enumerate` | ✅ | ✅ | ✅ | ✅ | 已实现（`range` 为闭区间；`enumerate` 返回 `[index, value]` 对） |
 | 导航标记 `@tag` | ✅ | ✅ | ✅ | ✅ | 稳定 |
 | 错误处理 `result/ok/err` | ✅ | ✅ | ✅ | ✅ | 稳定 |
@@ -136,6 +136,7 @@
 
 ## 上次更新
 
+2026-04-19 - Go `http` bootstrap 起步：stdlib 模块现在可以拥有不依赖全局 builtin 名字的模块专属导出，先用这条路径接入 `http.get(url, timeoutms=5000) -> result[string]`；运行时已支持本地 HTTP client 调用、超时参数和非 2xx 转 `err(...)`，并补齐 checker / interpreter 回归测试与示例，为后续后端基础设施继续铺路
 2026-04-19 - Go stdlib 模块边界继续收紧：`os` / `time` 现已从全局 builtin 作用域移除，必须通过 `use os`、`use time` 或 `use ... from os/time` 访问；同时补齐 checker / interpreter 对“未导入直接访问报错”与命名空间导入的回归测试，为后续 `http` 模块接入先把模块边界钉死
 2026-04-19 - Go runtime 基础模块起步：新增官方 `os` / `time` 模块导入面，`os.args/cwd/getenv`、`time.sleep/nowunix/nowunixms/nowrfc3339` 已在 Go checker/runtime 落地；CLI 现在支持 `gwen run app.gw arg1 arg2` 透传程序参数。新增 Go checker / interpreter / CLI 回归测试
 2026-04-19 - Go 示例入口 smoke 固化：`examples/*.gw` 与各示例应用 `main.gw` 现在纳入 checker 自动回归，避免示例和语义实现继续漂移；巡检中顺手修复 `examples/fibonacci.gw` 的缓存递归签名与缓存初始化

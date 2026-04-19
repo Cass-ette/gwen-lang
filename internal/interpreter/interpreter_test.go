@@ -3,6 +3,8 @@ package interpreter_test
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -678,6 +680,83 @@ func TestOSTimeModuleOnlyBuiltinsRequireImport(t *testing.T) {
 	requireRuntimeErrorContains(t, `func main()
   write(args())
 endfunc`, "Undefined variable: args")
+}
+
+func TestHTTPModuleGet(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, "ok")
+	}))
+	defer server.Close()
+
+	source := fmt.Sprintf(`use http
+
+func main()
+  match http.get(%q)
+    when ok(body) => write(body)
+    when err(e) => write("err", e)
+  endmatch
+endfunc`, server.URL+"/health")
+
+	out := runSource(t, source)
+	if out != "ok" {
+		t.Fatalf("output mismatch: got %q want %q", out, "ok")
+	}
+}
+
+func TestHTTPModuleGetReturnsErrOnStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	source := fmt.Sprintf(`use http
+
+func main()
+  match http.get(%q)
+    when ok(body) => write("ok", body)
+    when err(e) => write(e)
+  endmatch
+endfunc`, server.URL)
+
+	out := runSource(t, source)
+	if !strings.Contains(out, "http.get() returned status 502 Bad Gateway") {
+		t.Fatalf("expected status error, got %q", out)
+	}
+}
+
+func TestHTTPModuleGetInsideParallel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "parallel-ok")
+	}))
+	defer server.Close()
+
+	source := fmt.Sprintf(`use http
+
+func main()
+  parallel do
+    match http.get(%q)
+      when ok(body) => write(body)
+      when err(e) => write("err", e)
+    endmatch
+  endparallel
+endfunc`, server.URL)
+
+	out := runSource(t, source)
+	if out != "parallel-ok" {
+		t.Fatalf("output mismatch: got %q want %q", out, "parallel-ok")
+	}
+}
+
+func TestHTTPModuleGetRejectsNegativeTimeout(t *testing.T) {
+	requireRuntimeErrorContains(t, `use http
+
+func main()
+  http.get("https://example.com", -1)
+endfunc`, "http.get() timeoutms must be >= 0")
 }
 
 func TestSleepRejectsNegativeDuration(t *testing.T) {
