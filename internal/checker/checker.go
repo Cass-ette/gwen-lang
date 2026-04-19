@@ -1243,7 +1243,7 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		for _, clause := range node.Cases {
 			caseScope := cloneScope(scope)
 			for _, pattern := range clause.Patterns {
-				if err := c.checkPattern(pattern, caseScope, deferred); err != nil {
+				if err := c.checkPattern(pattern, subject, caseScope, deferred); err != nil {
 					return err
 				}
 			}
@@ -2092,13 +2092,19 @@ func (c *Checker) inferBinaryOp(node *ast.BinaryOp, left *ValueInfo, right *Valu
 	return unknownValue()
 }
 
-func (c *Checker) checkPattern(pattern any, scope *Scope, deferred *[]func() error) error {
+func (c *Checker) checkPattern(pattern any, subject *ValueInfo, scope *Scope, deferred *[]func() error) error {
 	switch node := pattern.(type) {
 	case *ast.OkExpr:
-		c.bindPatternValue(node.Value, scope)
+		expectedType := c.resultPatternValueType(subject, scope, true)
+		if err := c.checkResultPatternValue(node.Value, expectedType, scope, deferred, "ok", node.Line); err != nil {
+			return err
+		}
 		return nil
 	case *ast.ErrExpr:
-		c.bindPatternValue(node.Value, scope)
+		expectedType := c.resultPatternValueType(subject, scope, false)
+		if err := c.checkResultPatternValue(node.Value, expectedType, scope, deferred, "err", node.Line); err != nil {
+			return err
+		}
 		return nil
 	case *ast.Identifier:
 		scope.defineValue(node.Name, unknownValue())
@@ -2113,6 +2119,45 @@ func (c *Checker) checkPattern(pattern any, scope *Scope, deferred *[]func() err
 		_, err := c.checkExpr(pattern, scope, deferred)
 		return err
 	}
+}
+
+func (c *Checker) resultPatternValueType(subject *ValueInfo, scope *Scope, okPattern bool) string {
+	subjectType := c.valueTypeName(subject, scope)
+	info, ok := parseResultTypeInfo(subjectType)
+	if !ok {
+		return ""
+	}
+	if okPattern {
+		return info.okType
+	}
+	if len(info.errTypes) == 0 {
+		return ""
+	}
+	merged := info.errTypes[0]
+	for _, current := range info.errTypes[1:] {
+		next, ok := c.mergeTypeNames(merged, current)
+		if !ok {
+			return ""
+		}
+		merged = next
+	}
+	return merged
+}
+
+func (c *Checker) checkResultPatternValue(pattern any, expectedType string, scope *Scope, deferred *[]func() error, label string, line int) error {
+	if identifier, ok := pattern.(*ast.Identifier); ok {
+		c.bindPatternValue(identifier, scope, expectedType)
+		return nil
+	}
+	value, err := c.checkExpr(pattern, scope, deferred)
+	if err != nil {
+		return err
+	}
+	actualType := c.valueTypeName(value, scope)
+	if expectedType != "" && actualType != "" && !c.typesCompatible(expectedType, actualType) {
+		return semanticErrorf(line, "%s pattern expects %s, got %s", label, displayTypeName(expectedType), displayTypeName(actualType))
+	}
+	return nil
 }
 
 func (c *Checker) validateResultMatchPatterns(stmt *ast.MatchStmt) error {
@@ -2155,10 +2200,14 @@ func describeMatchPattern(pattern any) string {
 	}
 }
 
-func (c *Checker) bindPatternValue(pattern any, scope *Scope) {
+func (c *Checker) bindPatternValue(pattern any, scope *Scope, typeName string) {
 	switch node := pattern.(type) {
 	case *ast.Identifier:
-		scope.defineValue(node.Name, unknownValue())
+		if typeName == "" {
+			scope.defineValue(node.Name, unknownValue())
+			return
+		}
+		scope.defineValue(node.Name, c.valueFromDeclaredType(typeName, scope, node.Name))
 	}
 }
 

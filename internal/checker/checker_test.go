@@ -426,6 +426,35 @@ func main()
 endfunc`, "Match on Result type must use ok(x) or err(x) patterns")
 }
 
+func TestMatchOkPatternBindsPayloadType(t *testing.T) {
+	requireErrorContains(t, `func main()
+  match ok(42)
+    when ok(v) =>
+      bad: string := v
+  endmatch
+endfunc`, "Cannot assign int to 'bad' (string)")
+}
+
+func TestMatchErrPatternBindsPayloadType(t *testing.T) {
+	requireErrorContains(t, `func main()
+  match err("boom")
+    when err(e) =>
+      bad: int := e
+  endmatch
+endfunc`, "Cannot assign string to 'bad' (int)")
+}
+
+func TestMatchOkLiteralPatternTypeChecked(t *testing.T) {
+	requireErrorContains(t, `func main()
+  match ok(42)
+    when ok("boom") =>
+      write("bad")
+    else
+      write("other")
+  endmatch
+endfunc`, "ok pattern expects int, got string")
+}
+
 func TestMatchBindingDoesNotLeakFromOnlyOneBranch(t *testing.T) {
 	requireErrorContains(t, `func main()
   match ok(42)
