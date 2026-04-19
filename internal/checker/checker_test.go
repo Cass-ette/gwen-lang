@@ -288,6 +288,185 @@ func main()
 endfunc`, "not a runtime member of module 'ids'")
 }
 
+func TestPrivateFieldReadRejectedOutsideMethod(t *testing.T) {
+	requireErrorContains(t, `object Account
+  balance: int
+
+  new(balance: int) -> Account
+    return Account{balance := balance}
+  endnew
+endobject
+
+func main()
+  acc := Account.new(1)
+  write(acc.balance)
+endfunc`, "Cannot access private field 'balance' of 'Account' from outside")
+}
+
+func TestPrivateFieldReadRejectedInFreeFunctionNamedSelf(t *testing.T) {
+	requireErrorContains(t, `object Account
+  balance: int
+endobject
+
+func leak(self: Account) -> int
+  return self.balance
+endfunc`, "Cannot access private field 'balance' of 'Account' from outside")
+}
+
+func TestPrivateFieldAssignmentRejectedOutsideMethod(t *testing.T) {
+	requireErrorContains(t, `object Account
+  balance: int
+
+  new(balance: int) -> Account
+    return Account{balance := balance}
+  endnew
+endobject
+
+func main()
+  acc := Account.new(1)
+  acc.balance := 2
+endfunc`, "Cannot access private field 'balance' of 'Account' from outside")
+}
+
+func TestPrivateFieldAssignmentAllowedInsideMethod(t *testing.T) {
+	requireOK(t, `object Account
+  balance: int
+
+  func set_balance(self: Account, value: int)
+    self.balance := value
+  endfunc
+endobject`)
+}
+
+func TestObjectLiteralFieldTypeMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `object Account
+  balance: int
+
+  new() -> Account
+    return Account{balance := "bad"}
+  endnew
+endobject`, "Field 'Account.balance' expects int, got string")
+}
+
+func TestStaticMethodSelfArgumentTypeRejected(t *testing.T) {
+	requireErrorContains(t, `object Account
+  balance: int
+
+  func value(self: Account) -> int
+    return self.balance
+  endfunc
+endobject
+
+func main()
+  write(Account.value(1))
+endfunc`, "Argument 'self' to 'Account.value' expects Account, got int")
+}
+
+func TestUseRejectsTypeImportConflict(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "ids.gw"), `module ids
+export type UserId = int8
+endmodule
+`)
+
+	source := `type UserId = int
+use UserId from ids
+id: UserId := 17
+`
+	err := checkSource(t, source, filepath.Join(dir, "main.gw"))
+	if err == nil {
+		t.Fatal("expected checker error")
+	}
+	if !strings.Contains(err.Error(), "Cannot import type 'UserId' from module 'ids': type name already defined in current scope") {
+		t.Fatalf("error mismatch: %v", err)
+	}
+}
+
+func TestUseRejectsModuleNamespaceConflict(t *testing.T) {
+	requireErrorContains(t, `math := 1
+use math`, "Cannot import module 'math': name already defined in current scope")
+}
+
+func TestUseRejectsModuleFileWithExtraTopLevelStatements(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "math_utils.gw"), `module math_utils
+export func square(x: int) -> int
+  return x * x
+endfunc
+endmodule
+
+write("leak")
+`)
+
+	source := `use square from math_utils
+write(square(9))
+`
+	err := checkSource(t, source, filepath.Join(dir, "main.gw"))
+	if err == nil {
+		t.Fatal("expected checker error")
+	}
+	if !strings.Contains(err.Error(), "must contain exactly one top-level module definition for 'math_utils'") {
+		t.Fatalf("error mismatch: %v", err)
+	}
+}
+
+func TestUseRejectsCyclicFileModuleImports(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "alpha.gw"), `module alpha
+use beta_value from beta
+
+export func alpha_value() -> int
+  return beta_value()
+endfunc
+endmodule
+`)
+	mustWrite(t, filepath.Join(dir, "beta.gw"), `module beta
+use alpha_value from alpha
+
+export func beta_value() -> int
+  return alpha_value()
+endfunc
+endmodule
+`)
+
+	source := `use alpha_value from alpha
+write(alpha_value())
+`
+	err := checkSource(t, source, filepath.Join(dir, "main.gw"))
+	if err == nil {
+		t.Fatal("expected checker error")
+	}
+	if !strings.Contains(err.Error(), "Cyclic module import detected while loading 'alpha'") {
+		t.Fatalf("error mismatch: %v", err)
+	}
+}
+
+func TestUseLoadsExportedObjectFromSiblingFile(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "bank.gw"), `module bank
+export object Account
+  balance: int
+
+  new(balance: int) -> Account
+    return Account{balance := balance}
+  endnew
+
+  func value(self: Account) -> int
+    return self.balance
+  endfunc
+endobject
+endmodule
+`)
+
+	source := `use Account from bank
+acc := Account.new(13)
+write(acc.value())
+`
+	if err := checkSource(t, source, filepath.Join(dir, "main.gw")); err != nil {
+		t.Fatalf("check failed: %v", err)
+	}
+}
+
 func mustWrite(t *testing.T, path string, contents string) {
 	t.Helper()
 

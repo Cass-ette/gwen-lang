@@ -1,6 +1,7 @@
 package interpreter
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -38,10 +39,14 @@ const moneyScale int64 = 10_000
 var officialStdlibModules = map[string][]string{
 	"list": {
 		"append",
+		"pop",
 		"concat",
 		"removeat",
+		"insert",
 		"sort",
 		"asc",
+		"desc",
+		"reversed",
 		"map",
 		"filter",
 		"range",
@@ -53,6 +58,15 @@ var officialStdlibModules = map[string][]string{
 		"substring",
 		"contains",
 		"trim",
+		"replace",
+	},
+	"math": {
+		"abs",
+		"min",
+		"max",
+		"sqrt",
+		"floor",
+		"ceil",
 	},
 	"dict": {
 		"haskey",
@@ -998,8 +1012,12 @@ func (i *Interpreter) evalCall(call *ast.FuncCall, env *Environment) (any, error
 		switch builtinName {
 		case "append":
 			return i.evalAppendCall(call, env)
+		case "pop":
+			return i.evalPopCall(call, env)
 		case "removeat":
 			return i.evalRemoveAtCall(call, env)
+		case "insert":
+			return i.evalInsertCall(call, env)
 		}
 	}
 
@@ -1068,6 +1086,34 @@ func (i *Interpreter) evalAppendCall(call *ast.FuncCall, env *Environment) (any,
 	return list, nil
 }
 
+func (i *Interpreter) evalPopCall(call *ast.FuncCall, env *Environment) (any, error) {
+	if len(call.Args) != 1 {
+		return nil, runtimeErrorf(call.Line, "pop() expects 1 argument, got %d", len(call.Args))
+	}
+	target, ok := assignmentTargetExpr(call.Args[0])
+	if !ok {
+		return nil, runtimeErrorf(call.Line, "pop() first argument must be assignable list target")
+	}
+	listValue, err := i.evalExpr(call.Args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	list, ok := listValue.([]any)
+	if !ok {
+		return nil, runtimeErrorf(call.Line, "pop() requires list, got %s", typeNameOf(listValue))
+	}
+	if len(list) == 0 {
+		return nil, runtimeErrorf(call.Line, "pop() from empty list")
+	}
+	removed := list[len(list)-1]
+	list[len(list)-1] = nil
+	list = list[:len(list)-1]
+	if err := i.assignTarget(target, list, env, call.Line); err != nil {
+		return nil, err
+	}
+	return removed, nil
+}
+
 func (i *Interpreter) evalRemoveAtCall(call *ast.FuncCall, env *Environment) (any, error) {
 	if len(call.Args) != 2 {
 		return nil, runtimeErrorf(call.Line, "removeat() expects 2 arguments, got %d", len(call.Args))
@@ -1101,6 +1147,46 @@ func (i *Interpreter) evalRemoveAtCall(call *ast.FuncCall, env *Environment) (an
 		return nil, err
 	}
 	return removed, nil
+}
+
+func (i *Interpreter) evalInsertCall(call *ast.FuncCall, env *Environment) (any, error) {
+	if len(call.Args) != 3 {
+		return nil, runtimeErrorf(call.Line, "insert() expects 3 arguments, got %d", len(call.Args))
+	}
+	target, ok := assignmentTargetExpr(call.Args[0])
+	if !ok {
+		return nil, runtimeErrorf(call.Line, "insert() first argument must be assignable list target")
+	}
+	listValue, err := i.evalExpr(call.Args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	list, ok := listValue.([]any)
+	if !ok {
+		return nil, runtimeErrorf(call.Line, "insert() requires list, got %s", typeNameOf(listValue))
+	}
+	indexValue, err := i.evalExpr(call.Args[1], env)
+	if err != nil {
+		return nil, err
+	}
+	index, ok := indexValue.(int64)
+	if !ok {
+		return nil, runtimeErrorf(call.Line, "insert() index must be int, got %s", typeNameOf(indexValue))
+	}
+	if index < 0 || index > int64(len(list)) {
+		return nil, runtimeErrorf(call.Line, "insert() index out of range: %d", index)
+	}
+	item, err := i.evalExpr(call.Args[2], env)
+	if err != nil {
+		return nil, err
+	}
+	list = append(list, nil)
+	copy(list[index+1:], list[index:])
+	list[index] = item
+	if err := i.assignTarget(target, list, env, call.Line); err != nil {
+		return nil, err
+	}
+	return nil, nil
 }
 
 func (i *Interpreter) callFunction(fn *Function, args []any, line int) (any, error) {
@@ -1324,6 +1410,26 @@ func (i *Interpreter) setupBuiltins() {
 		}
 		return nil, nil
 	}))
+	i.GlobalEnv.Set("read", Builtin(func(args []any) (any, error) {
+		if len(args) > 1 {
+			return nil, runtimeErrorf(0, "read() expects 0 or 1 arguments, got %d", len(args))
+		}
+		if len(args) == 1 {
+			prompt, ok := args[0].(string)
+			if !ok {
+				return nil, runtimeErrorf(0, "read() prompt must be string, got %s", typeNameOf(args[0]))
+			}
+			if _, err := fmt.Fprint(i.Stdout, prompt); err != nil {
+				return nil, err
+			}
+		}
+		reader := bufio.NewReader(os.Stdin)
+		line, err := reader.ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		return strings.TrimRight(line, "\r\n"), nil
+	}))
 	i.GlobalEnv.Set("len", Builtin(func(args []any) (any, error) {
 		if len(args) != 1 {
 			return nil, runtimeErrorf(0, "len() expects 1 argument, got %d", len(args))
@@ -1475,6 +1581,19 @@ func (i *Interpreter) setupBuiltins() {
 		list = append(list, args[1])
 		return list, nil
 	}))
+	i.GlobalEnv.Set("pop", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "pop() expects 1 argument, got %d", len(args))
+		}
+		list, ok := args[0].([]any)
+		if !ok {
+			return nil, runtimeErrorf(0, "pop() requires list, got %s", typeNameOf(args[0]))
+		}
+		if len(list) == 0 {
+			return nil, runtimeErrorf(0, "pop() from empty list")
+		}
+		return list[len(list)-1], nil
+	}))
 	i.GlobalEnv.Set("concat", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
 			return nil, runtimeErrorf(0, "concat() expects 2 arguments, got %d", len(args))
@@ -1512,11 +1631,51 @@ func (i *Interpreter) setupBuiltins() {
 		list = list[:len(list)-1]
 		return removed, nil
 	}))
+	i.GlobalEnv.Set("insert", Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "insert() expects 3 arguments, got %d", len(args))
+		}
+		list, ok := args[0].([]any)
+		if !ok {
+			return nil, runtimeErrorf(0, "insert() requires list, got %s", typeNameOf(args[0]))
+		}
+		index, err := toInt64(args[1], 0)
+		if err != nil {
+			return nil, err
+		}
+		if index < 0 || index > int64(len(list)) {
+			return nil, runtimeErrorf(0, "insert() index out of range: %d", index)
+		}
+		list = append(list, nil)
+		copy(list[index+1:], list[index:])
+		list[index] = args[2]
+		return list, nil
+	}))
 	i.GlobalEnv.Set("asc", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
 			return nil, runtimeErrorf(0, "asc() expects 2 arguments, got %d", len(args))
 		}
 		return compareValues("<", args[0], args[1], 0)
+	}))
+	i.GlobalEnv.Set("desc", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "desc() expects 2 arguments, got %d", len(args))
+		}
+		return compareValues(">", args[0], args[1], 0)
+	}))
+	i.GlobalEnv.Set("reversed", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "reversed() expects 1 argument, got %d", len(args))
+		}
+		items, ok := args[0].([]any)
+		if !ok {
+			return nil, runtimeErrorf(0, "reversed() requires list, got %s", typeNameOf(args[0]))
+		}
+		result := make([]any, 0, len(items))
+		for idx := len(items) - 1; idx >= 0; idx-- {
+			result = append(result, items[idx])
+		}
+		return result, nil
 	}))
 	i.GlobalEnv.Set("sort", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
@@ -1629,6 +1788,96 @@ func (i *Interpreter) setupBuiltins() {
 			return nil, runtimeErrorf(0, "trim() requires string input, got %s", typeNameOf(args[0]))
 		}
 		return strings.TrimSpace(value), nil
+	}))
+	i.GlobalEnv.Set("replace", Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "replace() expects 3 arguments, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "replace() requires string input, got %s", typeNameOf(args[0]))
+		}
+		oldValue, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "replace() old must be string, got %s", typeNameOf(args[1]))
+		}
+		newValue, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "replace() new must be string, got %s", typeNameOf(args[2]))
+		}
+		return strings.ReplaceAll(value, oldValue, newValue), nil
+	}))
+	i.GlobalEnv.Set("abs", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "abs() expects 1 argument, got %d", len(args))
+		}
+		switch value := args[0].(type) {
+		case int64:
+			if value < 0 {
+				return -value, nil
+			}
+			return value, nil
+		case float64:
+			return math.Abs(value), nil
+		default:
+			return nil, runtimeErrorf(0, "abs() requires int or float, got %s", typeNameOf(args[0]))
+		}
+	}))
+	i.GlobalEnv.Set("min", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "min() expects 2 arguments, got %d", len(args))
+		}
+		less, err := compareValues("<", args[0], args[1], 0)
+		if err != nil {
+			return nil, err
+		}
+		if less {
+			return args[0], nil
+		}
+		return args[1], nil
+	}))
+	i.GlobalEnv.Set("max", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "max() expects 2 arguments, got %d", len(args))
+		}
+		greater, err := compareValues(">", args[0], args[1], 0)
+		if err != nil {
+			return nil, err
+		}
+		if greater {
+			return args[0], nil
+		}
+		return args[1], nil
+	}))
+	i.GlobalEnv.Set("sqrt", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "sqrt() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(float64)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqrt() requires float, got %s", typeNameOf(args[0]))
+		}
+		return math.Sqrt(value), nil
+	}))
+	i.GlobalEnv.Set("floor", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "floor() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(float64)
+		if !ok {
+			return nil, runtimeErrorf(0, "floor() requires float, got %s", typeNameOf(args[0]))
+		}
+		return math.Floor(value), nil
+	}))
+	i.GlobalEnv.Set("ceil", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "ceil() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(float64)
+		if !ok {
+			return nil, runtimeErrorf(0, "ceil() requires float, got %s", typeNameOf(args[0]))
+		}
+		return math.Ceil(value), nil
 	}))
 	i.GlobalEnv.Set("haskey", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {

@@ -49,6 +49,7 @@ type Scope struct {
 	aliases             map[string]string
 	objects             map[string]*ObjectInfo
 	expectedReturnTypes []string
+	methodSelfType      string
 }
 
 type ValueInfo struct {
@@ -264,8 +265,10 @@ func builtinSignatures() map[string]*CallableInfo {
 
 func newScope(parent *Scope) *Scope {
 	var expectedReturnTypes []string
+	methodSelfType := ""
 	if parent != nil {
 		expectedReturnTypes = parent.expectedReturnTypes
+		methodSelfType = parent.methodSelfType
 	}
 	return &Scope{
 		parent:              parent,
@@ -273,16 +276,33 @@ func newScope(parent *Scope) *Scope {
 		aliases:             map[string]string{},
 		objects:             map[string]*ObjectInfo{},
 		expectedReturnTypes: expectedReturnTypes,
+		methodSelfType:      methodSelfType,
 	}
 }
 
 func newReturnScope(parent *Scope, expectedReturnTypes []string) *Scope {
+	methodSelfType := ""
+	if parent != nil {
+		methodSelfType = parent.methodSelfType
+	}
 	return &Scope{
 		parent:              parent,
 		values:              map[string]*ValueInfo{},
 		aliases:             map[string]string{},
 		objects:             map[string]*ObjectInfo{},
 		expectedReturnTypes: expectedReturnTypes,
+		methodSelfType:      methodSelfType,
+	}
+}
+
+func newMethodScope(parent *Scope, expectedReturnTypes []string, methodSelfType string) *Scope {
+	return &Scope{
+		parent:              parent,
+		values:              map[string]*ValueInfo{},
+		aliases:             map[string]string{},
+		objects:             map[string]*ObjectInfo{},
+		expectedReturnTypes: expectedReturnTypes,
+		methodSelfType:      methodSelfType,
 	}
 }
 
@@ -317,6 +337,11 @@ func (s *Scope) resolveAliasRaw(name string) (string, bool) {
 		return s.parent.resolveAliasRaw(name)
 	}
 	return "", false
+}
+
+func (s *Scope) resolveLocalAlias(name string) (string, bool) {
+	target, ok := s.aliases[name]
+	return target, ok
 }
 
 func (s *Scope) defineObject(info *ObjectInfo) {
@@ -834,7 +859,11 @@ func (c *Checker) checkAssignmentTarget(target any, scope *Scope, deferred *[]fu
 	case string:
 		return nil
 	case *ast.MemberAccess:
-		_, err := c.checkExpr(node.Object, scope, deferred)
+		object, err := c.checkExpr(node.Object, scope, deferred)
+		if err != nil {
+			return err
+		}
+		_, err = c.checkMemberAccess(object, node, scope)
 		return err
 	case *ast.IndexAccess:
 		if _, err := c.checkExpr(node.Object, scope, deferred); err != nil {
@@ -894,7 +923,7 @@ func (c *Checker) checkMethodBody(method *ast.MethodDef, obj *ObjectInfo, closur
 	if err := c.validateReturnAnnotation(method.ReturnType, closureScope, method.Line); err != nil {
 		return err
 	}
-	bodyScope := newReturnScope(closureScope, c.resolveReturnTypeNames(method.ReturnType, closureScope, method.Line))
+	bodyScope := newMethodScope(closureScope, c.resolveReturnTypeNames(method.ReturnType, closureScope, method.Line), obj.Name)
 	for _, param := range method.Params {
 		if err := c.checkParam(param, closureScope); err != nil {
 			return err
@@ -1651,7 +1680,7 @@ func (c *Checker) checkMemberAccess(object *ValueInfo, expr *ast.MemberAccess, s
 			return &ValueInfo{Kind: "method", TypeName: method.dropFirstParam().typeName(), CallableInfo: method.dropFirstParam()}, nil
 		}
 		if fieldType, ok := object.ObjectInfo.Fields[expr.Member]; ok {
-			if ident, ok := expr.Object.(*ast.Identifier); ok && ident.Name == "self" {
+			if ident, ok := expr.Object.(*ast.Identifier); ok && ident.Name == "self" && scope.methodSelfType == object.ObjectInfo.Name {
 				return c.valueFromDeclaredType(fieldType, scope, expr.Member), nil
 			}
 			return nil, semanticErrorf(expr.Line, "Cannot access private field '%s' of '%s' from outside; use a method instead", expr.Member, object.ObjectInfo.Name)
@@ -1691,13 +1720,21 @@ func (c *Checker) checkObjectLiteral(literal *ast.ObjectLiteral, scope *Scope, d
 			return semanticErrorf(literal.Line, "Duplicate field '%s' in '%s' literal", field.Name, literal.Name)
 		}
 		provided[field.Name] = struct{}{}
+		expectedType := ""
 		if obj.Fields != nil {
-			if _, exists := obj.Fields[field.Name]; !exists {
+			var exists bool
+			expectedType, exists = obj.Fields[field.Name]
+			if !exists {
 				return semanticErrorf(literal.Line, "Object '%s' has no field '%s'", literal.Name, field.Name)
 			}
 		}
-		if _, err := c.checkExpr(field.Value, scope, deferred); err != nil {
+		value, err := c.checkExpr(field.Value, scope, deferred)
+		if err != nil {
 			return err
+		}
+		actualType := c.valueTypeName(value, scope)
+		if expectedType != "" && actualType != "" && !c.typesCompatible(expectedType, actualType) {
+			return semanticErrorf(literal.Line, "Field '%s.%s' expects %s, got %s", literal.Name, field.Name, expectedType, actualType)
 		}
 	}
 
@@ -1806,6 +1843,9 @@ func (c *Checker) checkUse(use *ast.UseStmt, scope *Scope, deferred *[]func() er
 	}
 
 	if len(use.Names) == 0 {
+		if existing, exists := scope.resolveLocalValue(use.Module); exists && (existing.Kind != "module" || existing.ModuleInfo != module) {
+			return semanticErrorf(use.Line, "Cannot import module '%s': name already defined in current scope", use.Module)
+		}
 		scope.defineValue(use.Module, &ValueInfo{Kind: "module", ModuleInfo: module})
 		return nil
 	}
@@ -1823,6 +1863,9 @@ func (c *Checker) checkUse(use *ast.UseStmt, scope *Scope, deferred *[]func() er
 			imported = true
 		}
 		if target, ok := module.TypeExports[name]; ok {
+			if existing, exists := scope.resolveLocalAlias(name); exists && existing != target {
+				return semanticErrorf(use.Line, "Cannot import type '%s' from module '%s': type name already defined in current scope", name, use.Module)
+			}
 			scope.defineAlias(name, target)
 			imported = true
 		}
@@ -1859,10 +1902,9 @@ func (c *Checker) loadModuleFromFile(moduleName string, line int, deferred *[]fu
 		}
 
 		c.loadingModules[moduleName] = struct{}{}
+		defer delete(c.loadingModules, moduleName)
 		c.AddModuleSearchPath(filepath.Dir(candidate))
-		err = c.checkStmt(moduleDef, c.globalScope, deferred)
-		delete(c.loadingModules, moduleName)
-		return err
+		return c.checkStmt(moduleDef, c.globalScope, deferred)
 	}
 
 	return semanticErrorf(line, "Module not found: %s", moduleName)

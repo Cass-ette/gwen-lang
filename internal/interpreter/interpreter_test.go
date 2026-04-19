@@ -249,6 +249,31 @@ func TestModuleNamespace(t *testing.T) {
 	}
 }
 
+func TestExtendedStdlibModules(t *testing.T) {
+	out := runSource(t, `func main()
+  use pop, insert, reversed, sort, desc from list
+  use replace from string
+  use abs, sqrt, floor, ceil from math
+
+  xs := [1, 3]
+  insert(xs, 1, 2)
+  last := pop(xs)
+  write(xs)
+  write(last)
+  write(reversed(xs))
+  write(sort([1, 3, 2], desc))
+  write(replace("hello hello", "hello", "hi"))
+  write(abs(-3))
+  write(sqrt(4.0))
+  write(floor(2.9))
+  write(ceil(2.1))
+endfunc`)
+	want := "[1, 2]\n3\n[2, 1]\n[3, 2, 1]\nhi hi\n3\n2.0\n2.0\n3.0"
+	if out != want {
+		t.Fatalf("output mismatch:\n got: %q\nwant: %q", out, want)
+	}
+}
+
 func TestObjectMethod(t *testing.T) {
 	out := runSource(t, "object Account\n  balance: int\n\n  new(balance: int) -> Account\n    return Account{balance := balance}\n  endnew\n\n  func value(self: Account) -> int\n    return self.balance\n  endfunc\nendobject\n\nacc := Account.new(7)\nwrite(acc.value())")
 	if out != "7" {
