@@ -1,12 +1,18 @@
 // 斐波那契数列
 // 测试：递归、迭代
 
-// 递归实现
-func fib_recursive(n: int) -> int
+// 递归实现（带缓存）
+func fib_recursive(n: int, cache: list[int]) -> int
   if n <= 1 then
     return n
   endif
-  return fib_recursive(n - 1) + fib_recursive(n - 2)
+
+  if cache[n] != -1 then
+    return cache[n]
+  endif
+
+  cache[n] := fib_recursive(n - 1, cache) + fib_recursive(n - 2, cache)
+  return cache[n]
 endfunc
 
 // 迭代实现
@@ -32,8 +38,10 @@ func main()
   write("Fibonacci (recursive with cache):")
   cache := []
   for i in 0 to 20 do
-    append(cache, 0)
+    append(cache, -1)
   endfor
+  cache[0] := 0
+  cache[1] := 1
 
   for i in 0 to 10 do
     result := fib_recursive(i, cache)
