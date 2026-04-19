@@ -110,6 +110,20 @@ var genericBaseArity = map[string]arity{
 	"result": {min: 1, max: -1},
 }
 
+const (
+	resultOkBase  = "result_ok"
+	resultErrBase = "result_err"
+)
+
+type resultTypeInfo struct {
+	bare         bool
+	okOnly       bool
+	errOnly      bool
+	okType       string
+	errTypes     []string
+	implicitErrs bool
+}
+
 var stdlibModules = map[string][]string{
 	"list": {
 		"append",
@@ -654,7 +668,7 @@ func (c *Checker) mergeValueInfo(scope *Scope, name string, left *ValueInfo, rig
 		return left, nil
 	}
 	if leftType != "" && rightType != "" {
-		return nil, semanticErrorf(line, "Variable '%s' has inconsistent types across %s branches: %s vs %s", name, context, leftType, rightType)
+		return nil, semanticErrorf(line, "Variable '%s' has inconsistent types across %s branches: %s vs %s", name, context, displayTypeName(leftType), displayTypeName(rightType))
 	}
 	return unknownValue(), nil
 }
@@ -673,6 +687,10 @@ func (c *Checker) mergeTypeNames(leftType string, rightType string) (string, boo
 		return "int", true
 	}
 
+	if merged, ok := c.mergeResultTypeNames(leftType, rightType); ok {
+		return merged, true
+	}
+
 	leftBase := typeBase(leftType)
 	rightBase := typeBase(rightType)
 	if leftBase == rightBase && (leftBase == "list" || leftBase == "dict" || leftBase == "result") {
@@ -687,6 +705,82 @@ func (c *Checker) mergeTypeNames(leftType string, rightType string) (string, boo
 		return rightType, true
 	}
 	return "", false
+}
+
+func (c *Checker) mergeResultTypeNames(leftType string, rightType string) (string, bool) {
+	left, ok := parseResultTypeInfo(leftType)
+	if !ok {
+		return "", false
+	}
+	right, ok := parseResultTypeInfo(rightType)
+	if !ok {
+		return "", false
+	}
+
+	if left.bare {
+		return renderResultTypeInfo(right), true
+	}
+	if right.bare {
+		return renderResultTypeInfo(left), true
+	}
+
+	okType, ok := c.mergeOptionalTypeNames(left.okType, right.okType)
+	if !ok {
+		return "", false
+	}
+
+	errTypes, ok := c.mergeResultErrTypes(left.errTypes, right.errTypes)
+	if !ok {
+		return "", false
+	}
+
+	return renderResultTypeInfo(resultTypeInfo{
+		okType:       okType,
+		errTypes:     errTypes,
+		implicitErrs: okType != "" && len(errTypes) == 1 && errTypes[0] == "string",
+	}), true
+}
+
+func (c *Checker) mergeOptionalTypeNames(leftType string, rightType string) (string, bool) {
+	switch {
+	case leftType == "":
+		return rightType, true
+	case rightType == "":
+		return leftType, true
+	case leftType == rightType:
+		return leftType, true
+	default:
+		return c.mergeTypeNames(leftType, rightType)
+	}
+}
+
+func (c *Checker) mergeResultErrTypes(leftErrTypes []string, rightErrTypes []string) ([]string, bool) {
+	if len(leftErrTypes) == 0 && len(rightErrTypes) == 0 {
+		return nil, true
+	}
+	if len(leftErrTypes) == 0 {
+		return append([]string{}, rightErrTypes...), true
+	}
+	if len(rightErrTypes) == 0 {
+		return append([]string{}, leftErrTypes...), true
+	}
+
+	merged := append([]string{}, leftErrTypes...)
+	for _, current := range rightErrTypes {
+		matched := false
+		for idx, existing := range merged {
+			next, ok := c.mergeOptionalTypeNames(existing, current)
+			if ok {
+				merged[idx] = next
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			merged = append(merged, current)
+		}
+	}
+	return merged, true
 }
 
 func (c *Checker) callableFromParams(label string, params []*ast.Param, returnType any, scope *Scope) (*CallableInfo, error) {
@@ -1385,7 +1479,7 @@ func (c *Checker) validateValueAssignment(name string, expected *ValueInfo, actu
 	if c.typesCompatible(expectedType, actualType) {
 		return nil
 	}
-	return semanticErrorf(line, "Cannot assign %s to '%s' (%s)", actualType, name, expectedType)
+	return semanticErrorf(line, "Cannot assign %s to '%s' (%s)", displayTypeName(actualType), name, displayTypeName(expectedType))
 }
 
 func (c *Checker) validateReturnValues(values []*ValueInfo, scope *Scope, line int) error {
@@ -1410,9 +1504,9 @@ func (c *Checker) validateReturnValues(values []*ValueInfo, scope *Scope, line i
 		}
 		if !c.typesCompatible(expectedType, actualType) {
 			if len(expected) == 1 {
-				return semanticErrorf(line, "Return type mismatch: expected %s, got %s", expectedType, actualType)
+				return semanticErrorf(line, "Return type mismatch: expected %s, got %s", displayTypeName(expectedType), displayTypeName(actualType))
 			}
-			return semanticErrorf(line, "Return value %d expects %s, got %s", idx+1, expectedType, actualType)
+			return semanticErrorf(line, "Return value %d expects %s, got %s", idx+1, displayTypeName(expectedType), displayTypeName(actualType))
 		}
 	}
 	return nil
@@ -1452,6 +1546,16 @@ func (c *Checker) typesCompatible(expected string, actual string) bool {
 		}
 		return isIntType(actual) || isFloatType(actual)
 	}
+	if expectedResult, ok := parseResultTypeInfo(expected); ok {
+		actualResult, actualOK := parseResultTypeInfo(actual)
+		if !actualOK {
+			return false
+		}
+		return c.resultTypesCompatible(expectedResult, actualResult)
+	}
+	if _, ok := parseResultTypeInfo(actual); ok {
+		return false
+	}
 	if expectedBase == actualBase && (expectedBase == "list" || expectedBase == "dict" || expectedBase == "result") {
 		if expected == expectedBase || actual == actualBase {
 			return true
@@ -1462,6 +1566,65 @@ func (c *Checker) typesCompatible(expected string, actual string) bool {
 		return expected == actual
 	}
 	return false
+}
+
+func (c *Checker) resultTypesCompatible(expected resultTypeInfo, actual resultTypeInfo) bool {
+	if expected.bare || actual.bare {
+		return true
+	}
+
+	if expected.okOnly {
+		if actual.errOnly || actual.okType == "" {
+			return false
+		}
+		return c.resultPayloadCompatible(expected.okType, actual.okType)
+	}
+	if expected.errOnly {
+		if actual.okOnly || (!actual.errOnly && actual.okType != "") {
+			return false
+		}
+		return c.resultErrTypesCompatible(expected.errTypes, actual.errTypes)
+	}
+
+	if actual.okOnly {
+		return c.resultPayloadCompatible(expected.okType, actual.okType)
+	}
+	if actual.errOnly {
+		return c.resultErrTypesCompatible(expected.errTypes, actual.errTypes)
+	}
+	if !c.resultPayloadCompatible(expected.okType, actual.okType) {
+		return false
+	}
+	return c.resultErrTypesCompatible(expected.errTypes, actual.errTypes)
+}
+
+func (c *Checker) resultPayloadCompatible(expected string, actual string) bool {
+	if expected == "" || actual == "" {
+		return true
+	}
+	return c.typesCompatible(expected, actual)
+}
+
+func (c *Checker) resultErrTypesCompatible(expectedErrTypes []string, actualErrTypes []string) bool {
+	if len(actualErrTypes) == 0 {
+		return true
+	}
+	if len(expectedErrTypes) == 0 {
+		return true
+	}
+	for _, actual := range actualErrTypes {
+		matched := false
+		for _, expected := range expectedErrTypes {
+			if c.typesCompatible(expected, actual) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 func isIntType(typeName string) bool {
@@ -1499,6 +1662,97 @@ func genericTypeParams(typeName string, base string) []string {
 		return nil
 	}
 	return splitTopLevel(inner, ',')
+}
+
+func parseResultTypeInfo(typeName string) (resultTypeInfo, bool) {
+	switch typeName {
+	case "result":
+		return resultTypeInfo{bare: true}, true
+	case resultOkBase:
+		return resultTypeInfo{okOnly: true}, true
+	case resultErrBase:
+		return resultTypeInfo{errOnly: true}, true
+	}
+
+	if params := genericTypeParams(typeName, "result"); len(params) >= 1 {
+		info := resultTypeInfo{okType: params[0]}
+		if len(params) == 1 {
+			info.errTypes = []string{"string"}
+			info.implicitErrs = true
+		} else {
+			info.errTypes = append([]string{}, params[1:]...)
+		}
+		return info, true
+	}
+	if params := genericTypeParams(typeName, resultOkBase); len(params) >= 1 {
+		return resultTypeInfo{okOnly: true, okType: params[0]}, true
+	}
+	if params := genericTypeParams(typeName, resultErrBase); len(params) >= 1 {
+		return resultTypeInfo{errOnly: true, errTypes: append([]string{}, params...)}, true
+	}
+	return resultTypeInfo{}, false
+}
+
+func makeResultOkType(typeName string) string {
+	if typeName == "" {
+		return resultOkBase
+	}
+	return fmt.Sprintf("%s[%s]", resultOkBase, typeName)
+}
+
+func makeResultErrType(typeName string) string {
+	if typeName == "" {
+		return resultErrBase
+	}
+	return fmt.Sprintf("%s[%s]", resultErrBase, typeName)
+}
+
+func renderResultTypeInfo(info resultTypeInfo) string {
+	switch {
+	case info.bare:
+		return "result"
+	case info.okOnly:
+		if info.okType == "" {
+			return resultOkBase
+		}
+		return fmt.Sprintf("%s[%s]", resultOkBase, info.okType)
+	case info.errOnly:
+		if len(info.errTypes) == 0 {
+			return resultErrBase
+		}
+		return fmt.Sprintf("%s[%s]", resultErrBase, strings.Join(info.errTypes, ", "))
+	case info.okType == "":
+		if len(info.errTypes) == 0 {
+			return "result"
+		}
+		return renderResultTypeInfo(resultTypeInfo{errOnly: true, errTypes: info.errTypes})
+	case info.implicitErrs && len(info.errTypes) == 1 && info.errTypes[0] == "string":
+		return fmt.Sprintf("result[%s]", info.okType)
+	default:
+		params := append([]string{info.okType}, info.errTypes...)
+		return fmt.Sprintf("result[%s]", strings.Join(params, ", "))
+	}
+}
+
+func displayTypeName(typeName string) string {
+	info, ok := parseResultTypeInfo(typeName)
+	if !ok {
+		return typeName
+	}
+	switch {
+	case info.okOnly:
+		if info.okType == "" {
+			return "ok(?)"
+		}
+		return fmt.Sprintf("ok(%s)", info.okType)
+	case info.errOnly:
+		if len(info.errTypes) == 0 {
+			return "err(?)"
+		}
+		return fmt.Sprintf("err(%s)", strings.Join(info.errTypes, " | "))
+	default:
+		return renderResultTypeInfo(info)
+	}
 }
 
 func (c *Checker) checkObjectDef(objDef *ast.ObjectDef, scope *Scope, deferred *[]func() error) error {
@@ -1720,15 +1974,13 @@ func (c *Checker) checkExpr(expr any, scope *Scope, deferred *[]func() error) (*
 			return nil, err
 		}
 		typeName := c.valueTypeName(value, scope)
-		if typeName == "" {
-			return literalValue("result"), nil
-		}
-		return literalValue(fmt.Sprintf("result[%s]", typeName)), nil
+		return literalValue(makeResultOkType(typeName)), nil
 	case *ast.ErrExpr:
-		if _, err := c.checkExpr(node.Value, scope, deferred); err != nil {
+		value, err := c.checkExpr(node.Value, scope, deferred)
+		if err != nil {
 			return nil, err
 		}
-		return literalValue("result"), nil
+		return literalValue(makeResultErrType(c.valueTypeName(value, scope))), nil
 	case *ast.ListLiteral:
 		elementType := ""
 		homogeneous := true
@@ -1774,11 +2026,11 @@ func (c *Checker) checkExpr(expr any, scope *Scope, deferred *[]func() error) (*
 			}
 			actualKey := c.valueTypeName(keyInfo, scope)
 			if actualKey != "" && !c.typesCompatible(keyType, actualKey) {
-				return nil, semanticErrorf(node.Line, "Dict key expects %s, got %s", keyType, actualKey)
+				return nil, semanticErrorf(node.Line, "Dict key expects %s, got %s", displayTypeName(keyType), displayTypeName(actualKey))
 			}
 			actualValue := c.valueTypeName(valueInfo, scope)
 			if actualValue != "" && !c.typesCompatible(valueType, actualValue) {
-				return nil, semanticErrorf(node.Line, "Dict value expects %s, got %s", valueType, actualValue)
+				return nil, semanticErrorf(node.Line, "Dict value expects %s, got %s", displayTypeName(valueType), displayTypeName(actualValue))
 			}
 		}
 		return literalValue(fmt.Sprintf("dict[%s, %s]", keyType, valueType)), nil
@@ -1786,10 +2038,11 @@ func (c *Checker) checkExpr(expr any, scope *Scope, deferred *[]func() error) (*
 		if _, err := c.checkExpr(node.Expr, scope, deferred); err != nil {
 			return nil, err
 		}
-		if _, _, err := c.resolveTypeNameString(node.TypeName, scope, node.Line, true); err != nil {
+		resolvedType, _, err := c.resolveTypeNameString(node.TypeName, scope, node.Line, true)
+		if err != nil {
 			return nil, err
 		}
-		return literalValue("result"), nil
+		return literalValue(fmt.Sprintf("result[%s]", resolvedType)), nil
 	case *ast.ObjectLiteral:
 		if err := c.checkObjectLiteral(node, scope, deferred); err != nil {
 			return nil, err
@@ -1918,7 +2171,7 @@ func (c *Checker) validateCall(callee *ValueInfo, args []*ValueInfo, scope *Scop
 		expected := c.resolveCallableTypeName(param.TypeName, signature, scope)
 		actual := c.valueTypeName(args[idx], scope)
 		if expected != "" && actual != "" && !c.typesCompatible(expected, actual) {
-			return semanticErrorf(line, "Argument '%s' to '%s' expects %s, got %s", param.Name, signature.Label, expected, actual)
+			return semanticErrorf(line, "Argument '%s' to '%s' expects %s, got %s", param.Name, signature.Label, displayTypeName(expected), displayTypeName(actual))
 		}
 	}
 	return c.validateBuiltinContainerTypes(signature, args, scope, line)
@@ -1951,11 +2204,11 @@ func (c *Checker) validateBuiltinContainerTypes(signature *CallableInfo, args []
 			if len(params) == 2 {
 				keyType := c.valueTypeName(args[1], scope)
 				if keyType != "" && !c.typesCompatible(params[0], keyType) {
-					return semanticErrorf(line, "Argument 'key' to 'get' expects %s, got %s", params[0], keyType)
+					return semanticErrorf(line, "Argument 'key' to 'get' expects %s, got %s", displayTypeName(params[0]), displayTypeName(keyType))
 				}
 				defaultType := c.valueTypeName(args[2], scope)
 				if defaultType != "" && !c.typesCompatible(params[1], defaultType) {
-					return semanticErrorf(line, "Argument 'default' to 'get' expects %s, got %s", params[1], defaultType)
+					return semanticErrorf(line, "Argument 'default' to 'get' expects %s, got %s", displayTypeName(params[1]), displayTypeName(defaultType))
 				}
 			}
 		}
@@ -1966,7 +2219,7 @@ func (c *Checker) validateBuiltinContainerTypes(signature *CallableInfo, args []
 			if len(params) == 1 && callback.CallableInfo != nil && len(callback.CallableInfo.Params) > 0 {
 				callbackParam := c.resolveCallableTypeName(callback.CallableInfo.Params[0].TypeName, callback.CallableInfo, scope)
 				if callbackParam != "" && !c.typesCompatible(callbackParam, params[0]) {
-					return semanticErrorf(line, "Argument 'f' to 'map' expects (%s) -> ..., got %s", params[0], c.valueTypeName(callback, scope))
+					return semanticErrorf(line, "Argument 'f' to 'map' expects (%s) -> ..., got %s", displayTypeName(params[0]), displayTypeName(c.valueTypeName(callback, scope)))
 				}
 			}
 		}
@@ -1977,12 +2230,12 @@ func (c *Checker) validateBuiltinContainerTypes(signature *CallableInfo, args []
 			if len(params) == 1 && callback.CallableInfo != nil && len(callback.CallableInfo.Params) > 0 {
 				callbackParam := c.resolveCallableTypeName(callback.CallableInfo.Params[0].TypeName, callback.CallableInfo, scope)
 				if callbackParam != "" && !c.typesCompatible(callbackParam, params[0]) {
-					return semanticErrorf(line, "Argument 'pred' to 'filter' expects (%s) -> bool, got %s", params[0], c.valueTypeName(callback, scope))
+					return semanticErrorf(line, "Argument 'pred' to 'filter' expects (%s) -> bool, got %s", displayTypeName(params[0]), displayTypeName(c.valueTypeName(callback, scope)))
 				}
 				if len(callback.CallableInfo.ReturnTypeNames) == 1 {
 					callbackReturn := c.resolveCallableTypeName(callback.CallableInfo.ReturnTypeNames[0], callback.CallableInfo, scope)
 					if callbackReturn != "" && callbackReturn != "bool" {
-						return semanticErrorf(line, "Argument 'pred' to 'filter' must return bool, got %s", callbackReturn)
+						return semanticErrorf(line, "Argument 'pred' to 'filter' must return bool, got %s", displayTypeName(callbackReturn))
 					}
 				}
 			}
@@ -1998,7 +2251,7 @@ func (c *Checker) validateListItemArg(signature *CallableInfo, listArg *ValueInf
 	}
 	itemType := c.valueTypeName(itemArg, scope)
 	if itemType != "" && !c.typesCompatible(params[0], itemType) {
-		return semanticErrorf(line, "Argument '%s' to '%s' expects %s, got %s", paramName, signature.Label, params[0], itemType)
+		return semanticErrorf(line, "Argument '%s' to '%s' expects %s, got %s", paramName, signature.Label, displayTypeName(params[0]), displayTypeName(itemType))
 	}
 	return nil
 }
@@ -2128,7 +2381,7 @@ func (c *Checker) checkObjectLiteral(literal *ast.ObjectLiteral, scope *Scope, d
 		}
 		actualType := c.valueTypeName(value, scope)
 		if expectedType != "" && actualType != "" && !c.typesCompatible(expectedType, actualType) {
-			return semanticErrorf(literal.Line, "Field '%s.%s' expects %s, got %s", literal.Name, field.Name, expectedType, actualType)
+			return semanticErrorf(literal.Line, "Field '%s.%s' expects %s, got %s", literal.Name, field.Name, displayTypeName(expectedType), displayTypeName(actualType))
 		}
 	}
 

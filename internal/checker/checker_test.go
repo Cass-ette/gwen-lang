@@ -207,6 +207,51 @@ func TestMultiReturnItemTypeMismatchRejected(t *testing.T) {
 endfunc`, "Return value 2 expects bool, got string")
 }
 
+func TestResultOkReturnMatchesExplicitErrorType(t *testing.T) {
+	requireOK(t, `func good() -> result[int, string]
+  return ok(42)
+endfunc`)
+}
+
+func TestResultErrReturnMatchesExplicitErrorType(t *testing.T) {
+	requireOK(t, `func good() -> result[int, string]
+  return err("boom")
+endfunc`)
+}
+
+func TestResultErrReturnRejectsWrongExplicitErrorType(t *testing.T) {
+	requireErrorContains(t, `func bad() -> result[int, string]
+  return err(42)
+endfunc`, "Return type mismatch: expected result[int, string], got err(int)")
+}
+
+func TestResultShorthandMatchesExplicitStringError(t *testing.T) {
+	requireOK(t, `func helper(flag: bool) -> result[int]
+  if flag then
+    return ok(1)
+  endif
+  return err("boom")
+endfunc
+
+func main()
+  value: result[int, string] := helper(true)
+  write(value)
+endfunc`)
+}
+
+func TestResultBranchMergeCombinesOkAndErr(t *testing.T) {
+	requireOK(t, `func main()
+  cond := 1 = 1
+  if cond then
+    value := ok(1)
+  else
+    value := err("boom")
+  endif
+  typed: result[int, string] := value
+  write(typed)
+endfunc`)
+}
+
 func TestTypedVarAssignmentMismatchRejected(t *testing.T) {
 	requireErrorContains(t, `func main()
   x: int := "oops"

@@ -123,7 +123,7 @@
 |--------------|------------|----------|
 | `int` | 字面量（`1`）、范围（`1 to 10`）、else | 否（可选 else） |
 | `string` | 字面量（`"hi"`）、else | 否 |
-| `result[T]` | `ok(x)`, `err(e)`, else | **是**（必须 ok+err 或 +else） |
+| `result[T]` / `result[T, E...]` | `ok(x)`, `err(e)`, else | **是**（必须 ok+err 或 +else） |
 | `list[T]` | ❌ 暂无列表匹配 | — |
 | `dict[K,V]` | ❌ 不支持 | — |
 
