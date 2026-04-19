@@ -136,6 +136,7 @@
 
 ## 上次更新
 
+2026-04-19 - Go 示例入口 smoke 固化：`examples/*.gw` 与各示例应用 `main.gw` 现在纳入 checker 自动回归，避免示例和语义实现继续漂移；巡检中顺手修复 `examples/fibonacci.gw` 的缓存递归签名与缓存初始化
 2026-04-19 - Go `result` match 绑定类型前移：checker 现在会把 `when ok(v)` / `when err(e)` 的载荷类型写入分支作用域，并提前拦截 `ok("x")` 这类与已知结果载荷不兼容的模式。新增 3 个 Go checker 回归测试
 2026-04-19 - Go `result`-match 语义补齐：checker/runtime 现在都拒绝对 `result` 使用字面量、范围或裸标识符模式，必须写 `ok(...)` / `err(...)`；运行期未匹配且缺少 `else` 的报错也补齐为 exhaustive 提示。新增 1 个 Go checker + 4 个 Go interpreter 回归测试，并验证 `examples/match_strict.gw`
 2026-04-19 - Go `result` 泛型语义对齐：checker 现在区分 `ok(...)` / `err(...)` 的载荷类型，支持 `result[T]` 与显式 `result[T, E...]`（其中 `result[T]` 视为 `result[T, string]`）；同时补齐分支合并里的 `ok/err` 结果面，修复 `examples/match_strict.gw` 在 `check` 阶段误报。新增 5 个 Go checker 回归测试，并验证 `examples/match_strict.gw`、`examples/segment_tree.gw`、`examples/file_io.gw`

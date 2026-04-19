@@ -3,6 +3,8 @@ package checker_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -541,6 +543,45 @@ func TestHigherOrderParameterSignatureRejected(t *testing.T) {
 	requireErrorContains(t, `func apply(f: (int) -> int) -> int
   return f("bad")
 endfunc`, "Argument 'arg1' to 'f' expects int, got string")
+}
+
+func TestExampleEntrypointsCheck(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("failed to resolve test file path")
+	}
+	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", ".."))
+
+	var paths []string
+	for _, pattern := range []string{
+		filepath.Join(repoRoot, "examples", "*.gw"),
+		filepath.Join(repoRoot, "examples", "*", "main.gw"),
+	} {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatalf("glob failed for %s: %v", pattern, err)
+		}
+		paths = append(paths, matches...)
+	}
+	sort.Strings(paths)
+
+	for _, path := range paths {
+		path := path
+		name := strings.TrimPrefix(path, repoRoot+string(os.PathSeparator))
+		t.Run(filepath.ToSlash(name), func(t *testing.T) {
+			source, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read failed: %v", err)
+			}
+			program, err := parser.Parse(string(source))
+			if err != nil {
+				t.Fatalf("parse failed: %v", err)
+			}
+			if err := checker.New().CheckProgram(program, path); err != nil {
+				t.Fatalf("check failed: %v", err)
+			}
+		})
+	}
 }
 
 func TestObjectMemberMissingRejectedInMethodBody(t *testing.T) {
