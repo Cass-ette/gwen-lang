@@ -423,9 +423,9 @@ func (c *Checker) applyClonedScope(dst *Scope, src *Scope) {
 	}
 }
 
-func (c *Checker) mergeAlternativeScopes(dst *Scope, branches []*Scope) {
+func (c *Checker) mergeAlternativeScopes(dst *Scope, branches []*Scope, context string, line int) error {
 	if len(branches) == 0 {
-		return
+		return nil
 	}
 
 	mergedValues := map[string]*ValueInfo{}
@@ -445,7 +445,11 @@ func (c *Checker) mergeAlternativeScopes(dst *Scope, branches []*Scope) {
 	for _, branch := range branches[1:] {
 		for name, value := range branch.values {
 			if existing, ok := mergedValues[name]; ok {
-				mergedValues[name] = c.mergeValueInfo(dst, existing, value)
+				merged, err := c.mergeValueInfo(dst, name, existing, value, context, line)
+				if err != nil {
+					return err
+				}
+				mergedValues[name] = merged
 				continue
 			}
 			mergedValues[name] = value
@@ -465,20 +469,24 @@ func (c *Checker) mergeAlternativeScopes(dst *Scope, branches []*Scope) {
 	dst.values = mergedValues
 	dst.aliases = mergedAliases
 	dst.objects = mergedObjects
+	return nil
 }
 
-func (c *Checker) mergeValueInfo(scope *Scope, left *ValueInfo, right *ValueInfo) *ValueInfo {
+func (c *Checker) mergeValueInfo(scope *Scope, name string, left *ValueInfo, right *ValueInfo, context string, line int) (*ValueInfo, error) {
 	if left == nil {
-		return right
+		return right, nil
 	}
 	if right == nil {
-		return left
+		return left, nil
 	}
 
 	leftType := c.valueTypeName(left, scope)
 	rightType := c.valueTypeName(right, scope)
 	if leftType != "" && leftType == rightType {
-		return left
+		return left, nil
+	}
+	if mergedType, ok := c.mergeTypeNames(leftType, rightType); ok {
+		return c.valueFromDeclaredType(mergedType, scope, name), nil
 	}
 	if reflect.DeepEqual(left.CallableInfo, right.CallableInfo) &&
 		reflect.DeepEqual(left.ObjectInfo, right.ObjectInfo) &&
@@ -486,9 +494,42 @@ func (c *Checker) mergeValueInfo(scope *Scope, left *ValueInfo, right *ValueInfo
 		left.Kind == right.Kind &&
 		left.TypeName == right.TypeName &&
 		reflect.DeepEqual(left.MultiTypeNames, right.MultiTypeNames) {
-		return left
+		return left, nil
 	}
-	return unknownValue()
+	if leftType != "" && rightType != "" {
+		return nil, semanticErrorf(line, "Variable '%s' has inconsistent types across %s branches: %s vs %s", name, context, leftType, rightType)
+	}
+	return unknownValue(), nil
+}
+
+func (c *Checker) mergeTypeNames(leftType string, rightType string) (string, bool) {
+	switch {
+	case leftType == "" || rightType == "":
+		return "", false
+	case leftType == rightType:
+		return leftType, true
+	case isFloatType(leftType) && (isFloatType(rightType) || isIntType(rightType)):
+		return "float", true
+	case isFloatType(rightType) && (isFloatType(leftType) || isIntType(leftType)):
+		return "float", true
+	case isIntType(leftType) && isIntType(rightType):
+		return "int", true
+	}
+
+	leftBase := typeBase(leftType)
+	rightBase := typeBase(rightType)
+	if leftBase == rightBase && (leftBase == "list" || leftBase == "dict" || leftBase == "result") {
+		if leftType == leftBase || rightType == rightBase {
+			return leftBase, true
+		}
+	}
+	if c.typesCompatible(leftType, rightType) {
+		return leftType, true
+	}
+	if c.typesCompatible(rightType, leftType) {
+		return rightType, true
+	}
+	return "", false
 }
 
 func (c *Checker) callableFromParams(label string, params []*ast.Param, returnType any, scope *Scope) (*CallableInfo, error) {
@@ -852,8 +893,7 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 			}
 			branches = append(branches, elseScope)
 		}
-		c.mergeAlternativeScopes(scope, branches)
-		return nil
+		return c.mergeAlternativeScopes(scope, branches, "if", node.Line)
 
 	case *ast.WhileStmt:
 		if _, err := c.checkExpr(node.Condition, scope, deferred); err != nil {
@@ -930,8 +970,7 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 			}
 			branches = append(branches, elseScope)
 		}
-		c.mergeAlternativeScopes(scope, branches)
-		return nil
+		return c.mergeAlternativeScopes(scope, branches, "match", node.Line)
 
 	case *ast.ModuleDef:
 		if err := c.validateModuleBody(node); err != nil {

@@ -316,6 +316,41 @@ func TestArenaBindingIsVisibleAfterBlock(t *testing.T) {
 endfunc`)
 }
 
+func TestIfRejectsInconsistentBranchTypes(t *testing.T) {
+	requireErrorContains(t, `func main()
+  if true then
+    x := 1
+  else
+    x := "s"
+  endif
+  write(x)
+endfunc`, "Variable 'x' has inconsistent types across if branches: int vs string")
+}
+
+func TestMatchRejectsInconsistentBranchTypes(t *testing.T) {
+	requireErrorContains(t, `func main()
+  match ok(1)
+    when ok(v) =>
+      x := 1
+    else
+      x := "s"
+  endmatch
+  write(x)
+endfunc`, "Variable 'x' has inconsistent types across match branches: int vs string")
+}
+
+func TestIfNumericBranchesMergeToFloat(t *testing.T) {
+	requireOK(t, `func main()
+  if true then
+    x := 1
+  else
+    x := 2.5
+  endif
+  y: float := x
+  write(y)
+endfunc`)
+}
+
 func TestDictLiteralValueMismatchRejected(t *testing.T) {
 	requireErrorContains(t, `func main()
   scores := dict[string, int]{"alice": "high"}
