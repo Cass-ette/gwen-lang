@@ -99,9 +99,9 @@ endfor
 
 ```gwen
 match x
-  when 1 then do_a()
-  when 2, 3 then do_b()
-  when 4 to 10 then do_c()
+  when 1 => do_a()
+  when 2, 3 => do_b()
+  when 4 to 10 => do_c()
   else do_d()
 endmatch
 ```
@@ -110,9 +110,9 @@ endmatch
 
 ```gwen
 match readfile("config.txt")
-  when ok(data) then
+  when ok(data) =>
     write(data)
-  when err(e) then
+  when err(e) =>
     write("Error:", e)
 endmatch
 ```

@@ -1322,7 +1322,7 @@ class Interpreter:
                             raise GwenError(
                                 f"Match on Result type must use ok(x) or err(x) patterns, not '{type(pat).__name__}' "
                                 f"(line {pat.line if hasattr(pat, 'line') else '?'}). "
-                                f"Use 'when ok(val) then ...' or 'when err(msg) then ...'",
+                                f"Use 'when ok(val) => ...' or 'when err(msg) => ...'",
                                 stmt.line
                             )
 

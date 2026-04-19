@@ -89,7 +89,7 @@ def test_fat_arrow():
 
 
 def test_match():
-    tokens = tokenize('match x\n  when 1 then do_a()\n  else do_b()\nendmatch')
+    tokens = tokenize('match x\n  when 1 => do_a()\n  else do_b()\nendmatch')
     types = [t.type for t in tokens if t.type not in (TokenType.EOF, TokenType.NEWLINE)]
     assert TokenType.MATCH in types
     assert TokenType.WHEN in types

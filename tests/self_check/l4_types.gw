@@ -91,7 +91,7 @@ func main()
   write("[T9] Type conversion: float -> int")
   t9 := false
   match 3.14 as int
-    when ok(ival) then
+    when ok(ival) =>
       write("  3.14 as int:", ival)
       t9 := ival = 3
     else
@@ -117,7 +117,7 @@ func main()
   write("[T11] as conversion: int -> int8")
   t11 := false
   match 100 as int8
-    when ok(v8) then
+    when ok(v8) =>
       write("  100 as int8:", v8)
       t11 := v8 = 100
     else
