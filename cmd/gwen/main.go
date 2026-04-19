@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Cass-ette/gwen-lang/internal/checker"
 	"github.com/Cass-ette/gwen-lang/internal/interpreter"
 	"github.com/Cass-ette/gwen-lang/internal/lexer"
 	"github.com/Cass-ette/gwen-lang/internal/parser"
@@ -93,7 +94,11 @@ func checkFile(path string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := parser.Parse(string(source)); err != nil {
+	program, err := parser.Parse(string(source))
+	if err != nil {
+		return err
+	}
+	if err := checker.New().CheckProgram(program, path); err != nil {
 		return err
 	}
 	fmt.Println("OK")
