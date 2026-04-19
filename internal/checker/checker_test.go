@@ -561,6 +561,29 @@ func main()
 endfunc`)
 }
 
+func TestOSTimeNamespaceImportsTypeCheck(t *testing.T) {
+	requireOK(t, `use os
+use time
+
+func main()
+  argv: list[string] := os.args()
+  base: string := os.cwd()
+  env: result[string] := os.getenv("GWEN_LANG_TEST")
+  sec: int := time.nowunix()
+  ms: int := time.nowunixms()
+  stamp: string := time.nowrfc3339()
+  time.sleep(1)
+  write(argv, base, env, sec, ms, stamp)
+endfunc`)
+}
+
+func TestOSTimeModuleOnlyBuiltinsRequireImport(t *testing.T) {
+	requireErrorContains(t, `func main()
+  argv := args()
+  write(argv)
+endfunc`, "Undefined variable: args")
+}
+
 func TestGetenvRequiresResultHandling(t *testing.T) {
 	requireErrorContains(t, `use getenv from os
 

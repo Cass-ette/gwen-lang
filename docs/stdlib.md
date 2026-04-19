@@ -15,9 +15,10 @@ Gwen 现在的标准库还处在**过渡态**：
 
 - 语言已经有一批稳定可用的“标准能力”
 - 但其中很多能力当前还是**解释器内建**
-- 它们今天**默认可用，不需要 `use`**
+- `list/string/math/dict/io` 今天仍默认可用，不需要 `use`
 - 同时，官方 `list/string/math/dict/io` 模块名现在也已经可导入
 - Go runtime 现在也已经接通第一批真正依赖宿主环境的基础模块：`os` / `time`
+- `os` / `time` 已经收口为**模块专属能力**，需要显式 `use`
 - 也**不需要**任何 `#include` / 头文件 / C++ 风格声明
 
 也就是说，当前 Gwen 更接近：
@@ -63,7 +64,7 @@ use append from list
 ### B. 应下放为真正的官方标准库模块
 
 这类能力已经稳定、有明确语义，但不必都继续绑死在语言核心里。  
-它们未来应该表现为**官方 stdlib 模块**；短期内可以继续保留 builtin 兼容层。
+它们未来应该表现为**官方 stdlib 模块**；其中 `list/string/math/dict/io` 仍保留 builtin 兼容层，`os/time` 已经先切到显式导入。
 
 | 模块 | 能力 | 现状 |
 |------|------|------|
@@ -72,14 +73,14 @@ use append from list
 | `math` | `abs` `min` `max` `sqrt` `floor` `ceil` | 已 builtin，并已支持官方 `math` 模块导入 |
 | `dict` | `haskey` `get` `keys` `values` `items` | 已 builtin，并已支持官方 `dict` 模块导入 |
 | `io` | `readfile` `writefile` `appendfile` | 已 builtin，并已支持官方 `io` 模块导入 |
-| `os` | `args` `cwd` `getenv` | Go runtime 已 builtin，并已支持官方 `os` 模块导入 |
-| `time` | `sleep` `nowunix` `nowunixms` `nowrfc3339` | Go runtime 已 builtin，并已支持官方 `time` 模块导入 |
+| `os` | `args` `cwd` `getenv` | Go runtime 官方模块；已要求显式 `use` |
+| `time` | `sleep` `nowunix` `nowunixms` `nowrfc3339` | Go runtime 官方模块；已要求显式 `use` |
 
 **推荐迁移策略**：
 
-1. `v0.1`：继续允许这些名字默认可用，避免今天的代码全量破坏。
-2. 同时把文档正式写成 `use ... from list/string/math/dict/io/os/time` 的目标形态。
-3. `v0.2+`：可以考虑让 builtin 只保留兼容别名，逐步鼓励显式导入。
+1. `v0.1`：`list/string/math/dict/io` 继续允许默认可用，避免今天的代码全量破坏。
+2. `v0.1`：`os/time` 先收口为模块专属，验证运行时模块边界和导入模型。
+3. `v0.2+`：可以考虑让更多 builtin 只保留兼容别名，逐步鼓励显式导入。
 
 ### C. 应等编译器 / runtime 阶段再做
 
@@ -98,8 +99,8 @@ use append from list
 
 ## 推荐导入形态（已支持，未来推荐）
 
-今天大多数 stdlib 能力仍是 builtin，所以**现在不强制导入**。  
-但为了让后续模块化迁移平滑，官方文档建议逐步朝下面的形态写；这批导入形态现在已经可用：
+今天大多数 stdlib 能力仍是 builtin，所以**`list/string/math/dict/io` 现在不强制导入**。  
+但 `os/time` 已经要求显式导入。为了让后续模块化迁移平滑，官方文档建议逐步朝下面的形态写；这批导入形态现在已经可用：
 
 ```gwen
 use append, pop, insert, sort, reversed, map, filter, range, enumerate from list

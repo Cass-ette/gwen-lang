@@ -181,6 +181,16 @@ var stdlibModules = map[string][]string{
 	},
 }
 
+var moduleOnlyBuiltins = map[string]struct{}{
+	"args":       {},
+	"cwd":        {},
+	"getenv":     {},
+	"sleep":      {},
+	"nowunix":    {},
+	"nowunixms":  {},
+	"nowrfc3339": {},
+}
+
 func New() *Checker {
 	globalScope := newScope(nil)
 	checker := &Checker{
@@ -191,6 +201,7 @@ func New() *Checker {
 	}
 	checker.setupBuiltins()
 	checker.setupStdlibModules()
+	checker.hideModuleOnlyBuiltins()
 	return checker
 }
 
@@ -241,6 +252,12 @@ func (c *Checker) setupStdlibModules() {
 			}
 		}
 		c.modules[moduleName] = module
+	}
+}
+
+func (c *Checker) hideModuleOnlyBuiltins() {
+	for name := range moduleOnlyBuiltins {
+		delete(c.globalScope.values, name)
 	}
 }
 

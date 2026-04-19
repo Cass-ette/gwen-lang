@@ -136,6 +136,7 @@
 
 ## 上次更新
 
+2026-04-19 - Go stdlib 模块边界继续收紧：`os` / `time` 现已从全局 builtin 作用域移除，必须通过 `use os`、`use time` 或 `use ... from os/time` 访问；同时补齐 checker / interpreter 对“未导入直接访问报错”与命名空间导入的回归测试，为后续 `http` 模块接入先把模块边界钉死
 2026-04-19 - Go runtime 基础模块起步：新增官方 `os` / `time` 模块导入面，`os.args/cwd/getenv`、`time.sleep/nowunix/nowunixms/nowrfc3339` 已在 Go checker/runtime 落地；CLI 现在支持 `gwen run app.gw arg1 arg2` 透传程序参数。新增 Go checker / interpreter / CLI 回归测试
 2026-04-19 - Go 示例入口 smoke 固化：`examples/*.gw` 与各示例应用 `main.gw` 现在纳入 checker 自动回归，避免示例和语义实现继续漂移；巡检中顺手修复 `examples/fibonacci.gw` 的缓存递归签名与缓存初始化
 2026-04-19 - Go `result` match 绑定类型前移：checker 现在会把 `when ok(v)` / `when err(e)` 的载荷类型写入分支作用域，并提前拦截 `ok("x")` 这类与已知结果载荷不兼容的模式。新增 3 个 Go checker 回归测试

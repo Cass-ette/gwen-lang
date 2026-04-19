@@ -95,6 +95,16 @@ var officialStdlibModules = map[string][]string{
 	},
 }
 
+var moduleOnlyBuiltins = map[string]struct{}{
+	"args":       {},
+	"cwd":        {},
+	"getenv":     {},
+	"sleep":      {},
+	"nowunix":    {},
+	"nowunixms":  {},
+	"nowrfc3339": {},
+}
+
 type RuntimeError struct {
 	Message string
 	Line    int
@@ -299,6 +309,7 @@ func New() *Interpreter {
 	}
 	interp.setupBuiltins()
 	interp.setupStdlibModules()
+	interp.hideModuleOnlyBuiltins()
 	return interp
 }
 
@@ -2557,6 +2568,12 @@ func (i *Interpreter) setupStdlibModules() {
 			moduleEnv.Set(name, value)
 		}
 		i.Modules[moduleName] = moduleEnv
+	}
+}
+
+func (i *Interpreter) hideModuleOnlyBuiltins() {
+	for name := range moduleOnlyBuiltins {
+		delete(i.GlobalEnv.vars, name)
 	}
 }
 

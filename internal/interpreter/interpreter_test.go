@@ -571,7 +571,7 @@ endfunc`, path)
 	}
 }
 
-func TestOSModuleBuiltins(t *testing.T) {
+func TestOSModuleImports(t *testing.T) {
 	t.Setenv("GWEN_LANG_TEST_ENV", "present")
 	wd, err := os.Getwd()
 	if err != nil {
@@ -626,7 +626,7 @@ endfunc`)
 	}
 }
 
-func TestTimeModuleBuiltins(t *testing.T) {
+func TestTimeModuleImports(t *testing.T) {
 	start := time.Now()
 	out := runSource(t, `use sleep, nowunix, nowunixms, nowrfc3339 from time
 
@@ -645,6 +645,39 @@ endfunc`)
 	if out != "True\nTrue\nTrue" {
 		t.Fatalf("output mismatch: got %q want %q", out, "True\nTrue\nTrue")
 	}
+}
+
+func TestOSTimeNamespaceImports(t *testing.T) {
+	t.Setenv("GWEN_LANG_TEST_ENV", "present")
+
+	out := runSource(t, `use os
+use time
+
+func main()
+  argv := os.args()
+  write("argc", len(argv))
+  write("cwd", os.cwd() != "")
+  match os.getenv("GWEN_LANG_TEST_ENV")
+    when ok(value) => write("env", value)
+    when err(e) => write("missing", e)
+  endmatch
+  before := time.nowunixms()
+  time.sleep(5)
+  after := time.nowunixms()
+  write(after >= before)
+  write(time.nowunix() >= 0)
+  write(contains(time.nowrfc3339(), "T"))
+endfunc`)
+
+	if out != "argc 0\ncwd True\nenv present\nTrue\nTrue\nTrue" {
+		t.Fatalf("output mismatch: got %q want %q", out, "argc 0\ncwd True\nenv present\nTrue\nTrue\nTrue")
+	}
+}
+
+func TestOSTimeModuleOnlyBuiltinsRequireImport(t *testing.T) {
+	requireRuntimeErrorContains(t, `func main()
+  write(args())
+endfunc`, "Undefined variable: args")
 }
 
 func TestSleepRejectsNegativeDuration(t *testing.T) {
