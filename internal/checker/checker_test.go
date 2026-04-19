@@ -175,6 +175,119 @@ endfunc
 	}
 }
 
+func TestTooManyFunctionArgumentsRejected(t *testing.T) {
+	requireErrorContains(t, `func add_one(x: int) -> int
+  return x + 1
+endfunc
+
+func main()
+  write(add_one(1, 2))
+endfunc`, "Too many arguments for 'add_one'")
+}
+
+func TestFunctionArgumentTypeMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func greet(name: string)
+  write(name)
+endfunc
+
+func main()
+  greet(42)
+endfunc`, "Argument 'name' to 'greet' expects string, got int")
+}
+
+func TestReturnTypeMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func bad() -> int
+  return "oops"
+endfunc`, "Return type mismatch: expected int, got string")
+}
+
+func TestMultiReturnItemTypeMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func pair() -> int, bool
+  return 1, "nope"
+endfunc`, "Return value 2 expects bool, got string")
+}
+
+func TestTypedVarAssignmentMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func main()
+  x: int := "oops"
+endfunc`, "Cannot assign string to 'x' (int)")
+}
+
+func TestTypedReassignmentMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func main()
+  x: int := 1
+  x := "oops"
+endfunc`, "Cannot assign string to 'x' (int)")
+}
+
+func TestFunctionTypeAssignmentMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func greet(name: string) -> int
+  return 1
+endfunc
+
+func main()
+  f: (int) -> int := greet
+  write(f(1))
+endfunc`, "Cannot assign (string) -> int to 'f' ((int) -> int)")
+}
+
+func TestMultiAssignCountMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func one() -> int
+  return 1
+endfunc
+
+func main()
+  a, b := one()
+endfunc`, "Assignment count mismatch: 2 targets, 1 values")
+}
+
+func TestTypedListLiteralItemMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func main()
+  xs: list[int] := ["a", "b"]
+endfunc`, "Cannot assign list[string] to 'xs' (list[int])")
+}
+
+func TestDictLiteralValueMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func main()
+  scores := dict[string, int]{"alice": "high"}
+endfunc`, "Dict value expects int, got string")
+}
+
+func TestAppendItemTypeMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `func main()
+  xs: list[int] := [1, 2]
+  append(xs, "bad")
+endfunc`, "Argument 'item' to 'append' expects int, got string")
+}
+
+func TestHigherOrderParameterSignatureRejected(t *testing.T) {
+	requireErrorContains(t, `func apply(f: (int) -> int) -> int
+  return f("bad")
+endfunc`, "Argument 'arg1' to 'f' expects int, got string")
+}
+
+func TestObjectMemberMissingRejectedInMethodBody(t *testing.T) {
+	requireErrorContains(t, `object Account
+  balance: int
+
+  func broken(self: Account) -> int
+    return self.missing()
+  endfunc
+endobject`, "Object 'Account' has no member 'missing'")
+}
+
+func TestModuleTypeAliasIsNotRuntimeMember(t *testing.T) {
+	requireErrorContains(t, `module ids
+  export type UserId = int
+endmodule
+
+use ids
+
+func main()
+  write(ids.UserId)
+endfunc`, "not a runtime member of module 'ids'")
+}
+
 func mustWrite(t *testing.T, path string, contents string) {
 	t.Helper()
 

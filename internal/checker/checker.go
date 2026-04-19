@@ -31,21 +31,48 @@ type Checker struct {
 
 type ModuleInfo struct {
 	Name           string
-	RuntimeExports map[string]struct{}
-	ObjectExports  map[string]*ObjectInfo
+	RuntimeExports map[string]*ValueInfo
 	TypeExports    map[string]string
 }
 
 type ObjectInfo struct {
-	Name    string
-	Fields  map[string]string
-	Methods map[string]struct{}
+	Name           string
+	Fields         map[string]string
+	Methods        map[string]*CallableInfo
+	HasConstructor bool
+	Constructor    *CallableInfo
 }
 
 type Scope struct {
-	parent  *Scope
-	aliases map[string]string
-	objects map[string]*ObjectInfo
+	parent              *Scope
+	values              map[string]*ValueInfo
+	aliases             map[string]string
+	objects             map[string]*ObjectInfo
+	expectedReturnTypes []string
+}
+
+type ValueInfo struct {
+	Kind           string
+	TypeName       string
+	MultiTypeNames []string
+	ObjectInfo     *ObjectInfo
+	ModuleInfo     *ModuleInfo
+	CallableInfo   *CallableInfo
+}
+
+type CallableInfo struct {
+	Label           string
+	Params          []ParamInfo
+	ReturnTypeNames []string
+	Variadic        bool
+	DefinitionScope *Scope
+}
+
+type ParamInfo struct {
+	Name       string
+	TypeName   string
+	HasDefault bool
+	Line       int
 }
 
 var baseTypeNames = map[string]struct{}{
@@ -84,10 +111,14 @@ var genericBaseArity = map[string]arity{
 var stdlibModules = map[string][]string{
 	"list": {
 		"append",
+		"pop",
 		"concat",
 		"removeat",
+		"insert",
 		"sort",
 		"asc",
+		"desc",
+		"reversed",
 		"map",
 		"filter",
 		"range",
@@ -99,6 +130,15 @@ var stdlibModules = map[string][]string{
 		"substring",
 		"contains",
 		"trim",
+		"replace",
+	},
+	"math": {
+		"abs",
+		"min",
+		"max",
+		"sqrt",
+		"floor",
+		"ceil",
 	},
 	"dict": {
 		"haskey",
@@ -122,6 +162,7 @@ func New() *Checker {
 		moduleSearchPaths: []string{},
 		loadingModules:    map[string]struct{}{},
 	}
+	checker.setupBuiltins()
 	checker.setupStdlibModules()
 	return checker
 }
@@ -154,22 +195,114 @@ func (c *Checker) AddModuleSearchPath(path string) {
 	c.moduleSearchPaths = append([]string{absPath}, c.moduleSearchPaths...)
 }
 
+func (c *Checker) setupBuiltins() {
+	for name, signature := range builtinSignatures() {
+		c.globalScope.defineValue(name, &ValueInfo{
+			Kind:         "builtin",
+			TypeName:     signature.typeName(),
+			CallableInfo: signature,
+		})
+	}
+}
+
 func (c *Checker) setupStdlibModules() {
 	for moduleName, names := range stdlibModules {
 		module := newModuleInfo(moduleName)
 		for _, name := range names {
-			module.RuntimeExports[name] = struct{}{}
+			if value, ok := c.globalScope.resolveLocalValue(name); ok {
+				module.RuntimeExports[name] = value
+			}
 		}
 		c.modules[moduleName] = module
 	}
 }
 
-func newScope(parent *Scope) *Scope {
-	return &Scope{
-		parent:  parent,
-		aliases: map[string]string{},
-		objects: map[string]*ObjectInfo{},
+func builtinSignatures() map[string]*CallableInfo {
+	return map[string]*CallableInfo{
+		"write":      {Label: "write", Variadic: true},
+		"read":       {Label: "read", Params: []ParamInfo{{Name: "prompt", HasDefault: true}}, ReturnTypeNames: []string{"string"}},
+		"len":        {Label: "len", Params: []ParamInfo{{Name: "obj"}}, ReturnTypeNames: []string{"int"}},
+		"str":        {Label: "str", Params: []ParamInfo{{Name: "obj"}}, ReturnTypeNames: []string{"string"}},
+		"int":        {Label: "int", Params: []ParamInfo{{Name: "obj"}}, ReturnTypeNames: []string{"int"}},
+		"float":      {Label: "float", Params: []ParamInfo{{Name: "obj"}}, ReturnTypeNames: []string{"float"}},
+		"append":     {Label: "append", Params: []ParamInfo{{Name: "lst", TypeName: "list"}, {Name: "item"}}},
+		"typeof":     {Label: "typeof", Params: []ParamInfo{{Name: "obj"}}, ReturnTypeNames: []string{"string"}},
+		"sort":       {Label: "sort", Params: []ParamInfo{{Name: "lst"}, {Name: "cmp"}}},
+		"asc":        {Label: "asc", Params: []ParamInfo{{Name: "a"}, {Name: "b"}}, ReturnTypeNames: []string{"bool"}},
+		"desc":       {Label: "desc", Params: []ParamInfo{{Name: "a"}, {Name: "b"}}, ReturnTypeNames: []string{"bool"}},
+		"reversed":   {Label: "reversed", Params: []ParamInfo{{Name: "lst"}}},
+		"map":        {Label: "map", Params: []ParamInfo{{Name: "lst", TypeName: "list"}, {Name: "f"}}, ReturnTypeNames: []string{"list"}},
+		"filter":     {Label: "filter", Params: []ParamInfo{{Name: "lst", TypeName: "list"}, {Name: "pred"}}, ReturnTypeNames: []string{"list"}},
+		"range":      {Label: "range", Params: []ParamInfo{{Name: "start", TypeName: "int"}, {Name: "end", TypeName: "int"}, {Name: "step", TypeName: "int", HasDefault: true}}, ReturnTypeNames: []string{"list[int]"}},
+		"enumerate":  {Label: "enumerate", Params: []ParamInfo{{Name: "lst", TypeName: "list"}}, ReturnTypeNames: []string{"list"}},
+		"split":      {Label: "split", Params: []ParamInfo{{Name: "s", TypeName: "string"}, {Name: "sep", TypeName: "string"}}, ReturnTypeNames: []string{"list[string]"}},
+		"join":       {Label: "join", Params: []ParamInfo{{Name: "parts", TypeName: "list"}, {Name: "sep", TypeName: "string"}}, ReturnTypeNames: []string{"string"}},
+		"pop":        {Label: "pop", Params: []ParamInfo{{Name: "lst"}}},
+		"removeat":   {Label: "removeat", Params: []ParamInfo{{Name: "lst"}, {Name: "idx", TypeName: "int"}}},
+		"insert":     {Label: "insert", Params: []ParamInfo{{Name: "lst"}, {Name: "idx", TypeName: "int"}, {Name: "item"}}},
+		"concat":     {Label: "concat", Params: []ParamInfo{{Name: "a", TypeName: "list"}, {Name: "b", TypeName: "list"}}, ReturnTypeNames: []string{"list"}},
+		"substring":  {Label: "substring", Params: []ParamInfo{{Name: "s", TypeName: "string"}, {Name: "start", TypeName: "int"}, {Name: "end", TypeName: "int"}}, ReturnTypeNames: []string{"string"}},
+		"contains":   {Label: "contains", Params: []ParamInfo{{Name: "s"}, {Name: "substr"}}, ReturnTypeNames: []string{"bool"}},
+		"trim":       {Label: "trim", Params: []ParamInfo{{Name: "s", TypeName: "string"}}, ReturnTypeNames: []string{"string"}},
+		"replace":    {Label: "replace", Params: []ParamInfo{{Name: "s", TypeName: "string"}, {Name: "old", TypeName: "string"}, {Name: "new", TypeName: "string"}}, ReturnTypeNames: []string{"string"}},
+		"abs":        {Label: "abs", Params: []ParamInfo{{Name: "x"}}},
+		"min":        {Label: "min", Params: []ParamInfo{{Name: "a"}, {Name: "b"}}},
+		"max":        {Label: "max", Params: []ParamInfo{{Name: "a"}, {Name: "b"}}},
+		"sqrt":       {Label: "sqrt", Params: []ParamInfo{{Name: "x"}}, ReturnTypeNames: []string{"float"}},
+		"floor":      {Label: "floor", Params: []ParamInfo{{Name: "x"}}, ReturnTypeNames: []string{"float"}},
+		"ceil":       {Label: "ceil", Params: []ParamInfo{{Name: "x"}}, ReturnTypeNames: []string{"float"}},
+		"haskey":     {Label: "haskey", Params: []ParamInfo{{Name: "d", TypeName: "dict"}, {Name: "key"}}, ReturnTypeNames: []string{"bool"}},
+		"get":        {Label: "get", Params: []ParamInfo{{Name: "d", TypeName: "dict"}, {Name: "key"}, {Name: "default"}}},
+		"keys":       {Label: "keys", Params: []ParamInfo{{Name: "d", TypeName: "dict"}}, ReturnTypeNames: []string{"list"}},
+		"values":     {Label: "values", Params: []ParamInfo{{Name: "d", TypeName: "dict"}}, ReturnTypeNames: []string{"list"}},
+		"items":      {Label: "items", Params: []ParamInfo{{Name: "d", TypeName: "dict"}}, ReturnTypeNames: []string{"list"}},
+		"readfile":   {Label: "readfile", Params: []ParamInfo{{Name: "path", TypeName: "string"}}, ReturnTypeNames: []string{"result[string]"}},
+		"writefile":  {Label: "writefile", Params: []ParamInfo{{Name: "path", TypeName: "string"}, {Name: "content", TypeName: "string"}}, ReturnTypeNames: []string{"result[int]"}},
+		"appendfile": {Label: "appendfile", Params: []ParamInfo{{Name: "path", TypeName: "string"}, {Name: "content", TypeName: "string"}}, ReturnTypeNames: []string{"result[int]"}},
 	}
+}
+
+func newScope(parent *Scope) *Scope {
+	var expectedReturnTypes []string
+	if parent != nil {
+		expectedReturnTypes = parent.expectedReturnTypes
+	}
+	return &Scope{
+		parent:              parent,
+		values:              map[string]*ValueInfo{},
+		aliases:             map[string]string{},
+		objects:             map[string]*ObjectInfo{},
+		expectedReturnTypes: expectedReturnTypes,
+	}
+}
+
+func newReturnScope(parent *Scope, expectedReturnTypes []string) *Scope {
+	return &Scope{
+		parent:              parent,
+		values:              map[string]*ValueInfo{},
+		aliases:             map[string]string{},
+		objects:             map[string]*ObjectInfo{},
+		expectedReturnTypes: expectedReturnTypes,
+	}
+}
+
+func (s *Scope) defineValue(name string, value *ValueInfo) {
+	s.values[name] = value
+}
+
+func (s *Scope) resolveValue(name string) (*ValueInfo, bool) {
+	if value, ok := s.values[name]; ok {
+		return value, true
+	}
+	if s.parent != nil {
+		return s.parent.resolveValue(name)
+	}
+	return nil, false
+}
+
+func (s *Scope) resolveLocalValue(name string) (*ValueInfo, bool) {
+	value, ok := s.values[name]
+	return value, ok
 }
 
 func (s *Scope) defineAlias(name, target string) {
@@ -203,8 +336,7 @@ func (s *Scope) resolveObject(name string) (*ObjectInfo, bool) {
 func newModuleInfo(name string) *ModuleInfo {
 	return &ModuleInfo{
 		Name:           name,
-		RuntimeExports: map[string]struct{}{},
-		ObjectExports:  map[string]*ObjectInfo{},
+		RuntimeExports: map[string]*ValueInfo{},
 		TypeExports:    map[string]string{},
 	}
 }
@@ -220,6 +352,219 @@ func (c *Checker) runDeferred(deferred *[]func() error) error {
 	return nil
 }
 
+func (c *Checker) callableFromParams(label string, params []*ast.Param, returnType any, scope *Scope) (*CallableInfo, error) {
+	callable := &CallableInfo{
+		Label:           label,
+		Params:          make([]ParamInfo, 0, len(params)),
+		ReturnTypeNames: renderReturnTypes(returnType),
+		DefinitionScope: scope,
+	}
+	for _, param := range params {
+		typeName := ""
+		if param.TypeName != nil {
+			rendered, ok := renderType(param.TypeName)
+			if ok {
+				typeName = rendered
+			}
+		}
+		callable.Params = append(callable.Params, ParamInfo{
+			Name:       param.Name,
+			TypeName:   typeName,
+			HasDefault: param.Default != nil,
+			Line:       param.Line,
+		})
+	}
+	return callable, nil
+}
+
+func (c *Checker) valueFromDeclaredType(typeName string, scope *Scope, label string) *ValueInfo {
+	value := &ValueInfo{
+		Kind:     "variable",
+		TypeName: typeName,
+	}
+	if obj, ok := c.tryResolveObjectInfo(typeName, scope); ok {
+		value.ObjectInfo = obj
+	}
+	if callable := callableFromTypeName(typeName, label, scope); callable != nil {
+		value.CallableInfo = callable
+	}
+	return value
+}
+
+func (c *Checker) copyValue(value *ValueInfo, scope *Scope) *ValueInfo {
+	if value == nil {
+		return unknownValue()
+	}
+	copied := *value
+	if copied.TypeName != "" {
+		if obj, ok := c.tryResolveObjectInfo(copied.TypeName, scope); ok {
+			copied.ObjectInfo = obj
+		}
+		if copied.CallableInfo == nil {
+			copied.CallableInfo = callableFromTypeName(copied.TypeName, copied.TypeName, scope)
+		}
+	}
+	return &copied
+}
+
+func unknownValue() *ValueInfo {
+	return &ValueInfo{Kind: "unknown"}
+}
+
+func literalValue(typeName string) *ValueInfo {
+	return &ValueInfo{Kind: "literal", TypeName: typeName}
+}
+
+func (c *Checker) valueTypeName(value *ValueInfo, scope *Scope) string {
+	if value == nil {
+		return ""
+	}
+	if value.TypeName == "" {
+		return ""
+	}
+	resolved, ok, err := c.resolveTypeNameString(value.TypeName, scope, 0, false)
+	if err == nil && ok {
+		return resolved
+	}
+	return value.TypeName
+}
+
+func (c *Checker) tryResolveObjectInfo(name string, scope *Scope) (*ObjectInfo, bool) {
+	if name == "" {
+		return nil, false
+	}
+	resolved, ok, err := c.resolveTypeNameString(name, scope, 0, false)
+	if err == nil && ok {
+		name = resolved
+	}
+	return scope.resolveObject(name)
+}
+
+func (ci *CallableInfo) typeName() string {
+	if ci == nil {
+		return ""
+	}
+	params := make([]string, 0, len(ci.Params))
+	for _, param := range ci.Params {
+		if param.TypeName == "" {
+			return ""
+		}
+		params = append(params, param.TypeName)
+	}
+	returnType := "void"
+	if len(ci.ReturnTypeNames) == 1 {
+		returnType = ci.ReturnTypeNames[0]
+	} else if len(ci.ReturnTypeNames) > 1 {
+		returnType = strings.Join(ci.ReturnTypeNames, ", ")
+	}
+	return fmt.Sprintf("(%s) -> %s", strings.Join(params, ", "), returnType)
+}
+
+func callableFromTypeName(typeName string, label string, scope *Scope) *CallableInfo {
+	if !strings.HasPrefix(typeName, "(") || !strings.Contains(typeName, "->") {
+		return nil
+	}
+	paramText, returnText, ok := splitFuncType(typeName)
+	if !ok {
+		return nil
+	}
+	callable := &CallableInfo{Label: label, DefinitionScope: scope}
+	if strings.TrimSpace(paramText) != "" {
+		for idx, part := range splitTopLevel(paramText, ',') {
+			callable.Params = append(callable.Params, ParamInfo{
+				Name:     fmt.Sprintf("arg%d", idx+1),
+				TypeName: strings.TrimSpace(part),
+			})
+		}
+	}
+	if strings.TrimSpace(returnText) != "" && strings.TrimSpace(returnText) != "void" {
+		callable.ReturnTypeNames = []string{strings.TrimSpace(returnText)}
+	}
+	return callable
+}
+
+func splitFuncType(typeName string) (string, string, bool) {
+	typeName = strings.TrimSpace(typeName)
+	if !strings.HasPrefix(typeName, "(") {
+		return "", "", false
+	}
+	depthParen := 0
+	depthBracket := 0
+	for i := 0; i < len(typeName)-1; i++ {
+		switch typeName[i] {
+		case '(':
+			depthParen++
+		case ')':
+			depthParen--
+		case '[':
+			depthBracket++
+		case ']':
+			depthBracket--
+		case '-':
+			if typeName[i+1] == '>' && depthParen == 0 && depthBracket == 0 {
+				params := strings.TrimSpace(typeName[:i])
+				if len(params) < 2 || params[0] != '(' || params[len(params)-1] != ')' {
+					return "", "", false
+				}
+				return params[1 : len(params)-1], strings.TrimSpace(typeName[i+2:]), true
+			}
+		}
+	}
+	return "", "", false
+}
+
+func splitTopLevel(text string, sep byte) []string {
+	var parts []string
+	depthParen := 0
+	depthBracket := 0
+	start := 0
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '(':
+			depthParen++
+		case ')':
+			depthParen--
+		case '[':
+			depthBracket++
+		case ']':
+			depthBracket--
+		default:
+			if text[i] == sep && depthParen == 0 && depthBracket == 0 {
+				part := strings.TrimSpace(text[start:i])
+				if part != "" {
+					parts = append(parts, part)
+				}
+				start = i + 1
+			}
+		}
+	}
+	part := strings.TrimSpace(text[start:])
+	if part != "" {
+		parts = append(parts, part)
+	}
+	return parts
+}
+
+func renderReturnTypes(returnType any) []string {
+	switch node := returnType.(type) {
+	case nil:
+		return nil
+	case []any:
+		types := make([]string, 0, len(node))
+		for _, item := range node {
+			if rendered, ok := renderType(item); ok {
+				types = append(types, rendered)
+			}
+		}
+		return types
+	default:
+		if rendered, ok := renderType(node); ok {
+			return []string{rendered}
+		}
+		return nil
+	}
+}
+
 func (c *Checker) checkBlock(stmts []any, scope *Scope, deferred *[]func() error) error {
 	for _, stmt := range stmts {
 		if err := c.checkStmt(stmt, scope, deferred); err != nil {
@@ -232,6 +577,15 @@ func (c *Checker) checkBlock(stmts []any, scope *Scope, deferred *[]func() error
 func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) error {
 	switch node := stmt.(type) {
 	case *ast.FuncDef:
+		signature, err := c.callableFromParams(node.Name, node.Params, node.ReturnType, scope)
+		if err != nil {
+			return err
+		}
+		scope.defineValue(node.Name, &ValueInfo{
+			Kind:         "function",
+			TypeName:     signature.typeName(),
+			CallableInfo: signature,
+		})
 		deferredScope := scope
 		*deferred = append(*deferred, func() error {
 			return c.checkFuncBody(node, deferredScope)
@@ -239,12 +593,40 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		return nil
 
 	case *ast.Assignment:
-		for _, value := range node.Values {
-			if err := c.checkExpr(value, scope, deferred); err != nil {
+		values := make([]*ValueInfo, 0, len(node.Values))
+		for _, valueExpr := range node.Values {
+			value, err := c.checkExpr(valueExpr, scope, deferred)
+			if err != nil {
 				return err
 			}
+			values = append(values, value)
 		}
-		for _, target := range node.Targets {
+		assignedValues := values
+		if len(node.Targets) > 1 && len(values) == 1 && len(values[0].MultiTypeNames) > 0 {
+			assignedValues = make([]*ValueInfo, 0, len(values[0].MultiTypeNames))
+			for _, typeName := range values[0].MultiTypeNames {
+				assignedValues = append(assignedValues, c.valueFromDeclaredType(typeName, scope, typeName))
+			}
+		}
+		if len(node.Targets) != len(assignedValues) {
+			return semanticErrorf(node.Line, "Assignment count mismatch: %d targets, %d values", len(node.Targets), len(assignedValues))
+		}
+		for idx, target := range node.Targets {
+			actualValue := assignedValues[idx]
+			if name, ok := target.(string); ok {
+				if existing, exists := scope.resolveLocalValue(name); exists {
+					if existing.Kind == "builtin" {
+						scope.defineValue(name, c.copyValue(actualValue, scope))
+						continue
+					}
+					if err := c.validateValueAssignment(name, existing, actualValue, scope, node.Line); err != nil {
+						return err
+					}
+					continue
+				}
+				scope.defineValue(name, c.copyValue(actualValue, scope))
+				continue
+			}
 			if err := c.checkAssignmentTarget(target, scope, deferred, node.Line); err != nil {
 				return err
 			}
@@ -252,19 +634,32 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		return nil
 
 	case *ast.VarDecl:
+		declaredType := ""
 		if node.TypeName != nil {
-			if _, err := c.resolveTypeNode(node.TypeName, scope, node.Line); err != nil {
+			resolved, err := c.resolveTypeNode(node.TypeName, scope, node.Line)
+			if err != nil {
+				return err
+			}
+			declaredType = resolved
+		}
+		var inferred *ValueInfo
+		if node.Value != nil {
+			var err error
+			inferred, err = c.checkExpr(node.Value, scope, deferred)
+			if err != nil {
 				return err
 			}
 		}
-		if node.Value != nil {
-			return c.checkExpr(node.Value, scope, deferred)
+		value, err := c.bindDeclaredValue(node.Name, declaredType, inferred, scope, node.Line)
+		if err != nil {
+			return err
 		}
+		scope.defineValue(node.Name, value)
 		return nil
 
 	case *ast.VarBlock:
 		if node.DefaultValue != nil {
-			if err := c.checkExpr(node.DefaultValue, scope, deferred); err != nil {
+			if _, err := c.checkExpr(node.DefaultValue, scope, deferred); err != nil {
 				return err
 			}
 		}
@@ -289,17 +684,17 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		return nil
 
 	case *ast.ReturnStmt:
-		return c.checkReturnValue(node.Value, scope, deferred)
+		return c.checkReturnValue(node.Value, scope, deferred, node.Line)
 
 	case *ast.IfStmt:
-		if err := c.checkExpr(node.Condition, scope, deferred); err != nil {
+		if _, err := c.checkExpr(node.Condition, scope, deferred); err != nil {
 			return err
 		}
 		if err := c.checkBlock(node.Body, newScope(scope), deferred); err != nil {
 			return err
 		}
 		for _, branch := range node.Elifs {
-			if err := c.checkExpr(branch.Condition, scope, deferred); err != nil {
+			if _, err := c.checkExpr(branch.Condition, scope, deferred); err != nil {
 				return err
 			}
 			if err := c.checkBlock(branch.Body, newScope(scope), deferred); err != nil {
@@ -309,39 +704,51 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		return c.checkBlock(node.ElseBody, newScope(scope), deferred)
 
 	case *ast.WhileStmt:
-		if err := c.checkExpr(node.Condition, scope, deferred); err != nil {
+		if _, err := c.checkExpr(node.Condition, scope, deferred); err != nil {
 			return err
 		}
 		return c.checkBlock(node.Body, newScope(scope), deferred)
 
 	case *ast.ForRangeStmt:
-		if err := c.checkExpr(node.Start, scope, deferred); err != nil {
+		if _, err := c.checkExpr(node.Start, scope, deferred); err != nil {
 			return err
 		}
-		if err := c.checkExpr(node.End, scope, deferred); err != nil {
+		if _, err := c.checkExpr(node.End, scope, deferred); err != nil {
 			return err
 		}
 		if node.Step != nil {
-			if err := c.checkExpr(node.Step, scope, deferred); err != nil {
+			if _, err := c.checkExpr(node.Step, scope, deferred); err != nil {
 				return err
 			}
 		}
-		return c.checkBlock(node.Body, newScope(scope), deferred)
+		loopScope := newScope(scope)
+		loopScope.defineValue(node.Var, c.valueFromDeclaredType("int", loopScope, node.Var))
+		return c.checkBlock(node.Body, loopScope, deferred)
 
 	case *ast.ForEachStmt:
-		if err := c.checkExpr(node.Iterable, scope, deferred); err != nil {
+		iterable, err := c.checkExpr(node.Iterable, scope, deferred)
+		if err != nil {
 			return err
 		}
-		return c.checkBlock(node.Body, newScope(scope), deferred)
+		loopScope := newScope(scope)
+		itemType := ""
+		if params := genericTypeParams(c.valueTypeName(iterable, scope), "list"); len(params) == 1 {
+			itemType = params[0]
+		}
+		loopScope.defineValue(node.Var, c.valueFromDeclaredType(itemType, loopScope, node.Var))
+		if node.IndexVar != "" {
+			loopScope.defineValue(node.IndexVar, c.valueFromDeclaredType("int", loopScope, node.IndexVar))
+		}
+		return c.checkBlock(node.Body, loopScope, deferred)
 
 	case *ast.MatchStmt:
-		if err := c.checkExpr(node.Subject, scope, deferred); err != nil {
+		if _, err := c.checkExpr(node.Subject, scope, deferred); err != nil {
 			return err
 		}
 		for _, clause := range node.Cases {
 			caseScope := newScope(scope)
 			for _, pattern := range clause.Patterns {
-				if err := c.checkExpr(pattern, caseScope, deferred); err != nil {
+				if err := c.checkPattern(pattern, caseScope, deferred); err != nil {
 					return err
 				}
 			}
@@ -364,6 +771,7 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 			return err
 		}
 		c.modules[node.Name] = module
+		scope.defineValue(node.Name, &ValueInfo{Kind: "module", ModuleInfo: module})
 		return nil
 
 	case *ast.UseStmt:
@@ -376,7 +784,8 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		if node.Value == nil {
 			return nil
 		}
-		return c.checkExpr(node.Value, scope, deferred)
+		_, err := c.checkExpr(node.Value, scope, deferred)
+		return err
 
 	case *ast.ArenaStmt:
 		return c.checkBlock(node.Body, newScope(scope), deferred)
@@ -388,26 +797,35 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		return c.checkObjectDef(node, scope, deferred)
 
 	case *ast.ExprStmt:
-		return c.checkExpr(node.Expr, scope, deferred)
+		_, err := c.checkExpr(node.Expr, scope, deferred)
+		return err
 
 	default:
 		return semanticErrorf(lineOf(stmt), "Unknown statement type: %T", stmt)
 	}
 }
 
-func (c *Checker) checkReturnValue(value any, scope *Scope, deferred *[]func() error) error {
-	switch values := value.(type) {
+func (c *Checker) checkReturnValue(value any, scope *Scope, deferred *[]func() error, line int) error {
+	var infos []*ValueInfo
+	switch exprs := value.(type) {
 	case nil:
-		return nil
+		return c.validateReturnValues(nil, scope, line)
 	case []any:
-		for _, value := range values {
-			if err := c.checkExpr(value, scope, deferred); err != nil {
+		for _, expr := range exprs {
+			info, err := c.checkExpr(expr, scope, deferred)
+			if err != nil {
 				return err
 			}
+			infos = append(infos, info)
 		}
-		return nil
+		return c.validateReturnValues(infos, scope, line)
 	default:
-		return c.checkExpr(value, scope, deferred)
+		info, err := c.checkExpr(value, scope, deferred)
+		if err != nil {
+			return err
+		}
+		infos = append(infos, info)
+		return c.validateReturnValues(infos, scope, line)
 	}
 }
 
@@ -416,12 +834,14 @@ func (c *Checker) checkAssignmentTarget(target any, scope *Scope, deferred *[]fu
 	case string:
 		return nil
 	case *ast.MemberAccess:
-		return c.checkExpr(node.Object, scope, deferred)
+		_, err := c.checkExpr(node.Object, scope, deferred)
+		return err
 	case *ast.IndexAccess:
-		if err := c.checkExpr(node.Object, scope, deferred); err != nil {
+		if _, err := c.checkExpr(node.Object, scope, deferred); err != nil {
 			return err
 		}
-		return c.checkExpr(node.Index, scope, deferred)
+		_, err := c.checkExpr(node.Index, scope, deferred)
+		return err
 	default:
 		return semanticErrorf(line, "Invalid assignment target: %T", target)
 	}
@@ -431,11 +851,12 @@ func (c *Checker) checkFuncBody(fn *ast.FuncDef, closureScope *Scope) error {
 	if err := c.validateReturnAnnotation(fn.ReturnType, closureScope, fn.Line); err != nil {
 		return err
 	}
-	bodyScope := newScope(closureScope)
+	bodyScope := newReturnScope(closureScope, c.resolveReturnTypeNames(fn.ReturnType, closureScope, fn.Line))
 	for _, param := range fn.Params {
 		if err := c.checkParam(param, closureScope); err != nil {
 			return err
 		}
+		bodyScope.defineParamValue(c, param, closureScope)
 	}
 
 	deferred := []func() error{}
@@ -451,11 +872,12 @@ func (c *Checker) checkConstructorBody(ctor *ast.ConstructorDef, obj *ObjectInfo
 			return err
 		}
 	}
-	bodyScope := newScope(closureScope)
+	bodyScope := newReturnScope(closureScope, []string{obj.Name})
 	for _, param := range ctor.Params {
 		if err := c.checkParam(param, closureScope); err != nil {
 			return err
 		}
+		bodyScope.defineParamValue(c, param, closureScope)
 	}
 
 	deferred := []func() error{}
@@ -472,11 +894,12 @@ func (c *Checker) checkMethodBody(method *ast.MethodDef, obj *ObjectInfo, closur
 	if err := c.validateReturnAnnotation(method.ReturnType, closureScope, method.Line); err != nil {
 		return err
 	}
-	bodyScope := newScope(closureScope)
+	bodyScope := newReturnScope(closureScope, c.resolveReturnTypeNames(method.ReturnType, closureScope, method.Line))
 	for _, param := range method.Params {
 		if err := c.checkParam(param, closureScope); err != nil {
 			return err
 		}
+		bodyScope.defineParamValue(c, param, closureScope)
 	}
 
 	deferred := []func() error{}
@@ -494,7 +917,7 @@ func (c *Checker) checkParam(param *ast.Param, scope *Scope) error {
 	}
 	if param.Default != nil {
 		deferred := []func() error{}
-		if err := c.checkExpr(param.Default, scope, &deferred); err != nil {
+		if _, err := c.checkExpr(param.Default, scope, &deferred); err != nil {
 			return err
 		}
 		return c.runDeferred(&deferred)
@@ -502,13 +925,171 @@ func (c *Checker) checkParam(param *ast.Param, scope *Scope) error {
 	return nil
 }
 
+func (s *Scope) defineParamValue(c *Checker, param *ast.Param, typeScope *Scope) {
+	typeName := ""
+	if param.TypeName != nil {
+		if resolved, err := c.resolveTypeNode(param.TypeName, typeScope, param.Line); err == nil {
+			typeName = resolved
+		} else if rendered, ok := renderType(param.TypeName); ok {
+			typeName = rendered
+		}
+	}
+	s.defineValue(param.Name, c.valueFromDeclaredType(typeName, typeScope, param.Name))
+}
+
+func (c *Checker) bindDeclaredValue(name string, declaredType string, inferred *ValueInfo, scope *Scope, line int) (*ValueInfo, error) {
+	if declaredType != "" {
+		value := c.valueFromDeclaredType(declaredType, scope, name)
+		if inferred != nil {
+			if err := c.validateValueAssignment(name, value, inferred, scope, line); err != nil {
+				return nil, err
+			}
+		}
+		return value, nil
+	}
+	if inferred != nil {
+		return c.copyValue(inferred, scope), nil
+	}
+	return c.valueFromDeclaredType("", scope, name), nil
+}
+
+func (c *Checker) validateValueAssignment(name string, expected *ValueInfo, actual *ValueInfo, scope *Scope, line int) error {
+	expectedType := c.valueTypeName(expected, scope)
+	actualType := c.valueTypeName(actual, scope)
+	if expectedType == "" || actualType == "" {
+		return nil
+	}
+	if c.typesCompatible(expectedType, actualType) {
+		return nil
+	}
+	return semanticErrorf(line, "Cannot assign %s to '%s' (%s)", actualType, name, expectedType)
+}
+
+func (c *Checker) validateReturnValues(values []*ValueInfo, scope *Scope, line int) error {
+	expected := scope.expectedReturnTypes
+	if expected == nil {
+		return nil
+	}
+	if len(values) == 1 && len(values[0].MultiTypeNames) > 0 {
+		expanded := make([]*ValueInfo, 0, len(values[0].MultiTypeNames))
+		for _, typeName := range values[0].MultiTypeNames {
+			expanded = append(expanded, c.valueFromDeclaredType(typeName, scope, "return"))
+		}
+		values = expanded
+	}
+	if len(expected) != len(values) {
+		return semanticErrorf(line, "Return value count mismatch: expected %d, got %d", len(expected), len(values))
+	}
+	for idx, expectedType := range expected {
+		actualType := c.valueTypeName(values[idx], scope)
+		if expectedType == "" || actualType == "" {
+			continue
+		}
+		if !c.typesCompatible(expectedType, actualType) {
+			if len(expected) == 1 {
+				return semanticErrorf(line, "Return type mismatch: expected %s, got %s", expectedType, actualType)
+			}
+			return semanticErrorf(line, "Return value %d expects %s, got %s", idx+1, expectedType, actualType)
+		}
+	}
+	return nil
+}
+
+func (c *Checker) resolveReturnTypeNames(returnType any, scope *Scope, line int) []string {
+	rendered := renderReturnTypes(returnType)
+	if rendered == nil {
+		return nil
+	}
+	resolved := make([]string, 0, len(rendered))
+	for _, typeName := range rendered {
+		if name, ok, err := c.resolveTypeNameString(typeName, scope, line, false); err == nil && ok {
+			resolved = append(resolved, name)
+			continue
+		}
+		resolved = append(resolved, typeName)
+	}
+	return resolved
+}
+
+func (c *Checker) typesCompatible(expected string, actual string) bool {
+	if expected == actual {
+		return true
+	}
+	expectedBase := typeBase(expected)
+	actualBase := typeBase(actual)
+	if isIntType(expected) && isIntType(actual) {
+		return true
+	}
+	if isFloatType(expected) && (isIntType(actual) || isFloatType(actual)) {
+		return true
+	}
+	if strings.HasPrefix(expected, "money[") {
+		if strings.HasPrefix(actual, "money[") {
+			return expected == actual
+		}
+		return isIntType(actual) || isFloatType(actual)
+	}
+	if expectedBase == actualBase && (expectedBase == "list" || expectedBase == "dict" || expectedBase == "result") {
+		if expected == expectedBase || actual == actualBase {
+			return true
+		}
+		return expected == actual
+	}
+	if strings.HasPrefix(expected, "(") && strings.Contains(expected, "->") {
+		return expected == actual
+	}
+	return false
+}
+
+func isIntType(typeName string) bool {
+	switch typeName {
+	case "int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64":
+		return true
+	default:
+		return false
+	}
+}
+
+func isFloatType(typeName string) bool {
+	switch typeName {
+	case "float", "float32", "float64":
+		return true
+	default:
+		return false
+	}
+}
+
+func typeBase(typeName string) string {
+	if idx := strings.Index(typeName, "["); idx > 0 {
+		return typeName[:idx]
+	}
+	return typeName
+}
+
+func genericTypeParams(typeName string, base string) []string {
+	prefix := base + "["
+	if !strings.HasPrefix(typeName, prefix) || !strings.HasSuffix(typeName, "]") {
+		return nil
+	}
+	inner := strings.TrimSpace(typeName[len(prefix) : len(typeName)-1])
+	if inner == "" {
+		return nil
+	}
+	return splitTopLevel(inner, ',')
+}
+
 func (c *Checker) checkObjectDef(objDef *ast.ObjectDef, scope *Scope, deferred *[]func() error) error {
 	obj := &ObjectInfo{
 		Name:    objDef.Name,
 		Fields:  map[string]string{},
-		Methods: map[string]struct{}{},
+		Methods: map[string]*CallableInfo{},
 	}
 	scope.defineObject(obj)
+	scope.defineValue(objDef.Name, &ValueInfo{
+		Kind:       "object_type",
+		TypeName:   objDef.Name,
+		ObjectInfo: obj,
+	})
 
 	for _, field := range objDef.Fields {
 		if _, exists := obj.Fields[field.Name]; exists {
@@ -531,6 +1112,13 @@ func (c *Checker) checkObjectDef(objDef *ast.ObjectDef, scope *Scope, deferred *
 				return err
 			}
 		}
+		signature, err := c.callableFromParams(objDef.Name+".new", objDef.Constructor.Params, objDef.Constructor.ReturnType, scope)
+		if err != nil {
+			return err
+		}
+		signature.ReturnTypeNames = []string{objDef.Name}
+		obj.HasConstructor = true
+		obj.Constructor = signature
 		ctor := objDef.Constructor
 		*deferred = append(*deferred, func() error {
 			return c.checkConstructorBody(ctor, obj, scope)
@@ -552,7 +1140,11 @@ func (c *Checker) checkObjectDef(objDef *ast.ObjectDef, scope *Scope, deferred *
 		if err := c.validateReturnAnnotation(method.ReturnType, scope, method.Line); err != nil {
 			return err
 		}
-		obj.Methods[method.Name] = struct{}{}
+		signature, err := c.callableFromParams(objDef.Name+"."+method.Name, method.Params, method.ReturnType, scope)
+		if err != nil {
+			return err
+		}
+		obj.Methods[method.Name] = signature
 		method := method
 		*deferred = append(*deferred, func() error {
 			return c.checkMethodBody(method, obj, scope)
@@ -593,82 +1185,498 @@ func (c *Checker) validateReturnAnnotation(returnType any, scope *Scope, line in
 	}
 }
 
-func (c *Checker) checkExpr(expr any, scope *Scope, deferred *[]func() error) error {
+func (c *Checker) checkExpr(expr any, scope *Scope, deferred *[]func() error) (*ValueInfo, error) {
 	switch node := expr.(type) {
 	case nil:
-		return nil
-	case *ast.IntLiteral, *ast.FloatLiteral, *ast.StringLiteral, *ast.BoolLiteral, *ast.Identifier:
-		return nil
+		return unknownValue(), nil
+	case *ast.IntLiteral:
+		return literalValue("int"), nil
+	case *ast.FloatLiteral:
+		return literalValue("float"), nil
+	case *ast.StringLiteral:
+		return literalValue("string"), nil
+	case *ast.BoolLiteral:
+		return literalValue("bool"), nil
+	case *ast.Identifier:
+		if value, ok := scope.resolveValue(node.Name); ok {
+			return value, nil
+		}
+		return nil, semanticErrorf(node.Line, "Undefined variable: %s", node.Name)
 	case *ast.BinaryOp:
-		if err := c.checkExpr(node.Left, scope, deferred); err != nil {
-			return err
+		left, err := c.checkExpr(node.Left, scope, deferred)
+		if err != nil {
+			return nil, err
 		}
-		return c.checkExpr(node.Right, scope, deferred)
+		right, err := c.checkExpr(node.Right, scope, deferred)
+		if err != nil {
+			return nil, err
+		}
+		return c.inferBinaryOp(node, left, right, scope), nil
 	case *ast.UnaryOp:
-		return c.checkExpr(node.Operand, scope, deferred)
+		if _, err := c.checkExpr(node.Operand, scope, deferred); err != nil {
+			return nil, err
+		}
+		if node.Op == "not" {
+			return literalValue("bool"), nil
+		}
+		return unknownValue(), nil
 	case *ast.FuncCall:
-		if err := c.checkExpr(node.Name, scope, deferred); err != nil {
-			return err
+		callee, err := c.checkExpr(node.Name, scope, deferred)
+		if err != nil {
+			return nil, err
 		}
+		args := make([]*ValueInfo, 0, len(node.Args))
 		for _, arg := range node.Args {
-			if err := c.checkExpr(arg, scope, deferred); err != nil {
-				return err
+			argInfo, err := c.checkExpr(arg, scope, deferred)
+			if err != nil {
+				return nil, err
 			}
+			args = append(args, argInfo)
 		}
-		return nil
+		if err := c.validateCall(callee, args, scope, node.Line); err != nil {
+			return nil, err
+		}
+		if inferred := c.inferBuiltinReturn(callee, args, scope); inferred != nil {
+			return inferred, nil
+		}
+		if callee.Kind == "constructor" {
+			return &ValueInfo{
+				Kind:       "variable",
+				TypeName:   callee.TypeName,
+				ObjectInfo: callee.ObjectInfo,
+			}, nil
+		}
+		if callee.CallableInfo != nil && len(callee.CallableInfo.ReturnTypeNames) > 0 {
+			if len(callee.CallableInfo.ReturnTypeNames) > 1 {
+				return &ValueInfo{Kind: "multi", MultiTypeNames: callee.CallableInfo.ReturnTypeNames}, nil
+			}
+			return c.valueFromDeclaredType(callee.CallableInfo.ReturnTypeNames[0], scope, callee.CallableInfo.Label), nil
+		}
+		return unknownValue(), nil
 	case *ast.MemberAccess:
-		return c.checkExpr(node.Object, scope, deferred)
-	case *ast.IndexAccess:
-		if err := c.checkExpr(node.Object, scope, deferred); err != nil {
-			return err
+		object, err := c.checkExpr(node.Object, scope, deferred)
+		if err != nil {
+			return nil, err
 		}
-		return c.checkExpr(node.Index, scope, deferred)
+		return c.checkMemberAccess(object, node, scope)
+	case *ast.IndexAccess:
+		object, err := c.checkExpr(node.Object, scope, deferred)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := c.checkExpr(node.Index, scope, deferred); err != nil {
+			return nil, err
+		}
+		if params := genericTypeParams(c.valueTypeName(object, scope), "list"); len(params) == 1 {
+			return c.valueFromDeclaredType(params[0], scope, "index"), nil
+		}
+		if params := genericTypeParams(c.valueTypeName(object, scope), "dict"); len(params) == 2 {
+			return c.valueFromDeclaredType(params[1], scope, "index"), nil
+		}
+		return unknownValue(), nil
 	case *ast.Lambda:
 		lambdaScope := newScope(scope)
 		for _, param := range node.Params {
 			if err := c.checkParam(param, scope); err != nil {
-				return err
+				return nil, err
 			}
+			lambdaScope.defineParamValue(c, param, scope)
 		}
-		return c.checkBlock(node.Body, lambdaScope, deferred)
+		returnType := c.inferLambdaReturnType(node, lambdaScope, deferred)
+		callable, err := c.callableFromParams("<lambda>", node.Params, returnType, scope)
+		if err != nil {
+			return nil, err
+		}
+		if err := c.checkBlock(node.Body, lambdaScope, deferred); err != nil {
+			return nil, err
+		}
+		return &ValueInfo{Kind: "lambda", TypeName: callable.typeName(), CallableInfo: callable}, nil
 	case *ast.OkExpr:
-		return c.checkExpr(node.Value, scope, deferred)
+		value, err := c.checkExpr(node.Value, scope, deferred)
+		if err != nil {
+			return nil, err
+		}
+		typeName := c.valueTypeName(value, scope)
+		if typeName == "" {
+			return literalValue("result"), nil
+		}
+		return literalValue(fmt.Sprintf("result[%s]", typeName)), nil
 	case *ast.ErrExpr:
-		return c.checkExpr(node.Value, scope, deferred)
+		if _, err := c.checkExpr(node.Value, scope, deferred); err != nil {
+			return nil, err
+		}
+		return literalValue("result"), nil
 	case *ast.ListLiteral:
+		elementType := ""
+		homogeneous := true
 		for _, element := range node.Elements {
-			if err := c.checkExpr(element, scope, deferred); err != nil {
-				return err
+			info, err := c.checkExpr(element, scope, deferred)
+			if err != nil {
+				return nil, err
+			}
+			current := c.valueTypeName(info, scope)
+			if current == "" {
+				homogeneous = false
+				continue
+			}
+			if elementType == "" {
+				elementType = current
+				continue
+			}
+			if elementType != current {
+				homogeneous = false
 			}
 		}
-		return nil
-	case *ast.DictLiteral:
-		if _, err := c.resolveTypeNode(node.KeyType, scope, node.Line); err != nil {
-			return err
+		if homogeneous && elementType != "" {
+			return literalValue(fmt.Sprintf("list[%s]", elementType)), nil
 		}
-		if _, err := c.resolveTypeNode(node.ValueType, scope, node.Line); err != nil {
-			return err
+		return literalValue("list"), nil
+	case *ast.DictLiteral:
+		keyType, err := c.resolveTypeNode(node.KeyType, scope, node.Line)
+		if err != nil {
+			return nil, err
+		}
+		valueType, err := c.resolveTypeNode(node.ValueType, scope, node.Line)
+		if err != nil {
+			return nil, err
 		}
 		for _, entry := range node.Entries {
-			if err := c.checkExpr(entry.Key, scope, deferred); err != nil {
-				return err
+			keyInfo, err := c.checkExpr(entry.Key, scope, deferred)
+			if err != nil {
+				return nil, err
 			}
-			if err := c.checkExpr(entry.Value, scope, deferred); err != nil {
-				return err
+			valueInfo, err := c.checkExpr(entry.Value, scope, deferred)
+			if err != nil {
+				return nil, err
+			}
+			actualKey := c.valueTypeName(keyInfo, scope)
+			if actualKey != "" && !c.typesCompatible(keyType, actualKey) {
+				return nil, semanticErrorf(node.Line, "Dict key expects %s, got %s", keyType, actualKey)
+			}
+			actualValue := c.valueTypeName(valueInfo, scope)
+			if actualValue != "" && !c.typesCompatible(valueType, actualValue) {
+				return nil, semanticErrorf(node.Line, "Dict value expects %s, got %s", valueType, actualValue)
 			}
 		}
-		return nil
+		return literalValue(fmt.Sprintf("dict[%s, %s]", keyType, valueType)), nil
 	case *ast.AsExpr:
-		if err := c.checkExpr(node.Expr, scope, deferred); err != nil {
+		if _, err := c.checkExpr(node.Expr, scope, deferred); err != nil {
+			return nil, err
+		}
+		if _, _, err := c.resolveTypeNameString(node.TypeName, scope, node.Line, true); err != nil {
+			return nil, err
+		}
+		return literalValue("result"), nil
+	case *ast.ObjectLiteral:
+		if err := c.checkObjectLiteral(node, scope, deferred); err != nil {
+			return nil, err
+		}
+		obj, _ := scope.resolveObject(node.Name)
+		return &ValueInfo{Kind: "variable", TypeName: node.Name, ObjectInfo: obj}, nil
+	default:
+		return nil, semanticErrorf(lineOf(expr), "Unknown expression type: %T", expr)
+	}
+}
+
+func (c *Checker) inferBinaryOp(node *ast.BinaryOp, left *ValueInfo, right *ValueInfo, scope *Scope) *ValueInfo {
+	if node.Op == "=" || node.Op == "!=" || node.Op == "<" || node.Op == ">" || node.Op == "<=" || node.Op == ">=" || node.Op == "and" || node.Op == "or" || node.Op == "to" {
+		return literalValue("bool")
+	}
+	leftType := c.valueTypeName(left, scope)
+	rightType := c.valueTypeName(right, scope)
+	if leftType == "" || rightType == "" {
+		return unknownValue()
+	}
+	if node.Op == "+" && leftType == "string" && rightType == "string" {
+		return literalValue("string")
+	}
+	if node.Op == "+" && strings.HasPrefix(leftType, "list") && strings.HasPrefix(rightType, "list") {
+		return literalValue(leftType)
+	}
+	if strings.HasPrefix(leftType, "money[") && strings.HasPrefix(rightType, "money[") && (node.Op == "+" || node.Op == "-") {
+		return literalValue(leftType)
+	}
+	if strings.HasPrefix(leftType, "money[") && (isIntType(rightType) || isFloatType(rightType)) {
+		return literalValue(leftType)
+	}
+	if isIntType(leftType) && isIntType(rightType) {
+		return literalValue("int")
+	}
+	if (isIntType(leftType) || isFloatType(leftType)) && (isIntType(rightType) || isFloatType(rightType)) {
+		return literalValue("float")
+	}
+	return unknownValue()
+}
+
+func (c *Checker) checkPattern(pattern any, scope *Scope, deferred *[]func() error) error {
+	switch node := pattern.(type) {
+	case *ast.OkExpr:
+		c.bindPatternValue(node.Value, scope)
+		return nil
+	case *ast.ErrExpr:
+		c.bindPatternValue(node.Value, scope)
+		return nil
+	case *ast.Identifier:
+		scope.defineValue(node.Name, unknownValue())
+		return nil
+	case *ast.BinaryOp:
+		if _, err := c.checkExpr(node.Left, scope, deferred); err != nil {
 			return err
 		}
-		_, _, err := c.resolveTypeNameString(node.TypeName, scope, node.Line, true)
+		_, err := c.checkExpr(node.Right, scope, deferred)
 		return err
-	case *ast.ObjectLiteral:
-		return c.checkObjectLiteral(node, scope, deferred)
 	default:
-		return semanticErrorf(lineOf(expr), "Unknown expression type: %T", expr)
+		_, err := c.checkExpr(pattern, scope, deferred)
+		return err
 	}
+}
+
+func (c *Checker) bindPatternValue(pattern any, scope *Scope) {
+	switch node := pattern.(type) {
+	case *ast.Identifier:
+		scope.defineValue(node.Name, unknownValue())
+	}
+}
+
+func (c *Checker) inferLambdaReturnType(lambda *ast.Lambda, scope *Scope, deferred *[]func() error) any {
+	if len(lambda.Body) != 1 {
+		return nil
+	}
+	ret, ok := lambda.Body[0].(*ast.ReturnStmt)
+	if !ok || ret.Value == nil {
+		return nil
+	}
+	if _, ok := ret.Value.([]any); ok {
+		return nil
+	}
+	info, err := c.checkExpr(ret.Value, scope, deferred)
+	if err != nil {
+		return nil
+	}
+	typeName := c.valueTypeName(info, scope)
+	if typeName == "" {
+		return nil
+	}
+	return &ast.TypeName{Name: typeName, Line: lambda.Line}
+}
+
+func (c *Checker) validateCall(callee *ValueInfo, args []*ValueInfo, scope *Scope, line int) error {
+	if callee == nil || callee.CallableInfo == nil {
+		return nil
+	}
+	signature := callee.CallableInfo
+	if !signature.Variadic {
+		required := 0
+		for _, param := range signature.Params {
+			if !param.HasDefault {
+				required++
+			}
+		}
+		if len(args) < required {
+			for _, param := range signature.Params[len(args):] {
+				if !param.HasDefault {
+					return semanticErrorf(line, "Missing argument: %s", param.Name)
+				}
+			}
+		}
+		if len(args) > len(signature.Params) {
+			return semanticErrorf(line, "Too many arguments for '%s': expected at most %d, got %d", signature.Label, len(signature.Params), len(args))
+		}
+	}
+	limit := len(args)
+	if limit > len(signature.Params) {
+		limit = len(signature.Params)
+	}
+	for idx := 0; idx < limit; idx++ {
+		param := signature.Params[idx]
+		if param.TypeName == "" {
+			continue
+		}
+		expected := c.resolveCallableTypeName(param.TypeName, signature, scope)
+		actual := c.valueTypeName(args[idx], scope)
+		if expected != "" && actual != "" && !c.typesCompatible(expected, actual) {
+			return semanticErrorf(line, "Argument '%s' to '%s' expects %s, got %s", param.Name, signature.Label, expected, actual)
+		}
+	}
+	return c.validateBuiltinContainerTypes(signature, args, scope, line)
+}
+
+func (c *Checker) resolveCallableTypeName(typeName string, signature *CallableInfo, fallbackScope *Scope) string {
+	typeScope := fallbackScope
+	if signature != nil && signature.DefinitionScope != nil {
+		typeScope = signature.DefinitionScope
+	}
+	if resolved, ok, err := c.resolveTypeNameString(typeName, typeScope, 0, false); err == nil && ok {
+		return resolved
+	}
+	return typeName
+}
+
+func (c *Checker) validateBuiltinContainerTypes(signature *CallableInfo, args []*ValueInfo, scope *Scope, line int) error {
+	switch signature.Label {
+	case "append":
+		if len(args) >= 2 {
+			return c.validateListItemArg(signature, args[0], args[1], "item", scope, line)
+		}
+	case "insert":
+		if len(args) >= 3 {
+			return c.validateListItemArg(signature, args[0], args[2], "item", scope, line)
+		}
+	case "get":
+		if len(args) >= 3 {
+			params := genericTypeParams(c.valueTypeName(args[0], scope), "dict")
+			if len(params) == 2 {
+				keyType := c.valueTypeName(args[1], scope)
+				if keyType != "" && !c.typesCompatible(params[0], keyType) {
+					return semanticErrorf(line, "Argument 'key' to 'get' expects %s, got %s", params[0], keyType)
+				}
+				defaultType := c.valueTypeName(args[2], scope)
+				if defaultType != "" && !c.typesCompatible(params[1], defaultType) {
+					return semanticErrorf(line, "Argument 'default' to 'get' expects %s, got %s", params[1], defaultType)
+				}
+			}
+		}
+	case "map":
+		if len(args) >= 2 {
+			params := genericTypeParams(c.valueTypeName(args[0], scope), "list")
+			callback := args[1]
+			if len(params) == 1 && callback.CallableInfo != nil && len(callback.CallableInfo.Params) > 0 {
+				callbackParam := c.resolveCallableTypeName(callback.CallableInfo.Params[0].TypeName, callback.CallableInfo, scope)
+				if callbackParam != "" && !c.typesCompatible(callbackParam, params[0]) {
+					return semanticErrorf(line, "Argument 'f' to 'map' expects (%s) -> ..., got %s", params[0], c.valueTypeName(callback, scope))
+				}
+			}
+		}
+	case "filter":
+		if len(args) >= 2 {
+			params := genericTypeParams(c.valueTypeName(args[0], scope), "list")
+			callback := args[1]
+			if len(params) == 1 && callback.CallableInfo != nil && len(callback.CallableInfo.Params) > 0 {
+				callbackParam := c.resolveCallableTypeName(callback.CallableInfo.Params[0].TypeName, callback.CallableInfo, scope)
+				if callbackParam != "" && !c.typesCompatible(callbackParam, params[0]) {
+					return semanticErrorf(line, "Argument 'pred' to 'filter' expects (%s) -> bool, got %s", params[0], c.valueTypeName(callback, scope))
+				}
+				if len(callback.CallableInfo.ReturnTypeNames) == 1 {
+					callbackReturn := c.resolveCallableTypeName(callback.CallableInfo.ReturnTypeNames[0], callback.CallableInfo, scope)
+					if callbackReturn != "" && callbackReturn != "bool" {
+						return semanticErrorf(line, "Argument 'pred' to 'filter' must return bool, got %s", callbackReturn)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Checker) validateListItemArg(signature *CallableInfo, listArg *ValueInfo, itemArg *ValueInfo, paramName string, scope *Scope, line int) error {
+	params := genericTypeParams(c.valueTypeName(listArg, scope), "list")
+	if len(params) != 1 {
+		return nil
+	}
+	itemType := c.valueTypeName(itemArg, scope)
+	if itemType != "" && !c.typesCompatible(params[0], itemType) {
+		return semanticErrorf(line, "Argument '%s' to '%s' expects %s, got %s", paramName, signature.Label, params[0], itemType)
+	}
+	return nil
+}
+
+func (c *Checker) inferBuiltinReturn(callee *ValueInfo, args []*ValueInfo, scope *Scope) *ValueInfo {
+	if callee == nil || callee.CallableInfo == nil {
+		return nil
+	}
+	switch callee.CallableInfo.Label {
+	case "map":
+		if len(args) >= 2 && args[1].CallableInfo != nil && len(args[1].CallableInfo.ReturnTypeNames) == 1 {
+			return literalValue(fmt.Sprintf("list[%s]", args[1].CallableInfo.ReturnTypeNames[0]))
+		}
+		return literalValue("list")
+	case "filter":
+		if len(args) >= 1 {
+			listType := c.valueTypeName(args[0], scope)
+			if listType != "" {
+				return literalValue(listType)
+			}
+		}
+		return literalValue("list")
+	case "concat":
+		if len(args) >= 1 {
+			listType := c.valueTypeName(args[0], scope)
+			if listType != "" {
+				return literalValue(listType)
+			}
+		}
+	case "get":
+		if len(args) >= 1 {
+			params := genericTypeParams(c.valueTypeName(args[0], scope), "dict")
+			if len(params) == 2 {
+				return c.valueFromDeclaredType(params[1], scope, "get")
+			}
+		}
+	}
+	return nil
+}
+
+func (c *Checker) checkMemberAccess(object *ValueInfo, expr *ast.MemberAccess, scope *Scope) (*ValueInfo, error) {
+	if object == nil {
+		return unknownValue(), nil
+	}
+	if object.Kind == "module" && object.ModuleInfo != nil {
+		if value, ok := object.ModuleInfo.RuntimeExports[expr.Member]; ok {
+			return value, nil
+		}
+		if _, ok := object.ModuleInfo.TypeExports[expr.Member]; ok {
+			return nil, semanticErrorf(expr.Line, "Type alias '%s' is not a runtime member of module '%s'; use 'use %s from %s' instead", expr.Member, memberBaseName(expr.Object), expr.Member, memberBaseName(expr.Object))
+		}
+		return nil, semanticErrorf(expr.Line, "Undefined variable: %s", expr.Member)
+	}
+	if object.Kind == "object_type" && object.ObjectInfo != nil {
+		if expr.Member == "new" {
+			if !object.ObjectInfo.HasConstructor {
+				return nil, semanticErrorf(expr.Line, "Object '%s' has no constructor", object.ObjectInfo.Name)
+			}
+			return &ValueInfo{
+				Kind:         "constructor",
+				TypeName:     object.ObjectInfo.Name,
+				ObjectInfo:   object.ObjectInfo,
+				CallableInfo: object.ObjectInfo.Constructor,
+			}, nil
+		}
+		if method, ok := object.ObjectInfo.Methods[expr.Member]; ok {
+			return &ValueInfo{Kind: "method", TypeName: method.typeName(), CallableInfo: method}, nil
+		}
+		return nil, semanticErrorf(expr.Line, "Object '%s' has no member '%s'", object.ObjectInfo.Name, expr.Member)
+	}
+	if object.ObjectInfo != nil {
+		if method, ok := object.ObjectInfo.Methods[expr.Member]; ok {
+			return &ValueInfo{Kind: "method", TypeName: method.dropFirstParam().typeName(), CallableInfo: method.dropFirstParam()}, nil
+		}
+		if fieldType, ok := object.ObjectInfo.Fields[expr.Member]; ok {
+			if ident, ok := expr.Object.(*ast.Identifier); ok && ident.Name == "self" {
+				return c.valueFromDeclaredType(fieldType, scope, expr.Member), nil
+			}
+			return nil, semanticErrorf(expr.Line, "Cannot access private field '%s' of '%s' from outside; use a method instead", expr.Member, object.ObjectInfo.Name)
+		}
+		return nil, semanticErrorf(expr.Line, "Object '%s' has no member '%s'", object.ObjectInfo.Name, expr.Member)
+	}
+	return unknownValue(), nil
+}
+
+func (ci *CallableInfo) dropFirstParam() *CallableInfo {
+	if ci == nil {
+		return nil
+	}
+	copied := *ci
+	if len(copied.Params) > 0 {
+		copied.Params = append([]ParamInfo{}, copied.Params[1:]...)
+	}
+	return &copied
+}
+
+func memberBaseName(expr any) string {
+	if ident, ok := expr.(*ast.Identifier); ok {
+		return ident.Name
+	}
+	return "module"
 }
 
 func (c *Checker) checkObjectLiteral(literal *ast.ObjectLiteral, scope *Scope, deferred *[]func() error) error {
@@ -688,7 +1696,7 @@ func (c *Checker) checkObjectLiteral(literal *ast.ObjectLiteral, scope *Scope, d
 				return semanticErrorf(literal.Line, "Object '%s' has no field '%s'", literal.Name, field.Name)
 			}
 		}
-		if err := c.checkExpr(field.Value, scope, deferred); err != nil {
+		if _, err := c.checkExpr(field.Value, scope, deferred); err != nil {
 			return err
 		}
 	}
@@ -741,21 +1749,25 @@ func (c *Checker) collectModuleExports(moduleDef *ast.ModuleDef, moduleScope *Sc
 			if !node.Exported {
 				continue
 			}
-			if err := addRuntimeExport(module, moduleDef.Name, node.Name, node.Line); err != nil {
+			value, ok := moduleScope.resolveLocalValue(node.Name)
+			if !ok {
+				value = unknownValue()
+			}
+			if err := addRuntimeExport(module, moduleDef.Name, node.Name, value, node.Line); err != nil {
 				return nil, err
 			}
 		case *ast.ObjectDef:
 			if !node.Exported {
 				continue
 			}
-			if err := addRuntimeExport(module, moduleDef.Name, node.Name, node.Line); err != nil {
+			value, ok := moduleScope.resolveLocalValue(node.Name)
+			if !ok {
+				obj, _ := moduleScope.resolveObject(node.Name)
+				value = &ValueInfo{Kind: "object_type", TypeName: node.Name, ObjectInfo: obj}
+			}
+			if err := addRuntimeExport(module, moduleDef.Name, node.Name, value, node.Line); err != nil {
 				return nil, err
 			}
-			obj, _ := moduleScope.resolveObject(node.Name)
-			if obj == nil {
-				obj = &ObjectInfo{Name: node.Name}
-			}
-			module.ObjectExports[node.Name] = obj
 		case *ast.TypeAlias:
 			if !node.Exported {
 				continue
@@ -773,11 +1785,11 @@ func (c *Checker) collectModuleExports(moduleDef *ast.ModuleDef, moduleScope *Sc
 	return module, nil
 }
 
-func addRuntimeExport(module *ModuleInfo, moduleName, exportName string, line int) error {
+func addRuntimeExport(module *ModuleInfo, moduleName, exportName string, value *ValueInfo, line int) error {
 	if _, exists := module.RuntimeExports[exportName]; exists {
 		return semanticErrorf(line, "Module '%s' exports runtime name '%s' more than once", moduleName, exportName)
 	}
-	module.RuntimeExports[exportName] = struct{}{}
+	module.RuntimeExports[exportName] = value
 	return nil
 }
 
@@ -794,16 +1806,20 @@ func (c *Checker) checkUse(use *ast.UseStmt, scope *Scope, deferred *[]func() er
 	}
 
 	if len(use.Names) == 0 {
+		scope.defineValue(use.Module, &ValueInfo{Kind: "module", ModuleInfo: module})
 		return nil
 	}
 
 	for _, name := range use.Names {
 		imported := false
-		if _, ok := module.RuntimeExports[name]; ok {
-			imported = true
-		}
-		if obj, ok := module.ObjectExports[name]; ok {
-			scope.defineObject(obj)
+		if value, ok := module.RuntimeExports[name]; ok {
+			if existing, exists := scope.resolveLocalValue(name); exists && existing != value {
+				return semanticErrorf(use.Line, "Cannot import '%s' from module '%s': name already defined in current scope", name, use.Module)
+			}
+			scope.defineValue(name, value)
+			if value.ObjectInfo != nil {
+				scope.defineObject(value.ObjectInfo)
+			}
 			imported = true
 		}
 		if target, ok := module.TypeExports[name]; ok {
@@ -918,13 +1934,15 @@ func (c *Checker) resolveTypeNode(typeNode any, scope *Scope, line int) (string,
 			rendered, _ := renderType(node)
 			return rendered, nil
 		}
+		resolvedParams := make([]string, 0, len(node.Params))
 		for _, param := range node.Params {
-			if _, err := c.resolveTypeNode(param, scope, node.Line); err != nil {
+			resolved, err := c.resolveTypeNode(param, scope, node.Line)
+			if err != nil {
 				return "", err
 			}
+			resolvedParams = append(resolvedParams, resolved)
 		}
-		rendered, _ := renderType(node)
-		return rendered, nil
+		return fmt.Sprintf("%s[%s]", node.Base, strings.Join(resolvedParams, ", ")), nil
 
 	case *ast.FuncType:
 		for _, param := range node.ParamTypes {
