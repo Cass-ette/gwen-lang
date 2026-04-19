@@ -307,6 +307,55 @@ func TestForLoopVariableIsVisibleAfterBlock(t *testing.T) {
 endfunc`)
 }
 
+func TestWhileBindingMustBeAssignedOnContinuingPaths(t *testing.T) {
+	requireErrorContains(t, `func main()
+  cond := 1 = 1
+  while cond do
+    x := 1
+    cond := false
+  endwhile
+  write(x)
+endfunc`, "Undefined variable: x")
+}
+
+func TestWhileKnownTrueBindingIsVisibleAfterBlock(t *testing.T) {
+	requireOK(t, `func main()
+  while true do
+    x := 1
+    return
+  endwhile
+  write(x)
+endfunc`)
+}
+
+func TestForEachEmptyLiteralBindingDoesNotLeak(t *testing.T) {
+	requireErrorContains(t, `func main()
+  xs := []
+  for item in xs do
+    x := item
+  endfor
+  write(x)
+endfunc`, "Undefined variable: x")
+}
+
+func TestForEachNonEmptyLiteralBindingIsVisibleAfterBlock(t *testing.T) {
+	requireOK(t, `func main()
+  for item in [1] do
+    x := item
+  endfor
+  write(x)
+endfunc`)
+}
+
+func TestForRangeZeroIterationBindingDoesNotLeak(t *testing.T) {
+	requireErrorContains(t, `func main()
+  for i in 1 to 0 step 1 do
+    x := i
+  endfor
+  write(x)
+endfunc`, "Undefined variable: x")
+}
+
 func TestMatchBindingIsVisibleAfterBlock(t *testing.T) {
 	requireOK(t, `func main()
   match ok(42)

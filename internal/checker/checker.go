@@ -583,6 +583,52 @@ func staticBool(expr any) (bool, bool) {
 	return false, false
 }
 
+func staticInt(expr any) (int64, bool) {
+	switch node := expr.(type) {
+	case *ast.IntLiteral:
+		return node.Value, true
+	case *ast.UnaryOp:
+		if node.Op == "-" {
+			value, ok := staticInt(node.Operand)
+			if ok {
+				return -value, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func rangeRunsAtLeastOnce(node *ast.ForRangeStmt) bool {
+	if node.Direction == "asc" || node.Direction == "desc" || node.Step == nil {
+		return true
+	}
+	start, startOK := staticInt(node.Start)
+	end, endOK := staticInt(node.End)
+	step, stepOK := staticInt(node.Step)
+	if !startOK || !endOK || !stepOK || step == 0 {
+		return false
+	}
+	return compareRange(start, end, step)
+}
+
+func compareRange(current, end, step int64) bool {
+	if step > 0 {
+		return current <= end
+	}
+	return current >= end
+}
+
+func forEachRunsAtLeastOnce(node *ast.ForEachStmt) bool {
+	switch iterable := node.Iterable.(type) {
+	case *ast.ListLiteral:
+		return len(iterable.Elements) > 0
+	case *ast.StringLiteral:
+		return iterable.Value != ""
+	default:
+		return false
+	}
+}
+
 func (c *Checker) mergeValueInfo(scope *Scope, name string, left *ValueInfo, right *ValueInfo, context string, line int) (*ValueInfo, error) {
 	if left == nil {
 		return right, nil
@@ -1033,8 +1079,13 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		if err := c.checkBlock(node.Body, loopScope, deferred); err != nil {
 			return err
 		}
-		c.applyClonedScope(scope, loopScope)
-		return nil
+		if value, known := staticBool(node.Condition); known {
+			if value {
+				c.applyClonedScope(scope, loopScope)
+			}
+			return nil
+		}
+		return c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "while", node.Line)
 
 	case *ast.ForRangeStmt:
 		if _, err := c.checkExpr(node.Start, scope, deferred); err != nil {
@@ -1053,8 +1104,11 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		if err := c.checkBlock(node.Body, loopScope, deferred); err != nil {
 			return err
 		}
-		c.applyClonedScope(scope, loopScope)
-		return nil
+		if rangeRunsAtLeastOnce(node) {
+			c.applyClonedScope(scope, loopScope)
+			return nil
+		}
+		return c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "for", node.Line)
 
 	case *ast.ForEachStmt:
 		iterable, err := c.checkExpr(node.Iterable, scope, deferred)
@@ -1073,8 +1127,11 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		if err := c.checkBlock(node.Body, loopScope, deferred); err != nil {
 			return err
 		}
-		c.applyClonedScope(scope, loopScope)
-		return nil
+		if forEachRunsAtLeastOnce(node) {
+			c.applyClonedScope(scope, loopScope)
+			return nil
+		}
+		return c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "for", node.Line)
 
 	case *ast.MatchStmt:
 		if _, err := c.checkExpr(node.Subject, scope, deferred); err != nil {
