@@ -1,22 +1,6 @@
-// Higher-order functions with generic types
+// Higher-order functions using the official list stdlib shape
 
-func map(f: (int) -> int, arr: list[int]) -> list[int]
-  result := []
-  for item in arr do
-    append(result, f(item))
-  endfor
-  return result
-endfunc
-
-func filter(f: (int) -> bool, arr: list[int]) -> list[int]
-  result := []
-  for item in arr do
-    if f(item) then
-      append(result, item)
-    endif
-  endfor
-  return result
-endfunc
+use map, filter, range, enumerate from list
 
 func reduce(f: (int, int) -> int, arr: list[int], init: int) -> int
   acc := init
@@ -27,17 +11,21 @@ func reduce(f: (int, int) -> int, arr: list[int], init: int) -> int
 endfunc
 
 func main()
-  nums := [1, 2, 3, 4, 5]
+  nums := range(1, 5)
 
   write("Original:", nums)
 
   @map
-  doubled := map((x: int) => x * 2, nums)
+  doubled := map(nums, (x: int) => x * 2)
   write("Doubled:", doubled)
 
   @filter
-  evens := filter((x: int) => x mod 2 = 0, nums)
+  evens := filter(nums, (x: int) => x mod 2 = 0)
   write("Evens:", evens)
+
+  @enumerate
+  indexed := enumerate(["a", "b", "c"])
+  write("Indexed:", indexed)
 
   @reduce
   sum := reduce((a: int, b: int) => a + b, nums, 0)

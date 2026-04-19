@@ -76,6 +76,7 @@
 | 模块定义 `module` | ✅ | ✅ | ✅ | ✅ | 稳定 |
 | 导入 `use` | ✅ | ✅ | ✅ | ✅ | 稳定 |
 | 导出 `export` | ✅ | ✅ | ✅ | ✅ | 稳定（函数 / 对象 / 类型别名） |
+| 预执行语义检查 | ✅ | ✅ | ✅ | ✅ | 已实现（坏导入、坏类型名、坏对象成员、坏调用签名、`self` 约束） |
 | 并行 `parallel` | ✅ | ✅ | ✅ | ✅ | 语法占位（实际串行执行；未来编译型版本实现真正并发） |
 | `allowfail` | ✅ | ✅ | ✅ | ✅ | 稳定 |
 | 获取结果 `=> results` | ✅ | ✅ | ✅ | ✅ | 稳定 |
@@ -99,6 +100,8 @@
 
 | 功能 | 文档 | 代码 | 测试 | 示例 | 状态 |
 |------|------|------|------|------|------|
+| 官方 stdlib 模块导入 `list/string/math/dict/io` | ✅ | ✅ | ✅ | ✅ | 已实现（兼容 builtin 直用，支持 `use module` 与 `use ... from module`） |
+| `map/filter/range/enumerate` | ✅ | ✅ | ✅ | ✅ | 已实现（`range` 为闭区间；`enumerate` 返回 `[index, value]` 对） |
 | 导航标记 `@tag` | ✅ | ✅ | ✅ | ✅ | 稳定 |
 | 错误处理 `result/ok/err` | ✅ | ✅ | ✅ | ✅ | 稳定 |
 | match 错误处理 | ✅ | ✅ | ✅ | ✅ | 已实现 |
@@ -133,6 +136,21 @@
 
 ## 上次更新
 
+2026-04-19 - Python 发布收口：补 `pyproject.toml`、包版本号与 `gwen` console script；CLI 升级为 `run/check/repl --version --help`，同时保留 `python -m gwen file.gw` 兼容路径；README 对齐当前语义边界并注明 Python 版 `parallel` 仍为顺序执行；新增 6 个 CLI 回归测试，全套 284 通过
+2026-04-19 - 模块口径冻结：明确 Gwen `v0.1` 不支持导入别名（`use foo as bar from mod` / `use mod as m` 均不在当前设计内）；遇到重名时推荐改用 `use module` 保留来源信息
+2026-04-19 - 模块导入顺序与循环依赖收口：模块内 `use` 现在必须位于声明区最前面，禁止后置导入修补声明；文件模块循环导入补齐显式回归测试，checker/runtime 两侧都能直接报错；新增 4 个回归测试，全套 278 通过
+2026-04-19 - 模块错误模型继续收口：禁止同一模块重复导出同一个运行时名或类型名；`use` 不再静默覆盖当前作用域已有绑定，导入冲突现在直接报错；新增 5 个回归测试，全套 274 通过
+2026-04-19 - 模块体收紧为声明区：`module ... endmodule` 顶层现在只允许 `use`、`func`、`object`、`type`（含 `export` 变体），赋值、裸调用和流程控制等执行型语句会在 checker/runtime 两侧同时拒绝；新增 3 个回归测试，全套 269 通过
+2026-04-19 - 文件模块边界收紧：`use` 从磁盘加载模块时，模块文件现在必须只包含一个匹配的顶层 `module ... endmodule` 定义；额外顶层语句、函数或副作用会在 checker 与 runtime 两侧同时拒绝，新增 2 个多文件模块回归测试
+2026-04-19 - `list` 高阶迭代函数落地：实现 `map/filter/range/enumerate`，同时接入 checker 的回调签名与返回类型检查；更新 stdlib 文档与示例，新增 4 个定向测试和 1 个示例 smoke test，全套 264 通过
+2026-04-19 - 官方 stdlib 模块接通：`list/string/math/dict/io` 现在可通过 `use ... from module` 或 `use module` 导入，同时继续保留现有 builtin 直用兼容；新增 3 个测试验证显式导入与命名空间导入，全套 259 通过
+2026-04-19 - 标准库边界冻结（v0.1）：明确区分“长期保留内建”的最小集合（`write/read/len/str/int/float/typeof`）、“应下放为官方 stdlib 模块”的集合（`list/string/math/dict/io`），以及必须等编译器/runtime 阶段再做的能力（真实 `parallel`、`arena`、`os`、`net`、`time`、包管理）；文档同时明确当前 Gwen 没有头文件 / `#include`，大多数 stdlib 能力仍默认 builtin 可用
+2026-04-19 - 容器语义检查前移：dict 字面量键值类型、显式 `list[T]` 赋值、以及 `append` / `insert` / `get` 等常用 builtin 的容器元素类型错误现在会在运行前拦截；泛型容器兼容性改为“已知参数严格匹配，裸容器保守放行”；新增 5 个测试，全套 256 通过
+2026-04-19 - 赋值语义检查前移：变量声明、局部再赋值、函数类型变量赋值、多返回解构赋值现在会在运行前检查数量与明显类型不一致；收紧函数类型兼容性为签名严格匹配；新增 5 个测试，全套 251 通过
+2026-04-19 - 返回值语义检查前移：函数 / 方法 / 构造器返回值现在会在运行前检查单返回类型、多返回数量和多返回项类型的一致性；新增 3 个测试，全套 246 通过
+2026-04-19 - 函数值语义收口：函数 / lambda 的调用签名现在会在赋值、返回值和高阶函数参数流转中保真；运行前可继续检查经变量中转后的函数调用；lambda 运行时参数也补齐显式类型约束；新增 3 个测试，全套 243 通过
+2026-04-19 - 调用签名语义检查补齐：执行前检查函数 / 方法 / 构造器 / lambda 的参数个数与显然类型失配；签名类型按定义处作用域解析，修复模块私有类型别名被导出函数使用时在调用点误报的问题；新增 5 个测试，全套 240 通过
+2026-04-19 - 预执行语义检查：新增 name/type/member/module checker；运行前检查 `use`/导出、未知类型、对象成员、方法 `self: ObjectName` 约束；CLI 增加 `python -m gwen check <file>`
 2026-04-19 - 模块导出边界补齐：支持 `export object` / `export type`；类型别名改为按环境链解析；`use name from module` 可导入导出对象与类型别名；修复模块私有对象经全局注册表泄漏的问题
 2026-04-18 - 受限对象系统实现：`object/endobject` 定义、`new(...)/endnew` 构造器、`func ... endfunc` 方法、`Account{field := value}` 字面量；`obj.method()` 等价于 `Object.method(obj)`；私有字段（仅对象方法绑定的 `self.field` 可读写）；新增 13 个测试，全套 206 通过
 2026-04-18 - 语义审计修复：禁止 list/dict 的 < > <= >= 比较（无定义）；验证 money[T] / float 允许；docs/semantics.md 与代码对齐；加 3 个测试，全套 150 通过

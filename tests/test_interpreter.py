@@ -396,6 +396,137 @@ use echo from ids
 write(echo(200))""")
 
 
+def test_module_private_type_alias_return_flows_into_exported_public_signature():
+    out = run("""module ids
+  type TinyId = int8
+
+  export func echo(id: TinyId) -> TinyId
+    return id
+  endfunc
+
+  export func widen(id: int8) -> int
+    return id
+  endfunc
+endmodule
+
+use echo, widen from ids
+write(widen(echo(99)))""")
+    assert out == "99"
+
+
+def test_module_rejects_top_level_assignment_in_body():
+    import pytest
+    with pytest.raises(Exception, match="top level only allows use/func/object/type declarations, got assignment"):
+        run("""module config
+  x := 1
+
+  export func get() -> int
+    return x
+  endfunc
+endmodule
+
+use get from config
+write(get())""")
+
+
+def test_runtime_module_rejects_top_level_expression_in_body():
+    import pytest
+
+    program = parse("""module config
+  write("side effect")
+
+  export func get() -> int
+    return 1
+  endfunc
+endmodule
+
+use get from config
+write(get())""")
+    interp = Interpreter()
+    with pytest.raises(Exception, match="top level only allows use/func/object/type declarations, got expression"):
+        interp.run(program, check_semantics=False)
+
+
+def test_module_rejects_duplicate_runtime_export_name():
+    import pytest
+    with pytest.raises(Exception, match="exports runtime name 'Thing' more than once"):
+        run("""module dup
+  export func Thing() -> int
+    return 1
+  endfunc
+
+  export object Thing
+    value: int
+  endobject
+endmodule
+
+use dup""")
+
+
+def test_runtime_module_rejects_duplicate_type_export_name():
+    import pytest
+
+    program = parse("""module dup
+  export type UserId = int
+  export type UserId = int8
+endmodule
+
+use UserId from dup
+id: UserId := 1""")
+    interp = Interpreter()
+    with pytest.raises(Exception, match="exports type name 'UserId' more than once"):
+        interp.run(program, check_semantics=False)
+
+
+def test_use_rejects_runtime_name_conflict_in_current_scope():
+    import pytest
+    with pytest.raises(Exception, match="Cannot import 'square' from module 'math_utils': name already defined in current scope"):
+        run("""module math_utils
+  export func square(x: int) -> int
+    return x * x
+  endfunc
+endmodule
+
+square := 5
+use square from math_utils
+write(square)""")
+
+
+def test_use_rejects_module_namespace_conflict_in_current_scope():
+    import pytest
+    with pytest.raises(Exception, match="Cannot import module 'math_utils': name already defined in current scope"):
+        run("""module math_utils
+  export func square(x: int) -> int
+    return x * x
+  endfunc
+endmodule
+
+math_utils := 5
+use math_utils
+write(math_utils)""")
+
+
+def test_module_rejects_late_use_statement_after_declarations():
+    import pytest
+    with pytest.raises(Exception, match="must place use statements before func/object/type declarations"):
+        run("""module helpers
+  export func double(x: int) -> int
+    return x * 2
+  endfunc
+endmodule
+
+module math_utils
+  export func quadruple(x: int) -> int
+    return double(double(x))
+  endfunc
+
+  use double from helpers
+endmodule
+
+use quadruple from math_utils
+write(quadruple(7))""")
+
+
 def test_nested_if():
     out = run("""x := 10
 y := 20
@@ -462,6 +593,392 @@ func main()
   write(x)
 endfunc""")
     assert out == "9999"
+
+
+def test_semantic_unknown_type_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Unknown type: MissingType"):
+        run("""func main()
+  x: MissingType := 1
+  write(x)
+endfunc""")
+
+
+def test_semantic_unknown_type_alias_target_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Unknown type: MissingType"):
+        run("""type UserId = MissingType
+func main()
+  write("never")
+endfunc""")
+
+
+def test_semantic_invalid_method_self_name_rejected():
+    import pytest
+    with pytest.raises(Exception, match="must declare 'self' as first parameter"):
+        run("""object Account
+  balance: int
+
+  func deposit(me: Account, amount: int) -> int
+    return amount
+  endfunc
+endobject""")
+
+
+def test_semantic_invalid_object_member_rejected_even_if_method_unused():
+    import pytest
+    with pytest.raises(Exception, match="Object 'Account' has no member 'missing'"):
+        run("""object Account
+  balance: int
+
+  func broken(self: Account) -> int
+    return self.missing()
+  endfunc
+endobject
+
+func main()
+  write("ok")
+endfunc""")
+
+
+def test_semantic_module_type_alias_not_runtime_member():
+    import pytest
+    with pytest.raises(Exception, match="not a runtime member of module 'ids'"):
+        run("""module ids
+  export type UserId = int
+endmodule
+
+use ids
+
+func main()
+  write(ids.UserId)
+endfunc""")
+
+
+def test_semantic_too_many_function_arguments_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Too many arguments"):
+        run("""func add_one(x: int) -> int
+  return x + 1
+endfunc
+
+func main()
+  write(add_one(1, 2))
+endfunc""")
+
+
+def test_semantic_function_argument_type_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Argument 'name' to 'greet' expects string, got int"):
+        run("""func greet(name: string)
+  write(name)
+endfunc
+
+func main()
+  greet(42)
+endfunc""")
+
+
+def test_semantic_function_value_assignment_preserves_signature():
+    import pytest
+    with pytest.raises(Exception, match="Too many arguments for 'inc'"):
+        run("""func inc(x: int) -> int
+  return x + 1
+endfunc
+
+func main()
+  op := inc
+  write(op(1, 2))
+endfunc""")
+
+
+def test_semantic_higher_order_parameter_signature_checked_in_function_body():
+    import pytest
+    with pytest.raises(Exception, match="Argument 'arg1' to 'f' expects int, got string"):
+        run("""func apply(f: (int) -> int) -> int
+  return f("bad")
+endfunc
+
+func inc(x: int) -> int
+  return x + 1
+endfunc
+
+func main()
+  write(apply(inc))
+endfunc""")
+
+
+def test_function_value_return_keeps_callable_signature():
+    out = run("""func make_adder() -> (int) -> int
+  return (x: int) => x + 1
+endfunc
+
+func main()
+  add := make_adder()
+  write(add(41))
+endfunc""")
+    assert out == "42"
+
+
+def test_semantic_return_type_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Return type mismatch: expected int, got string"):
+        run("""func bad() -> int
+  return "oops"
+endfunc
+
+func main()
+  write(bad())
+endfunc""")
+
+
+def test_semantic_multi_return_count_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Return value count mismatch: expected 2, got 1"):
+        run("""func pair() -> int, int
+  return 1
+endfunc
+
+func main()
+  a, b := pair()
+  write(a)
+  write(b)
+endfunc""")
+
+
+def test_semantic_multi_return_item_type_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Return value 2 expects bool, got string"):
+        run("""func pair() -> int, bool
+  return 1, "nope"
+endfunc
+
+func main()
+  a, b := pair()
+  write(a)
+  write(b)
+endfunc""")
+
+
+def test_semantic_typed_var_decl_assignment_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Cannot assign string to 'x' \\(int\\)"):
+        run("""func main()
+  x: int := "oops"
+  write(x)
+endfunc""")
+
+
+def test_semantic_typed_reassignment_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Cannot assign string to 'x' \\(int\\)"):
+        run("""func main()
+  x: int := 1
+  x := "oops"
+  write(x)
+endfunc""")
+
+
+def test_semantic_function_type_var_assignment_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Cannot assign \\(string\\) -> int to 'f' \\(\\(int\\) -> int\\)"):
+        run("""func greet(name: string) -> int
+  return 1
+endfunc
+
+func main()
+  f: (int) -> int := greet
+  write(f(1))
+endfunc""")
+
+
+def test_semantic_multi_assign_count_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Assignment count mismatch: 2 targets, 1 values"):
+        run("""func one() -> int
+  return 1
+endfunc
+
+func main()
+  a, b := one()
+  write(a)
+  write(b)
+endfunc""")
+
+
+def test_semantic_multi_assign_item_type_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Cannot assign string to 'b' \\(bool\\)"):
+        run("""func pair() -> int, string
+  return 1, "nope"
+endfunc
+
+func main()
+  a: int := 0
+  b: bool := false
+  a, b := pair()
+  write(a)
+  write(b)
+endfunc""")
+
+
+def test_semantic_typed_list_literal_item_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Cannot assign list\\[string\\] to 'xs' \\(list\\[int\\]\\)"):
+        run("""func main()
+  xs: list[int] := ["a", "b"]
+  write(xs)
+endfunc""")
+
+
+def test_semantic_dict_literal_value_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Dict value expects int, got string"):
+        run("""func main()
+  scores := dict[string, int]{"alice": "high"}
+  write(scores)
+endfunc""")
+
+
+def test_semantic_append_item_type_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Argument 'item' to 'append' expects int, got string"):
+        run("""func main()
+  xs: list[int] := [1, 2]
+  append(xs, "bad")
+endfunc""")
+
+
+def test_semantic_insert_item_type_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Argument 'item' to 'insert' expects int, got string"):
+        run("""func main()
+  xs: list[int] := [1, 2]
+  insert(xs, 1, "bad")
+endfunc""")
+
+
+def test_semantic_get_default_type_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Argument 'default' to 'get' expects int, got string"):
+        run("""func main()
+  scores := dict[string, int]{"alice": 1}
+  write(get(scores, "bob", "bad"))
+endfunc""")
+
+
+def test_stdlib_named_import_from_list_rejects_local_binding_conflict():
+    import pytest
+    with pytest.raises(Exception, match="Cannot import 'append' from module 'list': name already defined in current scope"):
+        run("""func main()
+  append := 42
+  use append from list
+  nums := [1]
+  append(nums, 2)
+  write(nums)
+endfunc""")
+
+
+def test_stdlib_namespace_import_works():
+    out = run("""func main()
+  use list
+  nums := [1]
+  list.append(nums, 2)
+  write(nums)
+endfunc""")
+    assert out == "[1, 2]"
+
+
+def test_stdlib_cross_module_imports_work(tmp_path):
+    path = tmp_path / "demo.txt"
+    path.write_text("hello", encoding="utf-8")
+    out = run(f"""func main()
+  use trim from string
+  use abs from math
+  use haskey from dict
+  use readfile from io
+
+  write(trim("  hi  "))
+  write(abs(-3))
+  d := dict[string, int]{{"a": 1}}
+  write(haskey(d, "a"))
+  match readfile("{path}")
+    when ok(content) => write(content)
+    when err(e) => write(e)
+  endmatch
+endfunc""")
+    assert out == "hi\n3\nTrue\nhello"
+
+
+def test_stdlib_list_map_filter_range_enumerate_work():
+    out = run("""func main()
+  use map, filter, range, enumerate from list
+  nums := range(1, 5)
+  doubled := map(nums, (x: int) => x * 2)
+  evens := filter(nums, (x: int) => x mod 2 = 0)
+  pairs := enumerate(["a", "b"])
+  write(nums)
+  write(doubled)
+  write(evens)
+  write(pairs)
+endfunc""")
+    assert out == "[1, 2, 3, 4, 5]\n[2, 4, 6, 8, 10]\n[2, 4]\n[[0, 'a'], [1, 'b']]"
+
+
+def test_stdlib_range_direction_and_step():
+    out = run("""func main()
+  use range from list
+  write(range(5, 1))
+  write(range(1, 5, 2))
+  write(range(5, 1, -2))
+endfunc""")
+    assert out == "[5, 4, 3, 2, 1]\n[1, 3, 5]\n[5, 3, 1]"
+
+
+def test_semantic_map_callback_param_type_mismatch_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Argument 'f' to 'map' expects \\(int\\) -> \\.\\.\\., got \\(string\\) -> string"):
+        run("""func main()
+  use map from list
+  nums: list[int] := [1, 2]
+  mapped := map(nums, (s: string) => s)
+  write(mapped)
+endfunc""")
+
+
+def test_semantic_filter_callback_must_return_bool():
+    import pytest
+    with pytest.raises(Exception, match="Argument 'pred' to 'filter' must return bool, got int"):
+        run("""func main()
+  use filter from list
+  nums: list[int] := [1, 2]
+  filtered := filter(nums, (x: int) => x + 1)
+  write(filtered)
+endfunc""")
+
+
+def test_semantic_too_many_constructor_arguments_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Too many arguments"):
+        run("""object Box
+  value: int
+
+  new(value: int) -> Box
+    return Box{value := value}
+  endnew
+endobject
+
+func main()
+  Box.new(1, 2)
+endfunc""")
+
+
+def test_semantic_builtin_arity_rejected():
+    import pytest
+    with pytest.raises(Exception, match="Too many arguments for 'len'"):
+        run("""func main()
+  write(len("abc", "extra"))
+endfunc""")
 
 
 def test_money_basic_arithmetic():

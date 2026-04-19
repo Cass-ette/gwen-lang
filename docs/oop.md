@@ -127,24 +127,30 @@ endmatch
 - [x] 字段私有性检查（仅对象方法绑定的 `self.field` 可访问）
 - [x] 方法展开为函数调用（`obj.m(a)` ≡ `Object.m(obj, a)`）
 - [x] 构造函数处理（`Object.new(...)`）
+- [x] 方法 receiver 约束（方法首参必须是 `self: ObjectName`）
+- [x] 模块对象导出（`export object`）
 
 ## 与模块系统的关系
 
-对象和 module 可以共存（对象导出语法待对象系统实现后确定）：
+对象和 module 可以共存，并且对象现在可以显式导出：
 
 ```gwen
 module banking
-  object Account ... endobject
-  object Transaction ... endobject
+  export object Account
+    ...
+  endobject
 
-  // 注：当前 export 仅支持函数
-  // 对象导出语法将在对象系统实现时设计
+  object Transaction
+    ...
+  endobject
 endmodule
 
 use Account from banking
 
 acc := Account.new("Bob", 100)
 ```
+
+`use banking` 导入的命名空间里只会带出导出的运行时符号，因此只能访问 `banking.Account`，不能越过模块边界拿到私有对象。
 
 ## 常见问答
 

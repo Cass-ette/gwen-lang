@@ -81,3 +81,14 @@ def test_rules_app_example_runs():
     assert " review = 2" in out
     assert " reject = 1" in out
     assert " error = 1" in out
+
+
+def test_higher_order_example_runs():
+    out = run_file(Path("examples/higher_order.gw"))
+
+    assert "Original: [1, 2, 3, 4, 5]" in out
+    assert "Doubled: [2, 4, 6, 8, 10]" in out
+    assert "Evens: [2, 4]" in out
+    assert "Indexed: [[0, 'a'], [1, 'b'], [2, 'c']]" in out
+    assert "Sum: 15" in out
+    assert "Product: 120" in out

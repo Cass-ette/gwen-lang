@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gwen-lang"
+dynamic = ["version"]
+description = "Audit-friendly, math-intuitive Gwen language reference implementation"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{name = "Gwen contributors"}]
+keywords = ["gwen", "language", "interpreter", "parser", "audit-friendly"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Interpreters",
+]
+
+[project.scripts]
+gwen = "gwen.__main__:main"
+
+[project.urls]
+Documentation = "https://github.com/chenzilve/gwen-lang/tree/main/docs"
+Repository = "https://github.com/chenzilve/gwen-lang"
+
+[tool.setuptools.dynamic]
+version = {attr = "gwen.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["gwen*"]

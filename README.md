@@ -2,6 +2,8 @@
 
 Gwen is an audit-friendly, math-intuitive programming language designed for backend development and DevOps automation.
 
+Current implementation status: Python reference implementation for the frozen `v0.1` front-end surface.
+
 ## Design Philosophy
 
 - **Audit-first** — In the age of AI-generated code, readability and auditability come first
@@ -12,8 +14,15 @@ Gwen is an audit-friendly, math-intuitive programming language designed for back
 ## Quick Start
 
 ```bash
+python3 -m pip install -e .
+
+gwen --version
+gwen examples/hello.gw
+gwen check examples/hello.gw
+gwen repl
+
+# legacy invocation still works
 python3 -m gwen examples/hello.gw
-python3 -m gwen  # starts the REPL
 ```
 
 ### VSCode Extension
@@ -35,25 +44,25 @@ Features:
 
 ### Variables & Types
 
-```
+```gwen
 x := 42            // inferred
 x: int := 42       // explicit type
 ```
 
 ### Functions
 
-```
+```gwen
 func gcd(a: int, b: int) -> int
   while b != 0 do
     a, b := b, a mod b
   endwhile
   return a
-endfunc gcd
+endfunc
 ```
 
 ### Control Flow
 
-```
+```gwen
 if x > 0 then
   do_a()
 elif x = 0 then
@@ -81,7 +90,7 @@ endfor
 
 ### Pattern Matching
 
-```
+```gwen
 match x
   when 1 then do_a()
   when 2, 3 then do_b()
@@ -92,16 +101,8 @@ endmatch
 
 ### Error Handling (Result type)
 
-```
-func readfile(path: string)
-  if file_exists(path) then
-    return ok(content)
-  else
-    return err("file not found")
-  endif
-endfunc
-
-match readfile("/etc/config")
+```gwen
+match readfile("config.txt")
   when ok(data) then
     write(data)
   when err(e) then
@@ -111,7 +112,7 @@ endmatch
 
 ### Modules
 
-```
+```gwen
 module math_utils
 
 export func gcd(a: int, b: int) -> int
@@ -124,9 +125,9 @@ use gcd from math_utils
 use math_utils
 ```
 
-### Parallel Execution
+### Parallel Syntax
 
-```
+```gwen
 parallel do
   deploy(server1)
   deploy(server2)
@@ -138,9 +139,11 @@ parallel allowfail => results do
 endparallel
 ```
 
+In the current Python reference implementation, `parallel` syntax and failure handling are frozen, but execution is still sequential. Real parallel runtime behavior is a later compiler/runtime-stage feature.
+
 ### Navigation Tags
 
-```
+```gwen
 func deploy(config: Config)
 
   @validate
@@ -152,7 +155,7 @@ func deploy(config: Config)
   @push
   push_to_server()
 
-endfunc deploy
+endfunc
 ```
 
 ## Implementation
@@ -162,14 +165,14 @@ Gwen is implemented in Python as a tree-walk interpreter:
 - `gwen/lexer.py` — Tokenizer
 - `gwen/ast_nodes.py` — AST node definitions
 - `gwen/parser.py` — Recursive descent parser
+- `gwen/checker.py` — Pre-execution semantic checker
 - `gwen/interpreter.py` — Tree-walk interpreter
+- `gwen/stdlib_catalog.py` — Official stdlib module surface
 
 ## Running Tests
 
 ```bash
-python3 tests/test_lexer.py
-python3 tests/test_parser.py
-python3 tests/test_interpreter.py
+pytest
 ```
 
 ## File Extension
@@ -201,4 +204,6 @@ gwen-lang/
 - [docs/syntax.md](docs/syntax.md) — Syntax reference
 - [docs/types.md](docs/types.md) — Type system
 - [docs/scope.md](docs/scope.md) — Variable scoping
+- [docs/modules.md](docs/modules.md) — Module system
+- [docs/stdlib.md](docs/stdlib.md) — Stdlib boundary and import shape
 - [docs/tracking.md](docs/tracking.md) — Implementation status

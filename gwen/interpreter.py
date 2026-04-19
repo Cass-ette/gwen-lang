@@ -4,6 +4,8 @@ import os
 import struct
 from typing import Any, Dict, List, Optional
 from . import ast_nodes as ast
+from .checker import SemanticChecker, SemanticError
+from .stdlib_catalog import OFFICIAL_STDLIB_MODULES
 
 
 # --- Explicit precision type definitions ---
@@ -23,6 +25,7 @@ PRECISION_TYPES = {"float32", "float64", "int8", "int16", "int32", "int64",
                    "uint8", "uint16", "uint32", "uint64"}
 
 BASE_CHECKED_TYPES = {"int", "float", "string", "bool"}
+MODULE_DECLARATION_STMT_TYPES = (ast.UseStmt, ast.FuncDef, ast.ObjectDef, ast.TypeAlias)
 
 
 def needs_type_check(type_name: Optional[str]) -> bool:
@@ -145,6 +148,44 @@ def resolve_type_name(type_node: Any) -> Optional[str]:
                 return f"money[{inner}]"
         return type_node.base
     return None
+
+
+def _module_stmt_label(stmt: Any) -> str:
+    if isinstance(stmt, ast.UseStmt):
+        return "use"
+    if isinstance(stmt, ast.FuncDef):
+        return "func"
+    if isinstance(stmt, ast.ObjectDef):
+        return "object"
+    if isinstance(stmt, ast.TypeAlias):
+        return "type"
+    if isinstance(stmt, ast.Assignment):
+        return "assignment"
+    if isinstance(stmt, ast.VarDecl):
+        return "var"
+    if isinstance(stmt, ast.VarBlock):
+        return "var block"
+    if isinstance(stmt, ast.IfStmt):
+        return "if"
+    if isinstance(stmt, ast.WhileStmt):
+        return "while"
+    if isinstance(stmt, (ast.ForRangeStmt, ast.ForEachStmt)):
+        return "for"
+    if isinstance(stmt, ast.MatchStmt):
+        return "match"
+    if isinstance(stmt, ast.ParallelStmt):
+        return "parallel"
+    if isinstance(stmt, ast.GlobalStmt):
+        return "global"
+    if isinstance(stmt, ast.ArenaStmt):
+        return "arena"
+    if isinstance(stmt, ast.TagStmt):
+        return "@tag"
+    if isinstance(stmt, ast.ExprStmt):
+        return "expression"
+    if isinstance(stmt, ast.ModuleDef):
+        return "module"
+    return type(stmt).__name__
 
 
 class GwenError(Exception):
@@ -381,6 +422,7 @@ class Interpreter:
         self.module_search_paths: List[str] = []
         self._loading_modules: set[str] = set()
         self._setup_builtins()
+        self._setup_stdlib_modules()
         if module_search_paths:
             for path in module_search_paths:
                 self.add_module_search_path(path)
@@ -398,6 +440,10 @@ class Interpreter:
         self.global_env.set("asc", self._builtin_asc)
         self.global_env.set("desc", self._builtin_desc)
         self.global_env.set("reversed", self._builtin_reverse)
+        self.global_env.set("map", self._builtin_map)
+        self.global_env.set("filter", self._builtin_filter)
+        self.global_env.set("range", self._builtin_range)
+        self.global_env.set("enumerate", self._builtin_enumerate)
         self.global_env.set("split", self._builtin_split)
         self.global_env.set("join", self._builtin_join)
         self.global_env.set("pop", self._builtin_pop)
@@ -423,6 +469,13 @@ class Interpreter:
         self.global_env.set("writefile", self._builtin_writefile)
         self.global_env.set("appendfile", self._builtin_appendfile)
 
+    def _setup_stdlib_modules(self):
+        for module_name, exports in OFFICIAL_STDLIB_MODULES.items():
+            module_env = Environment()
+            for export_name in exports:
+                module_env.set(export_name, self.global_env.get(export_name))
+            self.modules[module_name] = module_env
+
     def add_module_search_path(self, path: Optional[str]):
         """Register a directory for `use module_name` file lookup."""
         if not path:
@@ -446,6 +499,96 @@ class Interpreter:
                     seen.add(abs_candidate)
                     yield abs_candidate
 
+    def _extract_file_module_def(self, program: ast.Program, module_name: str, candidate: str, line: int) -> ast.ModuleDef:
+        """Require module files to contain exactly one top-level matching module definition."""
+        if len(program.statements) != 1 or not isinstance(program.statements[0], ast.ModuleDef):
+            raise GwenError(
+                f"Module file '{candidate}' must contain exactly one top-level module definition for '{module_name}'",
+                line,
+            )
+        module_stmt = program.statements[0]
+        if module_stmt.name != module_name:
+            raise GwenError(
+                f"Module file '{candidate}' did not define module '{module_name}'",
+                line,
+            )
+        return module_stmt
+
+    def _validate_module_body(self, stmt: ast.ModuleDef):
+        seen_non_use_decl = False
+        for inner in stmt.body:
+            if isinstance(inner, MODULE_DECLARATION_STMT_TYPES):
+                if isinstance(inner, ast.UseStmt):
+                    if seen_non_use_decl:
+                        raise GwenError(
+                            f"Module '{stmt.name}' must place use statements before func/object/type declarations",
+                            inner.line,
+                        )
+                    continue
+                seen_non_use_decl = True
+                continue
+            raise GwenError(
+                f"Module '{stmt.name}' top level only allows use/func/object/type declarations, got {_module_stmt_label(inner)}",
+                getattr(inner, "line", stmt.line),
+            )
+
+    def _add_module_runtime_export(
+        self,
+        module_ns: Environment,
+        module_name: str,
+        export_name: str,
+        value: Any,
+        line: int,
+    ):
+        if export_name in module_ns.vars:
+            raise GwenError(
+                f"Module '{module_name}' exports runtime name '{export_name}' more than once",
+                line,
+            )
+        module_ns.set(export_name, value)
+
+    def _add_module_type_export(
+        self,
+        module_ns: Environment,
+        module_name: str,
+        export_name: str,
+        target: str,
+        line: int,
+    ):
+        if export_name in module_ns.aliases:
+            raise GwenError(
+                f"Module '{module_name}' exports type name '{export_name}' more than once",
+                line,
+            )
+        module_ns.set_alias(export_name, target)
+
+    def _import_runtime_name(self, env: Environment, module_name: str, name: str, value: Any, line: int):
+        existing = env.vars.get(name)
+        if existing is not None and existing is not value:
+            raise GwenError(
+                f"Cannot import '{name}' from module '{module_name}': name already defined in current scope",
+                line,
+            )
+        env.set(name, value)
+
+    def _import_type_name(self, env: Environment, module_name: str, name: str, target: str, line: int):
+        existing = env.aliases.get(name)
+        if existing is not None and existing != target:
+            raise GwenError(
+                f"Cannot import type '{name}' from module '{module_name}': type name already defined in current scope",
+                line,
+            )
+        env.set_alias(name, target)
+
+    def _import_module_namespace(self, env: Environment, module_name: str, module_ns: Environment, line: int):
+        existing = env.vars.get(module_name)
+        if existing is not None and existing is not module_ns:
+            raise GwenError(
+                f"Cannot import module '{module_name}': name already defined in current scope",
+                line,
+            )
+        env.set(module_name, module_ns)
+
     def _load_module_from_file(self, module_name: str, line: int):
         """Load a module source file on demand when `use` references it."""
         if module_name in self.modules:
@@ -465,8 +608,9 @@ class Interpreter:
                 with open(candidate, encoding="utf-8") as f:
                     source = f.read()
                 program = parse(source)
-                # Load definitions into the current interpreter without auto-running main().
-                self.exec_block(program.statements, self.global_env)
+                module_stmt = self._extract_file_module_def(program, module_name, candidate, line)
+                # Load only the requested module definition without executing stray top-level code.
+                self.exec_stmt(module_stmt, self.global_env)
             finally:
                 self._loading_modules.remove(module_name)
 
@@ -593,6 +737,68 @@ class Interpreter:
         if not isinstance(lst, list):
             raise GwenError(f"reverse() requires a list, got {type(lst).__name__}")
         return lst[::-1]
+
+    def _call_stdlib_callable(self, fn, args, label: str):
+        if isinstance(fn, GwenLambda):
+            return self.call_lambda(fn, args)
+        if isinstance(fn, GwenFunction):
+            return self.call_function(fn, args)
+        if callable(fn):
+            return fn(*args)
+        raise GwenError(f"{label}() requires a callable argument, got {type(fn).__name__}")
+
+    def _builtin_map(self, lst, fn):
+        """Return a new list by applying fn(item) to each element."""
+        if not isinstance(lst, list):
+            raise GwenError(f"map() requires a list, got {type(lst).__name__}")
+        result = []
+        for item in lst:
+            result.append(self._call_stdlib_callable(fn, [item], "map"))
+        return result
+
+    def _builtin_filter(self, lst, fn):
+        """Return a new list containing items where fn(item) is true."""
+        if not isinstance(lst, list):
+            raise GwenError(f"filter() requires a list, got {type(lst).__name__}")
+        result = []
+        for item in lst:
+            keep = self._call_stdlib_callable(fn, [item], "filter")
+            if not isinstance(keep, bool):
+                raise GwenError(f"filter() predicate must return bool, got {type(keep).__name__}")
+            if keep:
+                result.append(item)
+        return result
+
+    def _builtin_range(self, start, end, step=None):
+        """Inclusive integer range mirroring Gwen's `for i in a to b` semantics."""
+        if not isinstance(start, int):
+            raise GwenError(f"range() start must be an integer, got {type(start).__name__}")
+        if not isinstance(end, int):
+            raise GwenError(f"range() end must be an integer, got {type(end).__name__}")
+        if step is not None and not isinstance(step, int):
+            raise GwenError(f"range() step must be an integer, got {type(step).__name__}")
+        if step == 0:
+            raise GwenError("range() step cannot be 0")
+        if step is None:
+            step = 1 if start <= end else -1
+        items = []
+        if step > 0:
+            i = start
+            while i <= end:
+                items.append(i)
+                i += step
+        else:
+            i = start
+            while i >= end:
+                items.append(i)
+                i += step
+        return items
+
+    def _builtin_enumerate(self, lst):
+        """Return [[idx, item], ...] pairs for a list."""
+        if not isinstance(lst, list):
+            raise GwenError(f"enumerate() requires a list, got {type(lst).__name__}")
+        return [[idx, item] for idx, item in enumerate(lst)]
 
     def _builtin_split(self, s, sep):
         """Split string by separator."""
@@ -845,7 +1051,18 @@ class Interpreter:
         except OSError as e:
             return ErrValue(str(e))
 
-    def run(self, program: ast.Program, source_path: Optional[str] = None):
+    def run(
+        self,
+        program: ast.Program,
+        source_path: Optional[str] = None,
+        check_semantics: bool = True,
+    ):
+        if check_semantics:
+            checker = SemanticChecker(module_search_paths=self.module_search_paths)
+            try:
+                checker.check_program(program, source_path=source_path)
+            except SemanticError as e:
+                raise GwenError(e.raw_message, e.line)
         if source_path:
             self.add_module_search_path(os.path.dirname(os.path.abspath(source_path)))
         self.exec_block(program.statements, self.global_env)
@@ -1129,22 +1346,41 @@ class Interpreter:
                 self.exec_block(stmt.else_body, env)
 
         elif isinstance(stmt, ast.ModuleDef):
+            self._validate_module_body(stmt)
             mod_env = Environment(parent=env)
             self.exec_block(stmt.body, mod_env)
             # Collect exported names
             module_ns = Environment()
             for s in stmt.body:
                 if isinstance(s, ast.FuncDef) and s.exported:
-                    module_ns.set(s.name, mod_env.get(s.name))
+                    self._add_module_runtime_export(
+                        module_ns,
+                        stmt.name,
+                        s.name,
+                        mod_env.get(s.name),
+                        s.line,
+                    )
                 elif isinstance(s, ast.ObjectDef) and s.exported:
-                    module_ns.set(s.name, mod_env.get(s.name))
+                    self._add_module_runtime_export(
+                        module_ns,
+                        stmt.name,
+                        s.name,
+                        mod_env.get(s.name),
+                        s.line,
+                    )
                 elif isinstance(s, ast.TypeAlias) and s.exported:
                     target = mod_env.get_local_alias(s.name)
                     if target is None:
                         raise GwenError(f"Exported type alias '{s.name}' was not defined", s.line)
-                    module_ns.set_alias(s.name, target)
+                    self._add_module_type_export(
+                        module_ns,
+                        stmt.name,
+                        s.name,
+                        target,
+                        s.line,
+                    )
             self.modules[stmt.name] = module_ns
-            env.set(stmt.name, module_ns)
+            self._import_module_namespace(env, stmt.name, module_ns, stmt.line)
 
         elif isinstance(stmt, ast.UseStmt):
             if stmt.module not in self.modules:
@@ -1154,11 +1390,11 @@ class Interpreter:
                 for name in stmt.names:
                     imported = False
                     if name in mod_env.vars:
-                        env.set(name, mod_env.get(name))
+                        self._import_runtime_name(env, stmt.module, name, mod_env.get(name), stmt.line)
                         imported = True
                     alias = mod_env.get_local_alias(name)
                     if alias is not None:
-                        env.set_alias(name, alias)
+                        self._import_type_name(env, stmt.module, name, alias, stmt.line)
                         imported = True
                     if not imported:
                         raise GwenError(
@@ -1166,11 +1402,7 @@ class Interpreter:
                             stmt.line,
                         )
             else:
-                # Import module namespace
-                mod_ns = Environment()
-                for key, val in mod_env.vars.items():
-                    mod_ns.set(key, val)
-                env.set(stmt.module, mod_ns)
+                self._import_module_namespace(env, stmt.module, mod_env, stmt.line)
 
         elif isinstance(stmt, ast.GlobalStmt):
             # global x := value - force assignment to outer (non-local) scope
@@ -1669,6 +1901,23 @@ class Interpreter:
 
         raise GwenError(f"'{callee}' is not callable", call.line)
 
+    def _validate_arg_count(self, params, args_count: int, line: int, label: str):
+        required = sum(1 for param in params if param.default is None)
+        if args_count < required:
+            consumed = args_count
+            for param in params:
+                if consumed > 0:
+                    consumed -= 1
+                    continue
+                if param.default is not None:
+                    continue
+                raise GwenError(f"Missing argument: {param.name}", line)
+        if args_count > len(params):
+            raise GwenError(
+                f"Too many arguments for '{label}': expected at most {len(params)}, got {args_count}",
+                line,
+            )
+
     def _call_method(self, method_def, instance, args, obj_type, line):
         call_env = Environment(
             parent=obj_type.closure,
@@ -1686,6 +1935,7 @@ class Interpreter:
         call_env.set(params[0].name, instance)
         # Bind remaining params
         rest = params[1:]
+        self._validate_arg_count(rest, len(args), line, f"{obj_type.name}.{method_def.name}")
         for i, param in enumerate(rest):
             if i < len(args):
                 val = args[i]
@@ -1708,6 +1958,7 @@ class Interpreter:
         if ctor is None:
             raise GwenError(f"Object '{obj_type.name}' has no constructor", line)
         call_env = Environment(parent=obj_type.closure, is_call_frame=True, func_name=f"{obj_type.name}.new")
+        self._validate_arg_count(ctor.params, len(args), line, f"{obj_type.name}.new")
         for i, param in enumerate(ctor.params):
             if i < len(args):
                 val = args[i]
@@ -1733,6 +1984,7 @@ class Interpreter:
     def call_function(self, fn: GwenFunction, args: List[Any]) -> Any:
         call_env = Environment(parent=fn.closure, is_call_frame=True, func_name=fn.node.name)
         params = fn.node.params
+        self._validate_arg_count(params, len(args), fn.node.line, fn.node.name)
         for i, param in enumerate(params):
             if i < len(args):
                 val = args[i]
@@ -1752,9 +2004,14 @@ class Interpreter:
 
     def call_lambda(self, lam: GwenLambda, args: List[Any]) -> Any:
         call_env = Environment(parent=lam.closure, is_call_frame=True, func_name=None)
+        self._validate_arg_count(lam.node.params, len(args), lam.node.line, "<lambda>")
         for i, param in enumerate(lam.node.params):
             if i < len(args):
-                call_env.set(param.name, args[i])
+                val = args[i]
+                ptype = self._resolve_alias(resolve_type_name(param.type_name), call_env)
+                if needs_type_check(ptype):
+                    val = coerce_to_type(val, ptype, param.line)
+                call_env.set(param.name, val)
         try:
             self.exec_block(lam.node.body, call_env)
         except ReturnSignal as r:
