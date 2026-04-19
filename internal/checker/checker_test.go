@@ -220,6 +220,26 @@ func TestTypedReassignmentMismatchRejected(t *testing.T) {
 endfunc`, "Cannot assign string to 'x' (int)")
 }
 
+func TestGlobalRequiresOuterBinding(t *testing.T) {
+	requireErrorContains(t, `func main()
+  global missing := 1
+endfunc`, "global variable 'missing' not found in any outer scope")
+}
+
+func TestGlobalAssignmentTypeMismatchRejected(t *testing.T) {
+	requireErrorContains(t, `count: int := 0
+
+func bump()
+  global count := "oops"
+endfunc`, "Cannot assign string to 'count' (int)")
+}
+
+func TestGlobalCannotTargetBuiltin(t *testing.T) {
+	requireErrorContains(t, `func main()
+  global write := 1
+endfunc`, "Cannot assign to builtin 'write' with global")
+}
+
 func TestFunctionTypeAssignmentMismatchRejected(t *testing.T) {
 	requireErrorContains(t, `func greet(name: string) -> int
   return 1
@@ -245,6 +265,19 @@ func TestTypedListLiteralItemMismatchRejected(t *testing.T) {
 	requireErrorContains(t, `func main()
   xs: list[int] := ["a", "b"]
 endfunc`, "Cannot assign list[string] to 'xs' (list[int])")
+}
+
+func TestParallelResultVarIsVisibleAfterBlock(t *testing.T) {
+	requireOK(t, `func id(x: int) -> int
+  return x
+endfunc
+
+func main()
+  parallel => results do
+    id(1)
+  endparallel
+  write(results)
+endfunc`)
 }
 
 func TestDictLiteralValueMismatchRejected(t *testing.T) {

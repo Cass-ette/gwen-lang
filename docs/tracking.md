@@ -136,6 +136,7 @@
 
 ## 上次更新
 
+2026-04-19 - Go 作用域语义修复：补齐 `global` 的运行时外层赋值逻辑，禁止误改 builtin，并为缺失外层绑定与类型失配补充 checker 拦截；同时修复 `parallel => results` 在 checker 中不可见的问题。新增 8 个 Go 回归测试，并验证 `examples/global_scope.gw` 与定向 `parallel => results` 样例
 2026-04-19 - Go `parallel` 运行时落地：每条顶层语句现在会并发执行，并在各自的外层环境快照里运行，避免共享可变局部状态；`=> results` 改为按源码顺序收集真实表达式值，`allowfail` 保留 `ok/err` 结果面；新增 5 个 Go 解释器回归测试覆盖真并发起跑、结果顺序、容错和环境隔离
 2026-04-19 - Python 发布收口：补 `pyproject.toml`、包版本号与 `gwen` console script；CLI 升级为 `run/check/repl --version --help`，同时保留 `python -m gwen file.gw` 兼容路径；README 对齐当前语义边界并注明 Python 版 `parallel` 仍为顺序执行；新增 6 个 CLI 回归测试，全套 284 通过
 2026-04-19 - 模块口径冻结：明确 Gwen `v0.1` 不支持导入别名（`use foo as bar from mod` / `use mod as m` 均不在当前设计内）；遇到重名时推荐改用 `use module` 保留来源信息

@@ -550,6 +550,77 @@ endfunc`)
 	}
 }
 
+func TestGlobalUpdatesModuleScope(t *testing.T) {
+	out := runSource(t, `count: int := 0
+
+func bump()
+  global count := count + 1
+endfunc
+
+func main()
+  bump()
+  bump()
+  write(count)
+endfunc`)
+	if out != "2" {
+		t.Fatalf("output mismatch: got %q want %q", out, "2")
+	}
+}
+
+func TestGlobalUpdatesOuterFunctionScope(t *testing.T) {
+	out := runSource(t, `func outer() -> int
+  value: int := 10
+
+  func inner()
+    global value := value + 5
+  endfunc
+
+  inner()
+  return value
+endfunc
+
+write(outer())`)
+	if out != "15" {
+		t.Fatalf("output mismatch: got %q want %q", out, "15")
+	}
+}
+
+func TestGlobalMissingOuterBindingFailsAtRuntime(t *testing.T) {
+	program, err := parser.Parse(`func main()
+  global missing := 1
+endfunc`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	interp := interpreter.New()
+	err = interp.Run(program)
+	if err == nil {
+		t.Fatal("expected runtime error")
+	}
+	if err.Error() != "runtime error at L2: global variable 'missing' not found in any outer scope" {
+		t.Fatalf("error mismatch: got %q", err.Error())
+	}
+}
+
+func TestGlobalCannotMutateBuiltin(t *testing.T) {
+	program, err := parser.Parse(`func main()
+  global write := 1
+endfunc`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	interp := interpreter.New()
+	err = interp.Run(program)
+	if err == nil {
+		t.Fatal("expected runtime error")
+	}
+	if err.Error() != "runtime error at L2: Cannot assign to builtin 'write' with global" {
+		t.Fatalf("error mismatch: got %q", err.Error())
+	}
+}
+
 func TestParallelRunsTasksConcurrently(t *testing.T) {
 	program, err := parser.Parse(`parallel do
   block(1)

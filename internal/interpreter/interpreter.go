@@ -192,6 +192,15 @@ func (e *Environment) GetLocal(name string) (any, bool) {
 	return value, ok
 }
 
+func (e *Environment) ResolveOuter(name string) (*Environment, any, bool) {
+	for current := e.parent; current != nil; current = current.parent {
+		if value, ok := current.vars[name]; ok {
+			return current, value, true
+		}
+	}
+	return nil, nil, false
+}
+
 func (e *Environment) Set(name string, value any) {
 	e.vars[name] = value
 }
@@ -241,6 +250,11 @@ func (e *Environment) IsConst(name string) bool {
 		return e.parent.IsConst(name)
 	}
 	return false
+}
+
+func (e *Environment) IsLocalConst(name string) bool {
+	_, ok := e.consts[name]
+	return ok
 }
 
 type returnSignal struct {
@@ -743,6 +757,28 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 
 	case *ast.ArenaStmt:
 		return i.execBlock(node.Body, env)
+
+	case *ast.GlobalStmt:
+		value, err := i.evalExpr(node.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		targetEnv, existing, ok := env.ResolveOuter(node.Name)
+		if !ok {
+			return nil, runtimeErrorf(node.Line, "global variable '%s' not found in any outer scope", node.Name)
+		}
+		if _, isBuiltin := existing.(Builtin); isBuiltin {
+			return nil, runtimeErrorf(node.Line, "Cannot assign to builtin '%s' with global", node.Name)
+		}
+		if targetEnv.IsLocalConst(node.Name) {
+			return nil, runtimeErrorf(node.Line, "Cannot assign to const variable: %s", node.Name)
+		}
+		coerced, err := coerceIfTyped(value, targetEnv.GetLocalType(node.Name), node.Line)
+		if err != nil {
+			return nil, err
+		}
+		targetEnv.Update(node.Name, coerced)
+		return nil, nil
 
 	case *ast.ParallelStmt:
 		return i.execParallel(node, env)

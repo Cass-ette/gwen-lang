@@ -325,6 +325,15 @@ func (s *Scope) resolveLocalValue(name string) (*ValueInfo, bool) {
 	return value, ok
 }
 
+func (s *Scope) resolveOuterValue(name string) (*ValueInfo, bool) {
+	for current := s.parent; current != nil; current = current.parent {
+		if value, ok := current.values[name]; ok {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
 func (s *Scope) defineAlias(name, target string) {
 	s.aliases[name] = target
 }
@@ -803,14 +812,27 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		return c.checkUse(node, scope, deferred)
 
 	case *ast.ParallelStmt:
-		return c.checkBlock(node.Body, newScope(scope), deferred)
+		if err := c.checkBlock(node.Body, newScope(scope), deferred); err != nil {
+			return err
+		}
+		if node.ResultVar != "" {
+			scope.defineValue(node.ResultVar, c.valueFromDeclaredType("list", scope, node.ResultVar))
+		}
+		return nil
 
 	case *ast.GlobalStmt:
-		if node.Value == nil {
-			return nil
+		value, err := c.checkExpr(node.Value, scope, deferred)
+		if err != nil {
+			return err
 		}
-		_, err := c.checkExpr(node.Value, scope, deferred)
-		return err
+		target, ok := scope.resolveOuterValue(node.Name)
+		if !ok {
+			return semanticErrorf(node.Line, "global variable '%s' not found in any outer scope", node.Name)
+		}
+		if target.Kind == "builtin" {
+			return semanticErrorf(node.Line, "Cannot assign to builtin '%s' with global", node.Name)
+		}
+		return c.validateValueAssignment(node.Name, target, value, scope, node.Line)
 
 	case *ast.ArenaStmt:
 		return c.checkBlock(node.Body, newScope(scope), deferred)
