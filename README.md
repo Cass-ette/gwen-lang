@@ -25,6 +25,13 @@ gwen repl
 python3 -m gwen examples/hello.gw
 ```
 
+## Share With A Friend
+
+If you want someone else to try Gwen quickly and read a real project, send them the repo and point them to [TRY_GWEN.md](TRY_GWEN.md).
+
+- macOS / Linux: `./scripts/try_ledger_app.sh`
+- Windows PowerShell: `powershell -ExecutionPolicy Bypass -File .\scripts\try_ledger_app.ps1`
+
 ### VSCode Extension
 
 Gwen has a VSCode extension for syntax highlighting and snippets:

@@ -8,6 +8,10 @@ Small Gwen test project for shaking out language design decisions with something
 python3 -m gwen examples/ledger_app/main.gw
 ```
 
+For a first guided walkthrough, read:
+
+- `examples/ledger_app/TUTORIAL.md`
+
 It seeds a demo ledger, runs several filtered queries, deletes one entry by index, updates one note, prints month-specific reports, writes the updated ledger to `/tmp/gwen_ledger_app_demo.txt`, then reloads it and verifies the persisted state again.
 
 ## What This Project Exercises
