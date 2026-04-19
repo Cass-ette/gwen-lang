@@ -1228,8 +1228,16 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		return c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "for", node.Line)
 
 	case *ast.MatchStmt:
-		if _, err := c.checkExpr(node.Subject, scope, deferred); err != nil {
+		subject, err := c.checkExpr(node.Subject, scope, deferred)
+		if err != nil {
 			return err
+		}
+		if subjectType := c.valueTypeName(subject, scope); subjectType != "" {
+			if _, ok := parseResultTypeInfo(subjectType); ok {
+				if err := c.validateResultMatchPatterns(node); err != nil {
+					return err
+				}
+			}
 		}
 		branches := make([]*Scope, 0, len(node.Cases)+1)
 		for _, clause := range node.Cases {
@@ -2104,6 +2112,46 @@ func (c *Checker) checkPattern(pattern any, scope *Scope, deferred *[]func() err
 	default:
 		_, err := c.checkExpr(pattern, scope, deferred)
 		return err
+	}
+}
+
+func (c *Checker) validateResultMatchPatterns(stmt *ast.MatchStmt) error {
+	for _, clause := range stmt.Cases {
+		for _, pattern := range clause.Patterns {
+			if isResultMatchPattern(pattern) {
+				continue
+			}
+			return semanticErrorf(lineOf(pattern), "Match on Result type must use ok(x) or err(x) patterns, not %s", describeMatchPattern(pattern))
+		}
+	}
+	return nil
+}
+
+func isResultMatchPattern(pattern any) bool {
+	switch pattern.(type) {
+	case *ast.OkExpr, *ast.ErrExpr:
+		return true
+	default:
+		return false
+	}
+}
+
+func describeMatchPattern(pattern any) string {
+	switch pattern.(type) {
+	case *ast.IntLiteral:
+		return "int literal"
+	case *ast.FloatLiteral:
+		return "float literal"
+	case *ast.StringLiteral:
+		return "string literal"
+	case *ast.BoolLiteral:
+		return "bool literal"
+	case *ast.Identifier:
+		return "identifier pattern"
+	case *ast.BinaryOp:
+		return "range pattern"
+	default:
+		return "this pattern"
 	}
 }
 

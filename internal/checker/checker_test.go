@@ -411,6 +411,21 @@ func TestMatchBindingIsVisibleAfterBlock(t *testing.T) {
 endfunc`)
 }
 
+func TestMatchResultRejectsNonOkErrPattern(t *testing.T) {
+	requireErrorContains(t, `func f() -> result[int]
+  return ok(1)
+endfunc
+
+func main()
+  match f()
+    when 1 =>
+      write("one")
+    else
+      write("other")
+  endmatch
+endfunc`, "Match on Result type must use ok(x) or err(x) patterns")
+}
+
 func TestMatchBindingDoesNotLeakFromOnlyOneBranch(t *testing.T) {
 	requireErrorContains(t, `func main()
   match ok(42)

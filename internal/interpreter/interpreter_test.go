@@ -38,6 +38,23 @@ func runSource(t *testing.T, source string) string {
 	return out
 }
 
+func requireRuntimeErrorContains(t *testing.T, source string, want string) {
+	t.Helper()
+
+	program, err := parser.Parse(source)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	err = interpreter.New().Run(program)
+	if err == nil {
+		t.Fatalf("expected runtime error containing %q", want)
+	}
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("error mismatch:\n got: %v\nwant: %s", err, want)
+	}
+}
+
 func runProgramPath(t *testing.T, path string) string {
 	t.Helper()
 
@@ -233,6 +250,57 @@ match safe_div(10, 0)
 endmatch`)
 	if out != "division by zero" {
 		t.Fatalf("output mismatch: got %q want %q", out, "division by zero")
+	}
+}
+
+func TestMatchResultWithNonOkErrPatternRejected(t *testing.T) {
+	requireRuntimeErrorContains(t, `func f() -> result[int]
+  return ok(1)
+endfunc
+
+match f()
+  when 1 =>
+    write("one")
+  else
+    write("other")
+endmatch`, "Match on Result type must use ok(x) or err(x) patterns")
+}
+
+func TestMatchResultOnlyOkRaisesOnErrValue(t *testing.T) {
+	requireRuntimeErrorContains(t, `func f() -> result[int]
+  return err("boom")
+endfunc
+
+match f()
+  when ok(n) =>
+    write(n)
+endmatch`, "match statement has no matching case and no 'else' branch")
+}
+
+func TestMatchResultOnlyErrRaisesOnOkValue(t *testing.T) {
+	requireRuntimeErrorContains(t, `func f() -> result[int]
+  return ok(42)
+endfunc
+
+match f()
+  when err(e) =>
+    write(e)
+endmatch`, "match statement has no matching case and no 'else' branch")
+}
+
+func TestMatchResultOkPlusElseCoversErr(t *testing.T) {
+	out := runSource(t, `func f() -> result[int]
+  return err("boom")
+endfunc
+
+match f()
+  when ok(n) =>
+    write(n)
+  else
+    write("fallback")
+endmatch`)
+	if out != "fallback" {
+		t.Fatalf("output mismatch: got %q want %q", out, "fallback")
 	}
 }
 

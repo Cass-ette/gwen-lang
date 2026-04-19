@@ -640,6 +640,11 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 		if err != nil {
 			return nil, err
 		}
+		if isResultMatchSubject(subject) {
+			if err := validateResultMatchPatterns(node); err != nil {
+				return nil, err
+			}
+		}
 		for _, clause := range node.Cases {
 			matched, bindings, err := i.matchPatterns(subject, clause.Patterns, env)
 			if err != nil {
@@ -656,7 +661,7 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 		if len(node.ElseBody) > 0 {
 			return i.execBlock(node.ElseBody, env)
 		}
-		return nil, runtimeErrorf(node.Line, "match statement has no matching case and no 'else' branch")
+		return nil, runtimeErrorf(node.Line, "match statement has no matching case and no 'else' branch (exhaustive match required)")
 
 	case *ast.ModuleDef:
 		moduleEnv := NewEnvironment(env)
@@ -1710,6 +1715,78 @@ func builtinCallName(expr any) (string, bool) {
 		return node.Member, true
 	default:
 		return "", false
+	}
+}
+
+func isResultMatchSubject(subject any) bool {
+	switch subject.(type) {
+	case *OkValue, *ErrValue:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateResultMatchPatterns(stmt *ast.MatchStmt) error {
+	for _, clause := range stmt.Cases {
+		for _, pattern := range clause.Patterns {
+			if isResultMatchPattern(pattern) {
+				continue
+			}
+			return runtimeErrorf(matchPatternLine(pattern), "Match on Result type must use ok(x) or err(x) patterns, not %s. Use 'when ok(val) => ...' or 'when err(msg) => ...'", describeMatchPattern(pattern))
+		}
+	}
+	return nil
+}
+
+func isResultMatchPattern(pattern any) bool {
+	switch pattern.(type) {
+	case *ast.OkExpr, *ast.ErrExpr:
+		return true
+	default:
+		return false
+	}
+}
+
+func describeMatchPattern(pattern any) string {
+	switch pattern.(type) {
+	case *ast.IntLiteral:
+		return "int literal"
+	case *ast.FloatLiteral:
+		return "float literal"
+	case *ast.StringLiteral:
+		return "string literal"
+	case *ast.BoolLiteral:
+		return "bool literal"
+	case *ast.Identifier:
+		return "identifier pattern"
+	case *ast.BinaryOp:
+		return "range pattern"
+	default:
+		return "this pattern"
+	}
+}
+
+func matchPatternLine(pattern any) int {
+	switch node := pattern.(type) {
+	case *ast.IntLiteral:
+		return node.Line
+	case *ast.FloatLiteral:
+		return node.Line
+	case *ast.StringLiteral:
+		return node.Line
+	case *ast.BoolLiteral:
+		return node.Line
+	case *ast.Identifier:
+		return node.Line
+	case *ast.BinaryOp:
+		return node.Line
+	case *ast.OkExpr:
+		return node.Line
+	case *ast.ErrExpr:
+		return node.Line
+	default:
+		return 0
 	}
 }
 
