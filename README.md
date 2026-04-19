@@ -2,7 +2,7 @@
 
 Gwen is an audit-friendly, math-intuitive programming language designed for backend development and DevOps automation.
 
-Current implementation status: Python reference implementation for the frozen `v0.1` front-end surface.
+Current implementation status: Go bootstrap frontend/runtime for the frozen `v0.1` surface, with the earlier Python reference implementation still kept in-tree.
 
 ## Design Philosophy
 
@@ -14,15 +14,14 @@ Current implementation status: Python reference implementation for the frozen `v
 ## Quick Start
 
 ```bash
+go run ./cmd/gwen --version
+go run ./cmd/gwen run examples/hello.gw
+go run ./cmd/gwen check examples/hello.gw
+go run ./cmd/gwen repl
+
+# Python reference path is still available
 python3 -m pip install -e .
-
-gwen --version
 gwen examples/hello.gw
-gwen check examples/hello.gw
-gwen repl
-
-# legacy invocation still works
-python3 -m gwen examples/hello.gw
 ```
 
 ## Share With A Friend
@@ -146,7 +145,7 @@ parallel allowfail => results do
 endparallel
 ```
 
-In the current Python reference implementation, `parallel` syntax and failure handling are frozen, but execution is still sequential. Real parallel runtime behavior is a later compiler/runtime-stage feature.
+In the Go runtime, each top-level statement inside a `parallel` block runs concurrently in its own snapshot of the outer environment. `=> results` preserves source order, expression statements capture their values, and `allowfail` records `err(...)` entries instead of aborting the block. The older Python reference implementation still keeps `parallel` sequential.
 
 ### Navigation Tags
 
@@ -167,18 +166,25 @@ endfunc
 
 ## Implementation
 
-Gwen is implemented in Python as a tree-walk interpreter:
+The active bootstrap lives in Go:
 
-- `gwen/lexer.py` — Tokenizer
-- `gwen/ast_nodes.py` — AST node definitions
-- `gwen/parser.py` — Recursive descent parser
-- `gwen/checker.py` — Pre-execution semantic checker
-- `gwen/interpreter.py` — Tree-walk interpreter
-- `gwen/stdlib_catalog.py` — Official stdlib module surface
+- `cmd/gwen` — CLI entrypoint
+- `internal/lexer` — Tokenizer
+- `internal/parser` — Recursive descent parser
+- `internal/checker` — Pre-execution semantic checker
+- `internal/interpreter` — Go tree-walk runtime
+
+The earlier Python reference implementation is still kept for comparison and migration support:
+
+- `gwen/lexer.py`
+- `gwen/parser.py`
+- `gwen/checker.py`
+- `gwen/interpreter.py`
 
 ## Running Tests
 
 ```bash
+go test ./...
 pytest
 ```
 

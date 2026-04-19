@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/Cass-ette/gwen-lang/internal/ast"
 	"github.com/Cass-ette/gwen-lang/internal/parser"
@@ -256,6 +257,7 @@ type Interpreter struct {
 	Stdout            io.Writer
 	moduleSearchPaths []string
 	loadingModules    map[string]struct{}
+	stdioMu           *sync.Mutex
 }
 
 func New() *Interpreter {
@@ -266,6 +268,7 @@ func New() *Interpreter {
 		Stdout:            os.Stdout,
 		moduleSearchPaths: []string{},
 		loadingModules:    map[string]struct{}{},
+		stdioMu:           &sync.Mutex{},
 	}
 	interp.setupBuiltins()
 	interp.setupStdlibModules()
@@ -742,26 +745,7 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 		return i.execBlock(node.Body, env)
 
 	case *ast.ParallelStmt:
-		var results []any
-		for _, inner := range node.Body {
-			result, err := i.execStmt(inner, env)
-			if err != nil {
-				if node.AllowFail {
-					results = append(results, &ErrValue{Value: err.Error()})
-					continue
-				}
-				return nil, err
-			}
-			if result != nil {
-				results = append(results, &OkValue{Value: result.value})
-			} else {
-				results = append(results, &OkValue{Value: nil})
-			}
-		}
-		if node.ResultVar != "" {
-			env.Set(node.ResultVar, results)
-		}
-		return nil, nil
+		return i.execParallel(node, env)
 
 	case *ast.ExprStmt:
 		_, err := i.evalExpr(node.Expr, env)
@@ -770,6 +754,367 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 	default:
 		return nil, fmt.Errorf("%w: %T", errUnknownStatement, stmt)
 	}
+}
+
+type parallelTaskResult struct {
+	value any
+	err   error
+}
+
+func (i *Interpreter) execParallel(node *ast.ParallelStmt, env *Environment) (*returnSignal, error) {
+	results := make([]parallelTaskResult, len(node.Body))
+	var wg sync.WaitGroup
+
+	for idx, inner := range node.Body {
+		taskInterp, taskEnv := i.forkForParallel(env)
+		wg.Add(1)
+		go func(idx int, stmt any, interp *Interpreter, scope *Environment) {
+			defer wg.Done()
+			value, err := interp.execParallelTask(stmt, scope)
+			results[idx] = parallelTaskResult{value: value, err: err}
+		}(idx, inner, taskInterp, taskEnv)
+	}
+
+	wg.Wait()
+
+	if !node.AllowFail {
+		for _, result := range results {
+			if result.err != nil {
+				return nil, result.err
+			}
+		}
+	}
+
+	if node.ResultVar != "" {
+		parallelValues := make([]any, 0, len(results))
+		for _, result := range results {
+			if result.err != nil {
+				parallelValues = append(parallelValues, &ErrValue{Value: result.err.Error()})
+				continue
+			}
+			parallelValues = append(parallelValues, &OkValue{Value: result.value})
+		}
+		env.Set(node.ResultVar, parallelValues)
+	}
+
+	return nil, nil
+}
+
+func (i *Interpreter) execParallelTask(stmt any, env *Environment) (any, error) {
+	if exprStmt, ok := stmt.(*ast.ExprStmt); ok {
+		return i.evalExpr(exprStmt.Expr, env)
+	}
+	result, err := i.execStmt(stmt, env)
+	if err != nil {
+		return nil, err
+	}
+	if result != nil {
+		return result.value, nil
+	}
+	return nil, nil
+}
+
+func (i *Interpreter) forkForParallel(env *Environment) (*Interpreter, *Environment) {
+	child := New()
+	child.Stdout = i.Stdout
+	child.stdioMu = i.stdioMu
+	child.moduleSearchPaths = append([]string{}, i.moduleSearchPaths...)
+
+	cloner := newCloneContext(i, child)
+	cloner.cloneEnv(i.GlobalEnv)
+
+	for name, moduleEnv := range i.Modules {
+		child.Modules[name] = cloner.cloneEnv(moduleEnv)
+	}
+
+	return child, cloner.cloneEnv(env)
+}
+
+type cloneContext struct {
+	parentBuiltinPtrs map[uintptr]string
+	childBuiltins     map[string]Builtin
+	envs              map[*Environment]*Environment
+	envPopulating     map[*Environment]struct{}
+	envPopulated      map[*Environment]struct{}
+	functions         map[*Function]*Function
+	lambdas           map[*Lambda]*Lambda
+	objectTypes       map[*ObjectType]*ObjectType
+	objectValues      map[*ObjectValue]*ObjectValue
+	boundMethods      map[*BoundMethod]*BoundMethod
+	staticMethods     map[*StaticMethodRef]*StaticMethodRef
+	constructors      map[*ConstructorRef]*ConstructorRef
+	okValues          map[*OkValue]*OkValue
+	errValues         map[*ErrValue]*ErrValue
+	moneyValues       map[*MoneyValue]*MoneyValue
+	slices            map[uintptr][]any
+	dicts             map[uintptr]map[any]any
+}
+
+func newCloneContext(parent *Interpreter, child *Interpreter) *cloneContext {
+	return &cloneContext{
+		parentBuiltinPtrs: builtinPointerNames(parent.GlobalEnv),
+		childBuiltins:     builtinValues(child.GlobalEnv),
+		envs:              map[*Environment]*Environment{parent.GlobalEnv: child.GlobalEnv},
+		envPopulating:     map[*Environment]struct{}{},
+		envPopulated:      map[*Environment]struct{}{},
+		functions:         map[*Function]*Function{},
+		lambdas:           map[*Lambda]*Lambda{},
+		objectTypes:       map[*ObjectType]*ObjectType{},
+		objectValues:      map[*ObjectValue]*ObjectValue{},
+		boundMethods:      map[*BoundMethod]*BoundMethod{},
+		staticMethods:     map[*StaticMethodRef]*StaticMethodRef{},
+		constructors:      map[*ConstructorRef]*ConstructorRef{},
+		okValues:          map[*OkValue]*OkValue{},
+		errValues:         map[*ErrValue]*ErrValue{},
+		moneyValues:       map[*MoneyValue]*MoneyValue{},
+		slices:            map[uintptr][]any{},
+		dicts:             map[uintptr]map[any]any{},
+	}
+}
+
+func builtinPointerNames(env *Environment) map[uintptr]string {
+	names := map[uintptr]string{}
+	for name, value := range env.vars {
+		builtin, ok := value.(Builtin)
+		if !ok {
+			continue
+		}
+		names[reflect.ValueOf(builtin).Pointer()] = name
+	}
+	return names
+}
+
+func builtinValues(env *Environment) map[string]Builtin {
+	values := map[string]Builtin{}
+	for name, value := range env.vars {
+		builtin, ok := value.(Builtin)
+		if !ok {
+			continue
+		}
+		values[name] = builtin
+	}
+	return values
+}
+
+func (c *cloneContext) cloneEnv(src *Environment) *Environment {
+	if src == nil {
+		return nil
+	}
+	dst, ok := c.envs[src]
+	if !ok {
+		dst = NewEnvironment(nil)
+		c.envs[src] = dst
+	}
+	if _, done := c.envPopulated[src]; done {
+		return dst
+	}
+	if _, inProgress := c.envPopulating[src]; inProgress {
+		return dst
+	}
+
+	c.envPopulating[src] = struct{}{}
+	dst.vars = map[string]any{}
+	dst.types = map[string]string{}
+	dst.aliases = map[string]string{}
+	dst.consts = map[string]struct{}{}
+	dst.parent = c.cloneEnv(src.parent)
+	dst.self = nil
+
+	for name, value := range src.vars {
+		dst.vars[name] = c.cloneNamedValue(name, value)
+	}
+	for name, typeName := range src.types {
+		dst.types[name] = typeName
+	}
+	for name, target := range src.aliases {
+		dst.aliases[name] = target
+	}
+	for name := range src.consts {
+		dst.consts[name] = struct{}{}
+	}
+	if src.self != nil {
+		dst.self = c.cloneObjectValue(src.self)
+	}
+
+	delete(c.envPopulating, src)
+	c.envPopulated[src] = struct{}{}
+	return dst
+}
+
+func (c *cloneContext) cloneNamedValue(name string, value any) any {
+	if builtin, ok := value.(Builtin); ok {
+		if childBuiltin, ok := c.remapBuiltin(name, builtin); ok {
+			return childBuiltin
+		}
+	}
+	return c.cloneValue(value)
+}
+
+func (c *cloneContext) remapBuiltin(name string, builtin Builtin) (Builtin, bool) {
+	if name != "" {
+		if childBuiltin, ok := c.childBuiltins[name]; ok {
+			return childBuiltin, true
+		}
+	}
+	builtinName, ok := c.parentBuiltinPtrs[reflect.ValueOf(builtin).Pointer()]
+	if !ok {
+		return nil, false
+	}
+	childBuiltin, ok := c.childBuiltins[builtinName]
+	return childBuiltin, ok
+}
+
+func (c *cloneContext) cloneValue(value any) any {
+	switch value := value.(type) {
+	case nil, int64, float64, string, bool, uninitialized:
+		return value
+	case Builtin:
+		if childBuiltin, ok := c.remapBuiltin("", value); ok {
+			return childBuiltin
+		}
+		return value
+	case []any:
+		ptr := reflect.ValueOf(value).Pointer()
+		if ptr != 0 {
+			if cloned, ok := c.slices[ptr]; ok {
+				return cloned
+			}
+		}
+		cloned := make([]any, len(value))
+		if ptr != 0 {
+			c.slices[ptr] = cloned
+		}
+		for idx, item := range value {
+			cloned[idx] = c.cloneValue(item)
+		}
+		return cloned
+	case map[any]any:
+		ptr := reflect.ValueOf(value).Pointer()
+		if ptr != 0 {
+			if cloned, ok := c.dicts[ptr]; ok {
+				return cloned
+			}
+		}
+		cloned := make(map[any]any, len(value))
+		if ptr != 0 {
+			c.dicts[ptr] = cloned
+		}
+		for key, item := range value {
+			cloned[c.cloneValue(key)] = c.cloneValue(item)
+		}
+		return cloned
+	case *Environment:
+		return c.cloneEnv(value)
+	case *Function:
+		if cloned, ok := c.functions[value]; ok {
+			return cloned
+		}
+		cloned := &Function{Node: value.Node}
+		c.functions[value] = cloned
+		cloned.Closure = c.cloneEnv(value.Closure)
+		return cloned
+	case *Lambda:
+		if cloned, ok := c.lambdas[value]; ok {
+			return cloned
+		}
+		cloned := &Lambda{Node: value.Node}
+		c.lambdas[value] = cloned
+		cloned.Closure = c.cloneEnv(value.Closure)
+		return cloned
+	case *ObjectType:
+		if cloned, ok := c.objectTypes[value]; ok {
+			return cloned
+		}
+		cloned := &ObjectType{
+			Name:        value.Name,
+			FieldOrder:  append([]string{}, value.FieldOrder...),
+			FieldTypes:  map[string]string{},
+			Constructor: value.Constructor,
+			Methods:     map[string]*ast.MethodDef{},
+		}
+		c.objectTypes[value] = cloned
+		for name, typeName := range value.FieldTypes {
+			cloned.FieldTypes[name] = typeName
+		}
+		for name, method := range value.Methods {
+			cloned.Methods[name] = method
+		}
+		cloned.Closure = c.cloneEnv(value.Closure)
+		return cloned
+	case *ObjectValue:
+		return c.cloneObjectValue(value)
+	case *BoundMethod:
+		if cloned, ok := c.boundMethods[value]; ok {
+			return cloned
+		}
+		cloned := &BoundMethod{
+			Method: value.Method,
+		}
+		c.boundMethods[value] = cloned
+		cloned.Instance = c.cloneObjectValue(value.Instance)
+		cloned.Object = c.cloneValue(value.Object).(*ObjectType)
+		return cloned
+	case *StaticMethodRef:
+		if cloned, ok := c.staticMethods[value]; ok {
+			return cloned
+		}
+		cloned := &StaticMethodRef{Method: value.Method}
+		c.staticMethods[value] = cloned
+		cloned.Object = c.cloneValue(value.Object).(*ObjectType)
+		return cloned
+	case *ConstructorRef:
+		if cloned, ok := c.constructors[value]; ok {
+			return cloned
+		}
+		cloned := &ConstructorRef{}
+		c.constructors[value] = cloned
+		cloned.Object = c.cloneValue(value.Object).(*ObjectType)
+		return cloned
+	case *OkValue:
+		if cloned, ok := c.okValues[value]; ok {
+			return cloned
+		}
+		cloned := &OkValue{}
+		c.okValues[value] = cloned
+		cloned.Value = c.cloneValue(value.Value)
+		return cloned
+	case *ErrValue:
+		if cloned, ok := c.errValues[value]; ok {
+			return cloned
+		}
+		cloned := &ErrValue{}
+		c.errValues[value] = cloned
+		cloned.Value = c.cloneValue(value.Value)
+		return cloned
+	case *MoneyValue:
+		if cloned, ok := c.moneyValues[value]; ok {
+			return cloned
+		}
+		cloned := &MoneyValue{Raw: value.Raw, Currency: value.Currency}
+		c.moneyValues[value] = cloned
+		return cloned
+	default:
+		return value
+	}
+}
+
+func (c *cloneContext) cloneObjectValue(value *ObjectValue) *ObjectValue {
+	if value == nil {
+		return nil
+	}
+	if cloned, ok := c.objectValues[value]; ok {
+		return cloned
+	}
+	cloned := &ObjectValue{
+		TypeName: value.TypeName,
+		Fields:   map[string]any{},
+	}
+	c.objectValues[value] = cloned
+	cloned.Object = c.cloneValue(value.Object).(*ObjectType)
+	for name, fieldValue := range value.Fields {
+		cloned.Fields[name] = c.cloneValue(fieldValue)
+	}
+	return cloned
 }
 
 func (i *Interpreter) evalExpr(expr any, env *Environment) (any, error) {
@@ -1405,6 +1750,8 @@ func (i *Interpreter) setupBuiltins() {
 		for _, arg := range args {
 			parts = append(parts, formatDisplayValue(arg))
 		}
+		i.stdioMu.Lock()
+		defer i.stdioMu.Unlock()
 		if _, err := fmt.Fprintln(i.Stdout, strings.Join(parts, " ")); err != nil {
 			return nil, err
 		}
@@ -1419,12 +1766,17 @@ func (i *Interpreter) setupBuiltins() {
 			if !ok {
 				return nil, runtimeErrorf(0, "read() prompt must be string, got %s", typeNameOf(args[0]))
 			}
+			i.stdioMu.Lock()
 			if _, err := fmt.Fprint(i.Stdout, prompt); err != nil {
+				i.stdioMu.Unlock()
 				return nil, err
 			}
+		} else {
+			i.stdioMu.Lock()
 		}
 		reader := bufio.NewReader(os.Stdin)
 		line, err := reader.ReadString('\n')
+		i.stdioMu.Unlock()
 		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, err
 		}

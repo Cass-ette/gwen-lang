@@ -7,12 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Cass-ette/gwen-lang/internal/interpreter"
 	"github.com/Cass-ette/gwen-lang/internal/parser"
 )
 
-func runSource(t *testing.T, source string) string {
+func runProgram(t *testing.T, source string) (*interpreter.Interpreter, string) {
 	t.Helper()
 
 	program, err := parser.Parse(source)
@@ -27,7 +28,14 @@ func runSource(t *testing.T, source string) string {
 	if err := interp.Run(program); err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
-	return strings.TrimSpace(out.String())
+	return interp, strings.TrimSpace(out.String())
+}
+
+func runSource(t *testing.T, source string) string {
+	t.Helper()
+
+	_, out := runProgram(t, source)
+	return out
 }
 
 func runProgramPath(t *testing.T, path string) string {
@@ -539,5 +547,176 @@ func TestVarDefaultMoneyZero(t *testing.T) {
 endfunc`)
 	if out != "0.00 USD" {
 		t.Fatalf("output mismatch: got %q want %q", out, "0.00 USD")
+	}
+}
+
+func TestParallelRunsTasksConcurrently(t *testing.T) {
+	program, err := parser.Parse(`parallel do
+  block(1)
+  block(2)
+endparallel`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	interp := interpreter.New()
+	started := make(chan int64, 2)
+	release := make(chan struct{})
+	done := make(chan error, 1)
+
+	interp.GlobalEnv.Set("block", interpreter.Builtin(func(args []any) (any, error) {
+		id, ok := args[0].(int64)
+		if !ok {
+			t.Fatalf("expected int64 arg, got %T", args[0])
+		}
+		started <- id
+		<-release
+		return id, nil
+	}))
+
+	go func() {
+		done <- interp.Run(program)
+	}()
+
+	deadline := time.After(300 * time.Millisecond)
+	seen := map[int64]struct{}{}
+	for len(seen) < 2 {
+		select {
+		case id := <-started:
+			seen[id] = struct{}{}
+		case <-deadline:
+			t.Fatal("parallel block did not start both tasks concurrently")
+		}
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+}
+
+func TestParallelResultOrderUsesExpressionValues(t *testing.T) {
+	interp, _ := runProgram(t, `func identity(x: int) -> int
+  return x
+endfunc
+
+parallel => results do
+  identity(1)
+  identity(2)
+endparallel`)
+
+	value, err := interp.GlobalEnv.Get("results")
+	if err != nil {
+		t.Fatalf("missing results: %v", err)
+	}
+	results, ok := value.([]any)
+	if !ok {
+		t.Fatalf("results type mismatch: got %T", value)
+	}
+	if len(results) != 2 {
+		t.Fatalf("results length mismatch: got %d want 2", len(results))
+	}
+	for idx, want := range []int64{1, 2} {
+		okValue, ok := results[idx].(*interpreter.OkValue)
+		if !ok {
+			t.Fatalf("result %d type mismatch: got %T", idx, results[idx])
+		}
+		got, ok := okValue.Value.(int64)
+		if !ok || got != want {
+			t.Fatalf("result %d mismatch: got %#v want %d", idx, okValue.Value, want)
+		}
+	}
+}
+
+func TestParallelAllowFailPreservesSourceOrder(t *testing.T) {
+	program, err := parser.Parse(`parallel allowfail => results do
+  task(1)
+  task(2)
+  task(3)
+endparallel`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	interp := interpreter.New()
+	interp.GlobalEnv.Set("task", interpreter.Builtin(func(args []any) (any, error) {
+		id := args[0].(int64)
+		switch id {
+		case 1:
+			time.Sleep(60 * time.Millisecond)
+			return int64(10), nil
+		case 2:
+			time.Sleep(10 * time.Millisecond)
+			return nil, fmt.Errorf("boom %d", id)
+		default:
+			time.Sleep(20 * time.Millisecond)
+			return int64(30), nil
+		}
+	}))
+
+	if err := interp.Run(program); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	value, err := interp.GlobalEnv.Get("results")
+	if err != nil {
+		t.Fatalf("missing results: %v", err)
+	}
+	results := value.([]any)
+	if len(results) != 3 {
+		t.Fatalf("results length mismatch: got %d want 3", len(results))
+	}
+
+	first, ok := results[0].(*interpreter.OkValue)
+	if !ok || first.Value != int64(10) {
+		t.Fatalf("result 0 mismatch: got %#v", results[0])
+	}
+	second, ok := results[1].(*interpreter.ErrValue)
+	if !ok || second.Value != "boom 2" {
+		t.Fatalf("result 1 mismatch: got %#v", results[1])
+	}
+	third, ok := results[2].(*interpreter.OkValue)
+	if !ok || third.Value != int64(30) {
+		t.Fatalf("result 2 mismatch: got %#v", results[2])
+	}
+}
+
+func TestParallelReturnsFirstSourceOrderError(t *testing.T) {
+	program, err := parser.Parse(`parallel do
+  fail(1)
+  fail(2)
+endparallel`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	interp := interpreter.New()
+	interp.GlobalEnv.Set("fail", interpreter.Builtin(func(args []any) (any, error) {
+		id := args[0].(int64)
+		if id == 1 {
+			time.Sleep(80 * time.Millisecond)
+		} else {
+			time.Sleep(10 * time.Millisecond)
+		}
+		return nil, fmt.Errorf("boom %d", id)
+	}))
+
+	err = interp.Run(program)
+	if err == nil {
+		t.Fatal("expected parallel block to fail")
+	}
+	if err.Error() != "boom 1" {
+		t.Fatalf("error mismatch: got %q want %q", err.Error(), "boom 1")
+	}
+}
+
+func TestParallelDoesNotLeakOuterAssignments(t *testing.T) {
+	out := runSource(t, `x := 1
+parallel do
+  x := 2
+endparallel
+write(x)`)
+	if out != "1" {
+		t.Fatalf("output mismatch: got %q want %q", out, "1")
 	}
 }
