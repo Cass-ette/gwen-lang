@@ -41,10 +41,10 @@ func run(args []string) error {
 		}
 		return lexFile(args[1])
 	case "run":
-		if len(args) != 2 {
-			return errors.New("usage: gwen run <path>")
+		if len(args) < 2 {
+			return errors.New("usage: gwen run <path> [args...]")
 		}
-		return runFile(args[1])
+		return runFile(args[1], args[2:])
 	case "check":
 		if len(args) != 2 {
 			return errors.New("usage: gwen check <path>")
@@ -53,8 +53,8 @@ func run(args []string) error {
 	case "repl":
 		return repl()
 	default:
-		if len(args) == 1 {
-			return runFile(args[0])
+		if len(args) >= 1 {
+			return runFile(args[0], args[1:])
 		}
 		return fmt.Errorf("unknown command: %s", args[0])
 	}
@@ -77,7 +77,7 @@ func lexFile(path string) error {
 	return nil
 }
 
-func runFile(path string) error {
+func runFile(path string, programArgs []string) error {
 	source, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -86,7 +86,9 @@ func runFile(path string) error {
 	if err != nil {
 		return err
 	}
-	return interpreter.New().RunWithSource(program, path)
+	interp := interpreter.New()
+	interp.ProgramArgs = append([]string{}, programArgs...)
+	return interp.RunWithSource(program, path)
 }
 
 func checkFile(path string) error {
@@ -138,10 +140,10 @@ func printUsage() {
 	fmt.Println("Gwen Go frontend")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  gwen run <path>")
+	fmt.Println("  gwen run <path> [args...]")
 	fmt.Println("  gwen check <path>")
 	fmt.Println("  gwen repl")
 	fmt.Println("  gwen lex <path>")
-	fmt.Println("  gwen <path>")
+	fmt.Println("  gwen <path> [args...]")
 	fmt.Println("  gwen --version")
 }

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Cass-ette/gwen-lang/internal/ast"
 	"github.com/Cass-ette/gwen-lang/internal/parser"
@@ -80,6 +81,17 @@ var officialStdlibModules = map[string][]string{
 		"readfile",
 		"writefile",
 		"appendfile",
+	},
+	"os": {
+		"args",
+		"cwd",
+		"getenv",
+	},
+	"time": {
+		"sleep",
+		"nowunix",
+		"nowunixms",
+		"nowrfc3339",
 	},
 }
 
@@ -268,6 +280,7 @@ var uninitializedValue = uninitialized{}
 type Interpreter struct {
 	GlobalEnv         *Environment
 	Modules           map[string]*Environment
+	ProgramArgs       []string
 	Stdout            io.Writer
 	moduleSearchPaths []string
 	loadingModules    map[string]struct{}
@@ -2464,6 +2477,72 @@ func (i *Interpreter) setupBuiltins() {
 			return &ErrValue{Value: err.Error()}, nil
 		}
 		return &OkValue{Value: int64(written)}, nil
+	}))
+	i.GlobalEnv.Set("args", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "args() expects 0 arguments, got %d", len(args))
+		}
+		result := make([]any, 0, len(i.ProgramArgs))
+		for _, arg := range i.ProgramArgs {
+			result = append(result, arg)
+		}
+		return result, nil
+	}))
+	i.GlobalEnv.Set("cwd", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "cwd() expects 0 arguments, got %d", len(args))
+		}
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+		return wd, nil
+	}))
+	i.GlobalEnv.Set("getenv", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "getenv() expects 1 argument, got %d", len(args))
+		}
+		name, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "getenv() requires string name, got %s", typeNameOf(args[0]))
+		}
+		value, exists := os.LookupEnv(name)
+		if !exists {
+			return &ErrValue{Value: fmt.Sprintf("environment variable not found: %s", name)}, nil
+		}
+		return &OkValue{Value: value}, nil
+	}))
+	i.GlobalEnv.Set("sleep", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "sleep() expects 1 argument, got %d", len(args))
+		}
+		ms, err := toInt64(args[0], 0)
+		if err != nil {
+			return nil, err
+		}
+		if ms < 0 {
+			return nil, runtimeErrorf(0, "sleep() duration must be >= 0")
+		}
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		return nil, nil
+	}))
+	i.GlobalEnv.Set("nowunix", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "nowunix() expects 0 arguments, got %d", len(args))
+		}
+		return time.Now().Unix(), nil
+	}))
+	i.GlobalEnv.Set("nowunixms", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "nowunixms() expects 0 arguments, got %d", len(args))
+		}
+		return time.Now().UnixMilli(), nil
+	}))
+	i.GlobalEnv.Set("nowrfc3339", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "nowrfc3339() expects 0 arguments, got %d", len(args))
+		}
+		return time.Now().Format(time.RFC3339), nil
 	}))
 }
 

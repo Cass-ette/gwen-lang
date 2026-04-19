@@ -136,6 +136,7 @@
 
 ## 上次更新
 
+2026-04-19 - Go runtime 基础模块起步：新增官方 `os` / `time` 模块导入面，`os.args/cwd/getenv`、`time.sleep/nowunix/nowunixms/nowrfc3339` 已在 Go checker/runtime 落地；CLI 现在支持 `gwen run app.gw arg1 arg2` 透传程序参数。新增 Go checker / interpreter / CLI 回归测试
 2026-04-19 - Go 示例入口 smoke 固化：`examples/*.gw` 与各示例应用 `main.gw` 现在纳入 checker 自动回归，避免示例和语义实现继续漂移；巡检中顺手修复 `examples/fibonacci.gw` 的缓存递归签名与缓存初始化
 2026-04-19 - Go `result` match 绑定类型前移：checker 现在会把 `when ok(v)` / `when err(e)` 的载荷类型写入分支作用域，并提前拦截 `ok("x")` 这类与已知结果载荷不兼容的模式。新增 3 个 Go checker 回归测试
 2026-04-19 - Go `result`-match 语义补齐：checker/runtime 现在都拒绝对 `result` 使用字面量、范围或裸标识符模式，必须写 `ok(...)` / `err(...)`；运行期未匹配且缺少 `else` 的报错也补齐为 exhaustive 提示。新增 1 个 Go checker + 4 个 Go interpreter 回归测试，并验证 `examples/match_strict.gw`

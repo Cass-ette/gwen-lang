@@ -17,6 +17,7 @@ Gwen 现在的标准库还处在**过渡态**：
 - 但其中很多能力当前还是**解释器内建**
 - 它们今天**默认可用，不需要 `use`**
 - 同时，官方 `list/string/math/dict/io` 模块名现在也已经可导入
+- Go runtime 现在也已经接通第一批真正依赖宿主环境的基础模块：`os` / `time`
 - 也**不需要**任何 `#include` / 头文件 / C++ 风格声明
 
 也就是说，当前 Gwen 更接近：
@@ -71,11 +72,13 @@ use append from list
 | `math` | `abs` `min` `max` `sqrt` `floor` `ceil` | 已 builtin，并已支持官方 `math` 模块导入 |
 | `dict` | `haskey` `get` `keys` `values` `items` | 已 builtin，并已支持官方 `dict` 模块导入 |
 | `io` | `readfile` `writefile` `appendfile` | 已 builtin，并已支持官方 `io` 模块导入 |
+| `os` | `args` `cwd` `getenv` | Go runtime 已 builtin，并已支持官方 `os` 模块导入 |
+| `time` | `sleep` `nowunix` `nowunixms` `nowrfc3339` | Go runtime 已 builtin，并已支持官方 `time` 模块导入 |
 
 **推荐迁移策略**：
 
 1. `v0.1`：继续允许这些名字默认可用，避免今天的代码全量破坏。
-2. 同时把文档正式写成 `use ... from list/string/math/dict/io` 的目标形态。
+2. 同时把文档正式写成 `use ... from list/string/math/dict/io/os/time` 的目标形态。
 3. `v0.2+`：可以考虑让 builtin 只保留兼容别名，逐步鼓励显式导入。
 
 ### C. 应等编译器 / runtime 阶段再做
@@ -86,12 +89,10 @@ use append from list
 | 模块 / 能力 | 原因 |
 |-------------|------|
 | `arena` / `in arena` / `Arena` | 真实区域内存必须和运行时/分配器一起设计 |
-| `os` | 环境变量、参数、进程控制、退出码等都依赖 runtime 约定 |
-| `net` | 套接字 / 超时 / 并发 / 错误模型都不是解释器阶段该先锁死的 |
-| `time` | 时钟 / 定时器 / sleep / timezone 都是 runtime 问题 |
+| `net` / `http` | 套接字 / 请求生命周期 / 超时 / 并发 / 错误模型都需要在 runtime 层统一定口径 |
 | 包管理器 / 第三方模块系统 | 依赖编译器、构建和发布流程一起收口 |
 
-**结论**：这些能力现在可以写设计，不要急着做完整实现。
+**结论**：`os` / `time` 的基础层已经可以在 Go runtime 里落地；`net/http` 和更深的 runtime 能力仍然不要抢跑。
 
 ---
 
@@ -106,6 +107,8 @@ use split, join, trim from string
 use abs, sqrt from math
 use haskey, get, keys from dict
 use readfile, writefile from io
+use args, cwd, getenv from os
+use sleep, nowunix, nowunixms, nowrfc3339 from time
 ```
 
 这不是 C/C++ 的头文件系统，也不是文本 include。
@@ -239,13 +242,52 @@ endmatch
 - ❌ **没有 `read_lines`**：`split(content, "\n")` 一行替代，不提供"便利糖"。
 - `ok` 载荷带信息（字节数 / 内容），不用 `ok(true)` 这种无信息的废话。
 
-### `os.gw` - 系统接口（远期设计，当前未实现）
+### `os.gw` - 运行环境（Go runtime 已实现）
 
 ```gwen
-use env, args, exit from os
+use args, cwd, getenv from os
 
-home := env("HOME")
+argv := args()
+base := cwd()
+
+match getenv("PORT")
+  when ok(port) => write("PORT =", port)
+  when err(e) => write(e)
+endmatch
 ```
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `args` | `args() -> list[string]` | 返回 Gwen 程序参数列表；`gwen run app.gw a b` 会得到 `["a", "b"]` |
+| `cwd` | `cwd() -> string` | 返回当前工作目录 |
+| `getenv` | `getenv(name: string) -> result[string]` | 读取环境变量；不存在时返回 `err(msg)` |
+
+**设计说明**：
+- 这是服务启动器、批处理脚本、配置注入的基础层
+- 当前先收最小能力：参数、当前目录、环境变量
+- `exit` / 进程控制 / 子进程管理先不急着锁死
+
+### `time.gw` - 时钟与延迟（Go runtime 已实现）
+
+```gwen
+use sleep, nowunix, nowunixms, nowrfc3339 from time
+
+write("unix:", nowunix())
+write("unixms:", nowunixms())
+write("stamp:", nowrfc3339())
+sleep(50)
+```
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `sleep` | `sleep(ms: int) -> void` | 休眠指定毫秒数；负数报错 |
+| `nowunix` | `nowunix() -> int` | 当前 Unix 秒级时间戳 |
+| `nowunixms` | `nowunixms() -> int` | 当前 Unix 毫秒级时间戳 |
+| `nowrfc3339` | `nowrfc3339() -> string` | 当前时间的 RFC 3339 字符串 |
+
+**设计说明**：
+- 给日志、超时、重试、轮询、简单守护脚本提供最小时间原语
+- 当前先做 wall-clock 和 sleep；timer/channel/event-loop 还不急着冻结
 
 ## 对比：内置 vs 标准库 vs 第三方
 

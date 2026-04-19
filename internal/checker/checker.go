@@ -168,6 +168,17 @@ var stdlibModules = map[string][]string{
 		"writefile",
 		"appendfile",
 	},
+	"os": {
+		"args",
+		"cwd",
+		"getenv",
+	},
+	"time": {
+		"sleep",
+		"nowunix",
+		"nowunixms",
+		"nowrfc3339",
+	},
 }
 
 func New() *Checker {
@@ -275,6 +286,13 @@ func builtinSignatures() map[string]*CallableInfo {
 		"readfile":   {Label: "readfile", Params: []ParamInfo{{Name: "path", TypeName: "string"}}, ReturnTypeNames: []string{"result[string]"}},
 		"writefile":  {Label: "writefile", Params: []ParamInfo{{Name: "path", TypeName: "string"}, {Name: "content", TypeName: "string"}}, ReturnTypeNames: []string{"result[int]"}},
 		"appendfile": {Label: "appendfile", Params: []ParamInfo{{Name: "path", TypeName: "string"}, {Name: "content", TypeName: "string"}}, ReturnTypeNames: []string{"result[int]"}},
+		"args":       {Label: "args", ReturnTypeNames: []string{"list[string]"}},
+		"cwd":        {Label: "cwd", ReturnTypeNames: []string{"string"}},
+		"getenv":     {Label: "getenv", Params: []ParamInfo{{Name: "name", TypeName: "string"}}, ReturnTypeNames: []string{"result[string]"}},
+		"sleep":      {Label: "sleep", Params: []ParamInfo{{Name: "ms", TypeName: "int"}}},
+		"nowunix":    {Label: "nowunix", ReturnTypeNames: []string{"int"}},
+		"nowunixms":  {Label: "nowunixms", ReturnTypeNames: []string{"int"}},
+		"nowrfc3339": {Label: "nowrfc3339", ReturnTypeNames: []string{"string"}},
 	}
 }
 

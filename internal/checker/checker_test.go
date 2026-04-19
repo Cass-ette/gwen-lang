@@ -545,6 +545,39 @@ func TestHigherOrderParameterSignatureRejected(t *testing.T) {
 endfunc`, "Argument 'arg1' to 'f' expects int, got string")
 }
 
+func TestOSTimeStdlibModulesTypeCheck(t *testing.T) {
+	requireOK(t, `use args, cwd, getenv from os
+use sleep, nowunix, nowunixms, nowrfc3339 from time
+
+func main()
+  argv: list[string] := args()
+  base: string := cwd()
+  env: result[string] := getenv("GWEN_LANG_TEST")
+  sec: int := nowunix()
+  ms: int := nowunixms()
+  stamp: string := nowrfc3339()
+  sleep(1)
+  write(argv, base, env, sec, ms, stamp)
+endfunc`)
+}
+
+func TestGetenvRequiresResultHandling(t *testing.T) {
+	requireErrorContains(t, `use getenv from os
+
+func main()
+  bad: string := getenv("GWEN_LANG_TEST")
+  write(bad)
+endfunc`, "Cannot assign result[string] to 'bad' (string)")
+}
+
+func TestSleepArgumentTypeRejected(t *testing.T) {
+	requireErrorContains(t, `use sleep from time
+
+func main()
+  sleep("10")
+endfunc`, "Argument 'ms' to 'sleep' expects int, got string")
+}
+
 func TestExampleEntrypointsCheck(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {

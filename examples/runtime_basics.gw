@@ -1,0 +1,17 @@
+// Go runtime foundations for scripts/services:
+// args, cwd, env lookup, timestamps.
+
+use args, cwd, getenv from os
+use nowunixms, nowrfc3339 from time
+
+func main()
+  write("cwd:", cwd())
+  write("argv:", args())
+  write("now:", nowrfc3339())
+  write("nowms:", nowunixms())
+
+  match getenv("PORT")
+    when ok(port) => write("PORT =", port)
+    when err(e) => write(e)
+  endmatch
+endfunc

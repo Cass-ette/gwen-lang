@@ -571,6 +571,90 @@ endfunc`, path)
 	}
 }
 
+func TestOSModuleBuiltins(t *testing.T) {
+	t.Setenv("GWEN_LANG_TEST_ENV", "present")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd failed: %v", err)
+	}
+
+	program, err := parser.Parse(`use args, cwd, getenv from os
+
+func main()
+  argv := args()
+  write("argc", len(argv))
+  write("arg0", argv[0])
+  write("arg1", argv[1])
+  write("cwd", cwd())
+  match getenv("GWEN_LANG_TEST_ENV")
+    when ok(value) => write("env", value)
+    when err(e) => write("missing", e)
+  endmatch
+  match getenv("GWEN_LANG_TEST_ENV_MISSING")
+    when ok(value) => write("unexpected", value)
+    when err(e) => write("missing", e)
+  endmatch
+endfunc`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	interp := interpreter.New()
+	interp.ProgramArgs = []string{"serve", "--port=8080"}
+	var out bytes.Buffer
+	interp.Stdout = &out
+
+	if err := interp.Run(program); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	got := strings.TrimSpace(out.String())
+	if !strings.Contains(got, "argc 2") {
+		t.Fatalf("missing argc output: %q", got)
+	}
+	if !strings.Contains(got, "arg0 serve") || !strings.Contains(got, "arg1 --port=8080") {
+		t.Fatalf("missing args output: %q", got)
+	}
+	if !strings.Contains(got, "cwd "+wd) {
+		t.Fatalf("missing cwd output: %q", got)
+	}
+	if !strings.Contains(got, "env present") {
+		t.Fatalf("missing getenv success output: %q", got)
+	}
+	if !strings.Contains(got, "missing environment variable not found: GWEN_LANG_TEST_ENV_MISSING") {
+		t.Fatalf("missing getenv error output: %q", got)
+	}
+}
+
+func TestTimeModuleBuiltins(t *testing.T) {
+	start := time.Now()
+	out := runSource(t, `use sleep, nowunix, nowunixms, nowrfc3339 from time
+
+func main()
+  before := nowunixms()
+  sleep(20)
+  after := nowunixms()
+  write(after >= before)
+  write(nowunix() >= 0)
+  stamp := nowrfc3339()
+  write(contains(stamp, "T"))
+endfunc`)
+	if time.Since(start) < 15*time.Millisecond {
+		t.Fatalf("sleep() returned too quickly")
+	}
+	if out != "True\nTrue\nTrue" {
+		t.Fatalf("output mismatch: got %q want %q", out, "True\nTrue\nTrue")
+	}
+}
+
+func TestSleepRejectsNegativeDuration(t *testing.T) {
+	requireRuntimeErrorContains(t, `use sleep from time
+
+func main()
+  sleep(-1)
+endfunc`, "sleep() duration must be >= 0")
+}
+
 func TestMoneyBasics(t *testing.T) {
 	out := runSource(t, `func main()
   price: money[USD] := 19.99
