@@ -696,18 +696,20 @@ func TestHTTPModuleGet(t *testing.T) {
 
 func main()
   match http.get(%q)
-    when ok(body) => write(body)
+    when ok(resp) =>
+      write(http.status(resp))
+      write(http.body(resp))
     when err(e) => write("err", e)
   endmatch
 endfunc`, server.URL+"/health")
 
 	out := runSource(t, source)
-	if out != "ok" {
-		t.Fatalf("output mismatch: got %q want %q", out, "ok")
+	if out != "200\nok" {
+		t.Fatalf("output mismatch: got %q want %q", out, "200\nok")
 	}
 }
 
-func TestHTTPModuleGetReturnsErrOnStatus(t *testing.T) {
+func TestHTTPModuleGetReturnsResponseOnNon2xx(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 	}))
@@ -717,14 +719,16 @@ func TestHTTPModuleGetReturnsErrOnStatus(t *testing.T) {
 
 func main()
   match http.get(%q)
-    when ok(body) => write("ok", body)
-    when err(e) => write(e)
+    when ok(resp) =>
+      write(http.status(resp))
+      write(contains(http.body(resp), "bad gateway"))
+    when err(e) => write("err", e)
   endmatch
 endfunc`, server.URL)
 
 	out := runSource(t, source)
-	if !strings.Contains(out, "http.get() returned status 502 Bad Gateway") {
-		t.Fatalf("expected status error, got %q", out)
+	if out != "502\nTrue" {
+		t.Fatalf("expected structured non-2xx response, got %q", out)
 	}
 }
 
@@ -739,7 +743,7 @@ func TestHTTPModuleGetInsideParallel(t *testing.T) {
 func main()
   parallel do
     match http.get(%q)
-      when ok(body) => write(body)
+      when ok(resp) => write(http.body(resp))
       when err(e) => write("err", e)
     endmatch
   endparallel
@@ -748,6 +752,21 @@ endfunc`, server.URL)
 	out := runSource(t, source)
 	if out != "parallel-ok" {
 		t.Fatalf("output mismatch: got %q want %q", out, "parallel-ok")
+	}
+}
+
+func TestHTTPModuleGetReturnsErrOnTransportFailure(t *testing.T) {
+	out := runSource(t, `use http
+
+func main()
+  match http.get("://bad")
+    when ok(resp) => write(http.status(resp))
+    when err(e) => write(contains(e, "missing protocol scheme"))
+  endmatch
+endfunc`)
+
+	if out != "True" {
+		t.Fatalf("output mismatch: got %q want %q", out, "True")
 	}
 }
 

@@ -581,8 +581,11 @@ func TestHTTPModuleNamespaceImportTypeCheck(t *testing.T) {
 	requireOK(t, `use http
 
 func main()
-  body: result[string] := http.get("https://example.com")
-  write(body)
+  response: result[HttpResponse] := http.get("https://example.com")
+  match response
+    when ok(resp) => write(http.status(resp), len(http.body(resp)))
+    when err(e) => write(e)
+  endmatch
 endfunc`)
 }
 
@@ -617,6 +620,15 @@ func main()
   body := http.get("https://example.com", "fast")
   write(body)
 endfunc`, "Argument 'timeoutms' to 'get' expects int, got string")
+}
+
+func TestHTTPStatusRequiresResponseType(t *testing.T) {
+	requireErrorContains(t, `use http
+
+func main()
+  code := http.status("bad")
+  write(code)
+endfunc`, "Argument 'response' to 'status' expects HttpResponse, got string")
 }
 
 func TestExampleEntrypointsCheck(t *testing.T) {

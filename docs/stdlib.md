@@ -301,17 +301,23 @@ sleep(50)
 use http
 
 match http.get("https://example.com")
-  when ok(body) => write("bytes:", len(body))
+  when ok(resp) =>
+    write("status:", http.status(resp))
+    write("bytes:", len(http.body(resp)))
   when err(e) => write("http failed:", e)
 endmatch
 ```
 
 | 函数 | 签名 | 行为 |
 |------|------|------|
-| `get` | `http.get(url: string, timeoutms: int = 5000) -> result[string]` | 发起 GET 请求；2xx 返回响应体字符串，网络错误或非 2xx 返回 `err(msg)` |
+| `get` | `http.get(url: string, timeoutms: int = 5000) -> result[HttpResponse]` | 发起 GET 请求；只要成功收到 HTTP 响应就返回 `ok(response)`，网络/协议错误才返回 `err(msg)` |
+| `status` | `http.status(response: HttpResponse) -> int` | 读取响应状态码 |
+| `body` | `http.body(response: HttpResponse) -> string` | 读取响应体字符串 |
 
 **设计说明**：
 - 这是后端基础设施的第一步，只先给最小可用的 client 读路径
+- `HttpResponse` 当前是官方 opaque 类型；用户通过 `http.status(...)` / `http.body(...)` 显式读取，不直接依赖内部表示
+- HTTP `404/409/500` 这类**已收到响应**的情况不再混进 `err(...)`；是否成功由业务代码显式检查状态码
 - 当前刻意不急着冻结 `post` / header / 请求对象 / 响应对象 / 流式 body 这些更重的设计
 - 当前推荐用命名空间调用 `http.get(...)`，避免和 `dict.get(...)` 顶层导入冲突
 

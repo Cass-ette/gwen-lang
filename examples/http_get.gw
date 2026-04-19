@@ -2,7 +2,9 @@ use http
 
 func main()
   match http.get("https://example.com")
-    when ok(body) => write("bytes:", len(body))
+    when ok(resp) =>
+      write("status:", http.status(resp))
+      write("bytes:", len(http.body(resp)))
     when err(e) => write("http failed:", e)
   endmatch
 endfunc

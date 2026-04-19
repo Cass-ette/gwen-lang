@@ -142,6 +142,11 @@ type MoneyValue struct {
 	Currency string
 }
 
+type HTTPResponseValue struct {
+	Status int64
+	Body   string
+}
+
 type Function struct {
 	Node    *ast.FuncDef
 	Closure *Environment
@@ -2580,6 +2585,8 @@ func (i *Interpreter) setupStdlibModules() {
 		}
 	}
 	i.addStdlibModuleBuiltin("http", "get", i.httpGetBuiltin())
+	i.addStdlibModuleBuiltin("http", "status", i.httpStatusBuiltin())
+	i.addStdlibModuleBuiltin("http", "body", i.httpBodyBuiltin())
 }
 
 func (i *Interpreter) hideModuleOnlyBuiltins() {
@@ -2636,18 +2643,36 @@ func (i *Interpreter) httpGetBuiltin() Builtin {
 			return &ErrValue{Value: err.Error()}, nil
 		}
 
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			message := fmt.Sprintf("http.get() returned status %s", resp.Status)
-			if snippet := strings.TrimSpace(string(body)); snippet != "" {
-				if len(snippet) > 120 {
-					snippet = snippet[:117] + "..."
-				}
-				message += ": " + snippet
-			}
-			return &ErrValue{Value: message}, nil
-		}
+		return &OkValue{Value: &HTTPResponseValue{
+			Status: int64(resp.StatusCode),
+			Body:   string(body),
+		}}, nil
+	})
+}
 
-		return &OkValue{Value: string(body)}, nil
+func (i *Interpreter) httpStatusBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.status() expects 1 argument, got %d", len(args))
+		}
+		response, ok := args[0].(*HTTPResponseValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.status() requires HttpResponse, got %s", typeNameOf(args[0]))
+		}
+		return response.Status, nil
+	})
+}
+
+func (i *Interpreter) httpBodyBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.body() expects 1 argument, got %d", len(args))
+		}
+		response, ok := args[0].(*HTTPResponseValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.body() requires HttpResponse, got %s", typeNameOf(args[0]))
+		}
+		return response.Body, nil
 	})
 }
 
@@ -2837,7 +2862,7 @@ func isKnownType(typeName string) bool {
 		return true
 	}
 	switch typeName {
-	case "int", "float", "string", "bool", "list", "dict", "func", "result", "float32", "float64":
+	case "int", "float", "string", "bool", "list", "dict", "func", "result", "float32", "float64", "HttpResponse":
 		return true
 	}
 	if strings.HasPrefix(typeName, "money[") && strings.HasSuffix(typeName, "]") {
@@ -2887,6 +2912,11 @@ func coerceIfTyped(value any, typeName string, line int) (any, error) {
 		return nil, runtimeErrorf(line, "Type mismatch: expected bool, got %s", typeNameOf(value))
 	case "list", "dict", "func", "result":
 		return value, nil
+	case "HttpResponse":
+		if _, ok := value.(*HTTPResponseValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected HttpResponse, got %s", typeNameOf(value))
 	default:
 		if objectValue, ok := value.(*ObjectValue); ok && objectValue.TypeName == typeName {
 			return value, nil
@@ -3185,6 +3215,8 @@ func typeNameOf(value any) string {
 		return "err"
 	case *MoneyValue:
 		return "money[" + value.Currency + "]"
+	case *HTTPResponseValue:
+		return "HttpResponse"
 	case Builtin, *Function, *Lambda:
 		return "func"
 	case *Environment:
@@ -3235,6 +3267,8 @@ func formatValue(value any) string {
 		return value.String()
 	case *MoneyValue:
 		return formatMoney(value)
+	case *HTTPResponseValue:
+		return fmt.Sprintf("<HttpResponse %d>", value.Status)
 	case *Function:
 		return "<func " + value.Node.Name + ">"
 	case *Lambda:

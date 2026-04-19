@@ -78,24 +78,25 @@ type ParamInfo struct {
 }
 
 var baseTypeNames = map[string]struct{}{
-	"int":     {},
-	"float":   {},
-	"string":  {},
-	"bool":    {},
-	"int8":    {},
-	"int16":   {},
-	"int32":   {},
-	"int64":   {},
-	"uint8":   {},
-	"uint16":  {},
-	"uint32":  {},
-	"uint64":  {},
-	"float32": {},
-	"float64": {},
-	"list":    {},
-	"dict":    {},
-	"func":    {},
-	"result":  {},
+	"int":          {},
+	"float":        {},
+	"string":       {},
+	"bool":         {},
+	"int8":         {},
+	"int16":        {},
+	"int32":        {},
+	"int64":        {},
+	"uint8":        {},
+	"uint16":       {},
+	"uint32":       {},
+	"uint64":       {},
+	"float32":      {},
+	"float64":      {},
+	"list":         {},
+	"dict":         {},
+	"func":         {},
+	"result":       {},
+	"HttpResponse": {},
 }
 
 type arity struct {
@@ -262,7 +263,21 @@ func (c *Checker) setupStdlibModules() {
 			{Name: "url", TypeName: "string"},
 			{Name: "timeoutms", TypeName: "int", HasDefault: true},
 		},
-		ReturnTypeNames: []string{"result[string]"},
+		ReturnTypeNames: []string{"result[HttpResponse]"},
+	})
+	c.addStdlibModuleCallable("http", "status", &CallableInfo{
+		Label: "status",
+		Params: []ParamInfo{
+			{Name: "response", TypeName: "HttpResponse"},
+		},
+		ReturnTypeNames: []string{"int"},
+	})
+	c.addStdlibModuleCallable("http", "body", &CallableInfo{
+		Label: "body",
+		Params: []ParamInfo{
+			{Name: "response", TypeName: "HttpResponse"},
+		},
+		ReturnTypeNames: []string{"string"},
 	})
 }
 
