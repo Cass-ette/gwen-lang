@@ -770,6 +770,90 @@ endfunc`)
 	}
 }
 
+func TestJSONModuleRoundTrip(t *testing.T) {
+	out := runSource(t, `use json
+
+func main()
+  payload := json.objectof("name", "Ada", "roles", json.arrayof("admin", "ops"), "active", true, "deleted_at", json.null())
+
+  match json.stringify(payload)
+    when ok(text) =>
+      write(text)
+      match json.parseobject(text)
+        when ok(obj) =>
+          write(obj["name"])
+          write(len(obj["roles"]))
+          write(obj["active"])
+          write(json.isnull(obj["deleted_at"]))
+        when err(e) => write("parse failed", e)
+      endmatch
+    when err(e) => write("stringify failed", e)
+  endmatch
+endfunc`)
+
+	if out != "{\"active\":true,\"deleted_at\":null,\"name\":\"Ada\",\"roles\":[\"admin\",\"ops\"]}\nAda\n2\nTrue\nTrue" {
+		t.Fatalf("output mismatch: got %q", out)
+	}
+}
+
+func TestJSONParseArray(t *testing.T) {
+	out := runSource(t, `use json
+
+func main()
+  match json.parsearray("[1, 2, null, [4]]")
+    when ok(items) =>
+      write(len(items))
+      write(items[0] + items[1])
+      write(json.isnull(items[2]))
+      write(len(items[3]))
+    when err(e) => write("parse failed", e)
+  endmatch
+endfunc`)
+
+	if out != "4\n3\nTrue\n1" {
+		t.Fatalf("output mismatch: got %q want %q", out, "4\n3\nTrue\n1")
+	}
+}
+
+func TestJSONParseObjectRejectsTopLevelArray(t *testing.T) {
+	out := runSource(t, `use json
+
+func main()
+  match json.parseobject("[1, 2]")
+    when ok(obj) => write("ok", len(obj))
+    when err(e) => write(e)
+  endmatch
+endfunc`)
+
+	if out != "json.parseobject() requires top-level object" {
+		t.Fatalf("output mismatch: got %q", out)
+	}
+}
+
+func TestJSONStringifyRejectsNonStringKeys(t *testing.T) {
+	out := runSource(t, `use json
+
+func main()
+  bad := dict[int, string]{1: "x"}
+  match json.stringify(bad)
+    when ok(text) => write(text)
+    when err(e) => write(e)
+  endmatch
+endfunc`)
+
+	if out != "json.stringify() requires string dict keys, got int" {
+		t.Fatalf("output mismatch: got %q", out)
+	}
+}
+
+func TestJSONObjectRequiresStringKeys(t *testing.T) {
+	requireRuntimeErrorContains(t, `use json
+
+func main()
+  json.objectof(1, "x")
+endfunc`, "json.objectof() key 1 must be string, got int")
+}
+
 func TestHTTPModuleGetRejectsNegativeTimeout(t *testing.T) {
 	requireRuntimeErrorContains(t, `use http
 

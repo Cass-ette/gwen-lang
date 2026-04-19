@@ -97,6 +97,7 @@ var baseTypeNames = map[string]struct{}{
 	"func":         {},
 	"result":       {},
 	"HttpResponse": {},
+	"JsonNull":     {},
 }
 
 type arity struct {
@@ -180,6 +181,7 @@ var stdlibModules = map[string][]string{
 		"nowunixms",
 		"nowrfc3339",
 	},
+	"json": {},
 	"http": {},
 }
 
@@ -278,6 +280,50 @@ func (c *Checker) setupStdlibModules() {
 			{Name: "response", TypeName: "HttpResponse"},
 		},
 		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("json", "parseobject", &CallableInfo{
+		Label: "parseobject",
+		Params: []ParamInfo{
+			{Name: "text", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"result[dict]"},
+	})
+	c.addStdlibModuleCallable("json", "parsearray", &CallableInfo{
+		Label: "parsearray",
+		Params: []ParamInfo{
+			{Name: "text", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"result[list]"},
+	})
+	c.addStdlibModuleCallable("json", "stringify", &CallableInfo{
+		Label: "stringify",
+		Params: []ParamInfo{
+			{Name: "value"},
+		},
+		ReturnTypeNames: []string{"result[string]"},
+	})
+	c.addStdlibModuleCallable("json", "objectof", &CallableInfo{
+		Label:           "objectof",
+		Params:          []ParamInfo{{Name: "items"}},
+		ReturnTypeNames: []string{"dict"},
+		Variadic:        true,
+	})
+	c.addStdlibModuleCallable("json", "arrayof", &CallableInfo{
+		Label:           "arrayof",
+		Params:          []ParamInfo{{Name: "items"}},
+		ReturnTypeNames: []string{"list"},
+		Variadic:        true,
+	})
+	c.addStdlibModuleCallable("json", "null", &CallableInfo{
+		Label:           "null",
+		ReturnTypeNames: []string{"JsonNull"},
+	})
+	c.addStdlibModuleCallable("json", "isnull", &CallableInfo{
+		Label: "isnull",
+		Params: []ParamInfo{
+			{Name: "value"},
+		},
+		ReturnTypeNames: []string{"bool"},
 	})
 }
 

@@ -2,6 +2,7 @@ package interpreter
 
 import (
 	"bufio"
+	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -94,6 +95,7 @@ var officialStdlibModules = map[string][]string{
 		"nowunixms",
 		"nowrfc3339",
 	},
+	"json": {},
 	"http": {},
 }
 
@@ -146,6 +148,10 @@ type HTTPResponseValue struct {
 	Status int64
 	Body   string
 }
+
+type JSONNullValue struct{}
+
+var jsonNullValue = &JSONNullValue{}
 
 type Function struct {
 	Node    *ast.FuncDef
@@ -2587,6 +2593,13 @@ func (i *Interpreter) setupStdlibModules() {
 	i.addStdlibModuleBuiltin("http", "get", i.httpGetBuiltin())
 	i.addStdlibModuleBuiltin("http", "status", i.httpStatusBuiltin())
 	i.addStdlibModuleBuiltin("http", "body", i.httpBodyBuiltin())
+	i.addStdlibModuleBuiltin("json", "parseobject", i.jsonParseObjectBuiltin())
+	i.addStdlibModuleBuiltin("json", "parsearray", i.jsonParseArrayBuiltin())
+	i.addStdlibModuleBuiltin("json", "stringify", i.jsonStringifyBuiltin())
+	i.addStdlibModuleBuiltin("json", "objectof", i.jsonObjectBuiltin())
+	i.addStdlibModuleBuiltin("json", "arrayof", i.jsonArrayBuiltin())
+	i.addStdlibModuleBuiltin("json", "null", i.jsonNullBuiltin())
+	i.addStdlibModuleBuiltin("json", "isnull", i.jsonIsNullBuiltin())
 }
 
 func (i *Interpreter) hideModuleOnlyBuiltins() {
@@ -2674,6 +2687,207 @@ func (i *Interpreter) httpBodyBuiltin() Builtin {
 		}
 		return response.Body, nil
 	})
+}
+
+func (i *Interpreter) jsonParseObjectBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "json.parseobject() expects 1 argument, got %d", len(args))
+		}
+		text, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "json.parseobject() requires string text, got %s", typeNameOf(args[0]))
+		}
+		value, err := decodeJSONText(text)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		object, ok := value.(map[any]any)
+		if !ok {
+			return &ErrValue{Value: "json.parseobject() requires top-level object"}, nil
+		}
+		return &OkValue{Value: object}, nil
+	})
+}
+
+func (i *Interpreter) jsonParseArrayBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "json.parsearray() expects 1 argument, got %d", len(args))
+		}
+		text, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "json.parsearray() requires string text, got %s", typeNameOf(args[0]))
+		}
+		value, err := decodeJSONText(text)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		array, ok := value.([]any)
+		if !ok {
+			return &ErrValue{Value: "json.parsearray() requires top-level array"}, nil
+		}
+		return &OkValue{Value: array}, nil
+	})
+}
+
+func (i *Interpreter) jsonStringifyBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "json.stringify() expects 1 argument, got %d", len(args))
+		}
+		value, err := encodeJSONValue(args[0])
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		data, err := stdjson.Marshal(value)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: string(data)}, nil
+	})
+}
+
+func (i *Interpreter) jsonObjectBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args)%2 != 0 {
+			return nil, runtimeErrorf(0, "json.objectof() expects even number of arguments, got %d", len(args))
+		}
+		object := make(map[any]any, len(args)/2)
+		for idx := 0; idx < len(args); idx += 2 {
+			key, ok := args[idx].(string)
+			if !ok {
+				return nil, runtimeErrorf(0, "json.objectof() key %d must be string, got %s", idx/2+1, typeNameOf(args[idx]))
+			}
+			object[key] = args[idx+1]
+		}
+		return object, nil
+	})
+}
+
+func (i *Interpreter) jsonArrayBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		items := make([]any, len(args))
+		copy(items, args)
+		return items, nil
+	})
+}
+
+func (i *Interpreter) jsonNullBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "json.null() expects 0 arguments, got %d", len(args))
+		}
+		return jsonNullValue, nil
+	})
+}
+
+func (i *Interpreter) jsonIsNullBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "json.isnull() expects 1 argument, got %d", len(args))
+		}
+		_, ok := args[0].(*JSONNullValue)
+		return ok, nil
+	})
+}
+
+func decodeJSONText(text string) (any, error) {
+	decoder := stdjson.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+
+	var raw any
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == io.EOF {
+		return convertDecodedJSON(raw)
+	} else if err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("extra data after JSON value")
+}
+
+func convertDecodedJSON(value any) (any, error) {
+	switch value := value.(type) {
+	case nil:
+		return jsonNullValue, nil
+	case bool, string:
+		return value, nil
+	case float64:
+		return value, nil
+	case stdjson.Number:
+		if intValue, err := value.Int64(); err == nil {
+			return intValue, nil
+		}
+		floatValue, err := value.Float64()
+		if err != nil {
+			return nil, err
+		}
+		return floatValue, nil
+	case []any:
+		items := make([]any, len(value))
+		for idx, item := range value {
+			converted, err := convertDecodedJSON(item)
+			if err != nil {
+				return nil, err
+			}
+			items[idx] = converted
+		}
+		return items, nil
+	case map[string]any:
+		object := make(map[any]any, len(value))
+		for key, item := range value {
+			converted, err := convertDecodedJSON(item)
+			if err != nil {
+				return nil, err
+			}
+			object[key] = converted
+		}
+		return object, nil
+	default:
+		return nil, fmt.Errorf("unsupported JSON value of type %T", value)
+	}
+}
+
+func encodeJSONValue(value any) (any, error) {
+	switch value := value.(type) {
+	case bool, string, float64:
+		return value, nil
+	case int64:
+		return value, nil
+	case *JSONNullValue:
+		return nil, nil
+	case []any:
+		items := make([]any, len(value))
+		for idx, item := range value {
+			encoded, err := encodeJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			items[idx] = encoded
+		}
+		return items, nil
+	case map[any]any:
+		object := make(map[string]any, len(value))
+		for key, item := range value {
+			keyString, ok := key.(string)
+			if !ok {
+				return nil, fmt.Errorf("json.stringify() requires string dict keys, got %s", typeNameOf(key))
+			}
+			encoded, err := encodeJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			object[keyString] = encoded
+		}
+		return object, nil
+	case nil:
+		return nil, fmt.Errorf("json.stringify() cannot encode None; use json.null() explicitly")
+	default:
+		return nil, fmt.Errorf("json.stringify() cannot encode %s", typeNameOf(value))
+	}
 }
 
 func (i *Interpreter) callCallable(callee any, args []any, line int) (any, error) {
@@ -2862,7 +3076,7 @@ func isKnownType(typeName string) bool {
 		return true
 	}
 	switch typeName {
-	case "int", "float", "string", "bool", "list", "dict", "func", "result", "float32", "float64", "HttpResponse":
+	case "int", "float", "string", "bool", "list", "dict", "func", "result", "float32", "float64", "HttpResponse", "JsonNull":
 		return true
 	}
 	if strings.HasPrefix(typeName, "money[") && strings.HasSuffix(typeName, "]") {
@@ -2917,6 +3131,11 @@ func coerceIfTyped(value any, typeName string, line int) (any, error) {
 			return value, nil
 		}
 		return nil, runtimeErrorf(line, "Type mismatch: expected HttpResponse, got %s", typeNameOf(value))
+	case "JsonNull":
+		if _, ok := value.(*JSONNullValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected JsonNull, got %s", typeNameOf(value))
 	default:
 		if objectValue, ok := value.(*ObjectValue); ok && objectValue.TypeName == typeName {
 			return value, nil
@@ -3217,6 +3436,8 @@ func typeNameOf(value any) string {
 		return "money[" + value.Currency + "]"
 	case *HTTPResponseValue:
 		return "HttpResponse"
+	case *JSONNullValue:
+		return "JsonNull"
 	case Builtin, *Function, *Lambda:
 		return "func"
 	case *Environment:
@@ -3269,6 +3490,8 @@ func formatValue(value any) string {
 		return formatMoney(value)
 	case *HTTPResponseValue:
 		return fmt.Sprintf("<HttpResponse %d>", value.Status)
+	case *JSONNullValue:
+		return "null"
 	case *Function:
 		return "<func " + value.Node.Name + ">"
 	case *Lambda:

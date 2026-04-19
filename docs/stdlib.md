@@ -16,9 +16,9 @@ Gwen 现在的标准库还处在**过渡态**：
 - 语言已经有一批稳定可用的“标准能力”
 - 但其中很多能力当前还是**解释器内建**
 - `list/string/math/dict/io` 今天仍默认可用，不需要 `use`
-- 同时，官方 `list/string/math/dict/io/http` 模块名现在也已经可导入
-- Go runtime 现在也已经接通第一批真正依赖宿主环境的基础模块：`os` / `time`
-- `os` / `time` 已经收口为**模块专属能力**，需要显式 `use`
+- 同时，官方 `list/string/math/dict/io/http/json` 模块名现在也已经可导入
+- Go runtime 现在也已经接通第一批基础官方模块：`os` / `time` / `http` / `json`
+- `os` / `time` / `http` / `json` 已经收口为**模块专属能力**，需要显式 `use`
 - 也**不需要**任何 `#include` / 头文件 / C++ 风格声明
 
 也就是说，当前 Gwen 更接近：
@@ -64,7 +64,7 @@ use append from list
 ### B. 应下放为真正的官方标准库模块
 
 这类能力已经稳定、有明确语义，但不必都继续绑死在语言核心里。  
-它们未来应该表现为**官方 stdlib 模块**；其中 `list/string/math/dict/io` 仍保留 builtin 兼容层，`os/time` 已经先切到显式导入。
+它们未来应该表现为**官方 stdlib 模块**；其中 `list/string/math/dict/io` 仍保留 builtin 兼容层，`os/time/http/json` 已经先切到显式导入。
 
 | 模块 | 能力 | 现状 |
 |------|------|------|
@@ -75,12 +75,13 @@ use append from list
 | `io` | `readfile` `writefile` `appendfile` | 已 builtin，并已支持官方 `io` 模块导入 |
 | `os` | `args` `cwd` `getenv` | Go runtime 官方模块；已要求显式 `use` |
 | `time` | `sleep` `nowunix` `nowunixms` `nowrfc3339` | Go runtime 官方模块；已要求显式 `use` |
-| `http` | `get` | Go runtime 官方模块；当前提供最小 HTTP client，引导后端基础设施起步 |
+| `http` | `get` `status` `body` | Go runtime 官方模块；当前提供最小 HTTP client，引导后端基础设施起步 |
+| `json` | `parseobject` `parsearray` `stringify` `objectof` `arrayof` `null` `isnull` | Go runtime 官方模块；当前提供最小 JSON 解析/构造能力 |
 
 **推荐迁移策略**：
 
 1. `v0.1`：`list/string/math/dict/io` 继续允许默认可用，避免今天的代码全量破坏。
-2. `v0.1`：`os/time/http` 先收口为模块专属，验证运行时模块边界和导入模型。
+2. `v0.1`：`os/time/http/json` 先收口为模块专属，验证运行时模块边界和导入模型。
 3. `v0.2+`：可以考虑让更多 builtin 只保留兼容别名，逐步鼓励显式导入。
 
 ### C. 应等编译器 / runtime 阶段再做
@@ -101,7 +102,7 @@ use append from list
 ## 推荐导入形态（已支持，未来推荐）
 
 今天大多数 stdlib 能力仍是 builtin，所以**`list/string/math/dict/io` 现在不强制导入**。  
-但 `os/time/http` 已经要求显式导入。为了让后续模块化迁移平滑，官方文档建议逐步朝下面的形态写；这批导入形态现在已经可用：
+但 `os/time/http/json` 已经要求显式导入。为了让后续模块化迁移平滑，官方文档建议逐步朝下面的形态写；这批导入形态现在已经可用：
 
 ```gwen
 use append, pop, insert, sort, reversed, map, filter, range, enumerate from list
@@ -112,10 +113,14 @@ use readfile, writefile from io
 use args, cwd, getenv from os
 use sleep, nowunix, nowunixms, nowrfc3339 from time
 use http
+use json
 ```
 
 `http` 当前推荐直接 `use http` 做命名空间导入。  
 原因很简单：`http.get` 和现有 `dict.get` 同名，如果在顶层直接 `use get from http`，会和全局 `get` 发生冲突。
+
+`json` 也推荐直接 `use json`。  
+原因类似：这批能力本来就是一组强相关操作，命名空间调用 `json.parseobject(...)` / `json.stringify(...)` 比散落到顶层更易审计。
 
 这不是 C/C++ 的头文件系统，也不是文本 include。
 
@@ -320,6 +325,35 @@ endmatch
 - HTTP `404/409/500` 这类**已收到响应**的情况不再混进 `err(...)`；是否成功由业务代码显式检查状态码
 - 当前刻意不急着冻结 `post` / header / 请求对象 / 响应对象 / 流式 body 这些更重的设计
 - 当前推荐用命名空间调用 `http.get(...)`，避免和 `dict.get(...)` 顶层导入冲突
+
+### `json.gw` - JSON 解析与构造（Go runtime 已实现，bootstrap 版）
+
+```gwen
+use json
+
+payload := json.objectof("name", "Ada", "roles", json.arrayof("admin", "ops"), "deleted_at", json.null())
+
+match json.stringify(payload)
+  when ok(text) => write(text)
+  when err(e) => write("json failed:", e)
+endmatch
+```
+
+| 函数 | 签名 | 行为 |
+|------|------|------|
+| `parseobject` | `json.parseobject(text: string) -> result[dict]` | 解析顶层 JSON object；顶层不是 object 或 JSON 非法则返回 `err(msg)` |
+| `parsearray` | `json.parsearray(text: string) -> result[list]` | 解析顶层 JSON array；顶层不是 array 或 JSON 非法则返回 `err(msg)` |
+| `stringify` | `json.stringify(value) -> result[string]` | 把 JSON 形状的 Gwen 值编码成 JSON 字符串；不支持的值返回 `err(msg)` |
+| `objectof` | `json.objectof(k1, v1, k2, v2, ...) -> dict` | 构造异构 JSON object；key 必须是 string |
+| `arrayof` | `json.arrayof(v1, v2, ...) -> list` | 构造异构 JSON array |
+| `null` | `json.null() -> JsonNull` | 返回 JSON null 标记值 |
+| `isnull` | `json.isnull(value) -> bool` | 判断值是否为 JSON null |
+
+**设计说明**：
+- 这里刻意没有含糊的 `json.parse(...)`；调用点必须显式声明你期待顶层是 object 还是 array
+- `JsonNull` 是官方 opaque 类型，用来承载 JSON 的 `null`，而不是把 Gwen 重新拖回“可空文化”
+- `json.objectof(...)` / `json.arrayof(...)` 先解决后端里最常见的异构 payload 构造需求
+- 当前不急着冻结 schema 校验、typed decode、streaming parser 这些更重的设计
 
 ## 对比：内置 vs 标准库 vs 第三方
 

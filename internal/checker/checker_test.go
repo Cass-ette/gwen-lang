@@ -589,6 +589,19 @@ func main()
 endfunc`)
 }
 
+func TestJSONModuleTypeCheck(t *testing.T) {
+	requireOK(t, `use json
+
+func main()
+  payload: dict := json.objectof("name", "Ada", "roles", json.arrayof("admin", "ops"), "active", true, "deleted_at", json.null())
+  encoded: result[string] := json.stringify(payload)
+  parsed: result[dict] := json.parseobject("{\"name\":\"Ada\",\"active\":true,\"deleted_at\":null}")
+  items: result[list] := json.parsearray("[1, 2, null]")
+  nothing: JsonNull := json.null()
+  write(encoded, parsed, items, json.isnull(nothing))
+endfunc`)
+}
+
 func TestOSTimeModuleOnlyBuiltinsRequireImport(t *testing.T) {
 	requireErrorContains(t, `func main()
   argv := args()
@@ -629,6 +642,15 @@ func main()
   code := http.status("bad")
   write(code)
 endfunc`, "Argument 'response' to 'status' expects HttpResponse, got string")
+}
+
+func TestJSONParseObjectRequiresString(t *testing.T) {
+	requireErrorContains(t, `use json
+
+func main()
+  payload := json.parseobject(1)
+  write(payload)
+endfunc`, "Argument 'text' to 'parseobject' expects string, got int")
 }
 
 func TestExampleEntrypointsCheck(t *testing.T) {
