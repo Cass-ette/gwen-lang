@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	"github.com/Cass-ette/gwen-lang/internal/ast"
@@ -306,6 +307,27 @@ func newMethodScope(parent *Scope, expectedReturnTypes []string, methodSelfType 
 	}
 }
 
+func cloneScope(base *Scope) *Scope {
+	cloned := &Scope{
+		parent:              base.parent,
+		values:              map[string]*ValueInfo{},
+		aliases:             map[string]string{},
+		objects:             map[string]*ObjectInfo{},
+		expectedReturnTypes: base.expectedReturnTypes,
+		methodSelfType:      base.methodSelfType,
+	}
+	for name, value := range base.values {
+		cloned.values[name] = value
+	}
+	for name, target := range base.aliases {
+		cloned.aliases[name] = target
+	}
+	for name, info := range base.objects {
+		cloned.objects[name] = info
+	}
+	return cloned
+}
+
 func (s *Scope) defineValue(name string, value *ValueInfo) {
 	s.values[name] = value
 }
@@ -384,6 +406,89 @@ func (c *Checker) runDeferred(deferred *[]func() error) error {
 		}
 	}
 	return nil
+}
+
+func (c *Checker) applyClonedScope(dst *Scope, src *Scope) {
+	dst.values = map[string]*ValueInfo{}
+	for name, value := range src.values {
+		dst.values[name] = value
+	}
+	dst.aliases = map[string]string{}
+	for name, target := range src.aliases {
+		dst.aliases[name] = target
+	}
+	dst.objects = map[string]*ObjectInfo{}
+	for name, info := range src.objects {
+		dst.objects[name] = info
+	}
+}
+
+func (c *Checker) mergeAlternativeScopes(dst *Scope, branches []*Scope) {
+	if len(branches) == 0 {
+		return
+	}
+
+	mergedValues := map[string]*ValueInfo{}
+	mergedAliases := map[string]string{}
+	mergedObjects := map[string]*ObjectInfo{}
+
+	for name, value := range branches[0].values {
+		mergedValues[name] = value
+	}
+	for name, target := range branches[0].aliases {
+		mergedAliases[name] = target
+	}
+	for name, info := range branches[0].objects {
+		mergedObjects[name] = info
+	}
+
+	for _, branch := range branches[1:] {
+		for name, value := range branch.values {
+			if existing, ok := mergedValues[name]; ok {
+				mergedValues[name] = c.mergeValueInfo(dst, existing, value)
+				continue
+			}
+			mergedValues[name] = value
+		}
+		for name, target := range branch.aliases {
+			if _, ok := mergedAliases[name]; !ok {
+				mergedAliases[name] = target
+			}
+		}
+		for name, info := range branch.objects {
+			if _, ok := mergedObjects[name]; !ok {
+				mergedObjects[name] = info
+			}
+		}
+	}
+
+	dst.values = mergedValues
+	dst.aliases = mergedAliases
+	dst.objects = mergedObjects
+}
+
+func (c *Checker) mergeValueInfo(scope *Scope, left *ValueInfo, right *ValueInfo) *ValueInfo {
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+
+	leftType := c.valueTypeName(left, scope)
+	rightType := c.valueTypeName(right, scope)
+	if leftType != "" && leftType == rightType {
+		return left
+	}
+	if reflect.DeepEqual(left.CallableInfo, right.CallableInfo) &&
+		reflect.DeepEqual(left.ObjectInfo, right.ObjectInfo) &&
+		reflect.DeepEqual(left.ModuleInfo, right.ModuleInfo) &&
+		left.Kind == right.Kind &&
+		left.TypeName == right.TypeName &&
+		reflect.DeepEqual(left.MultiTypeNames, right.MultiTypeNames) {
+		return left
+	}
+	return unknownValue()
 }
 
 func (c *Checker) callableFromParams(label string, params []*ast.Param, returnType any, scope *Scope) (*CallableInfo, error) {
@@ -724,24 +829,42 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		if _, err := c.checkExpr(node.Condition, scope, deferred); err != nil {
 			return err
 		}
-		if err := c.checkBlock(node.Body, newScope(scope), deferred); err != nil {
+		branches := make([]*Scope, 0, len(node.Elifs)+2)
+		thenScope := cloneScope(scope)
+		if err := c.checkBlock(node.Body, thenScope, deferred); err != nil {
 			return err
 		}
+		branches = append(branches, thenScope)
 		for _, branch := range node.Elifs {
 			if _, err := c.checkExpr(branch.Condition, scope, deferred); err != nil {
 				return err
 			}
-			if err := c.checkBlock(branch.Body, newScope(scope), deferred); err != nil {
+			elifScope := cloneScope(scope)
+			if err := c.checkBlock(branch.Body, elifScope, deferred); err != nil {
 				return err
 			}
+			branches = append(branches, elifScope)
 		}
-		return c.checkBlock(node.ElseBody, newScope(scope), deferred)
+		if len(node.ElseBody) > 0 {
+			elseScope := cloneScope(scope)
+			if err := c.checkBlock(node.ElseBody, elseScope, deferred); err != nil {
+				return err
+			}
+			branches = append(branches, elseScope)
+		}
+		c.mergeAlternativeScopes(scope, branches)
+		return nil
 
 	case *ast.WhileStmt:
 		if _, err := c.checkExpr(node.Condition, scope, deferred); err != nil {
 			return err
 		}
-		return c.checkBlock(node.Body, newScope(scope), deferred)
+		loopScope := cloneScope(scope)
+		if err := c.checkBlock(node.Body, loopScope, deferred); err != nil {
+			return err
+		}
+		c.applyClonedScope(scope, loopScope)
+		return nil
 
 	case *ast.ForRangeStmt:
 		if _, err := c.checkExpr(node.Start, scope, deferred); err != nil {
@@ -755,16 +878,20 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 				return err
 			}
 		}
-		loopScope := newScope(scope)
+		loopScope := cloneScope(scope)
 		loopScope.defineValue(node.Var, c.valueFromDeclaredType("int", loopScope, node.Var))
-		return c.checkBlock(node.Body, loopScope, deferred)
+		if err := c.checkBlock(node.Body, loopScope, deferred); err != nil {
+			return err
+		}
+		c.applyClonedScope(scope, loopScope)
+		return nil
 
 	case *ast.ForEachStmt:
 		iterable, err := c.checkExpr(node.Iterable, scope, deferred)
 		if err != nil {
 			return err
 		}
-		loopScope := newScope(scope)
+		loopScope := cloneScope(scope)
 		itemType := ""
 		if params := genericTypeParams(c.valueTypeName(iterable, scope), "list"); len(params) == 1 {
 			itemType = params[0]
@@ -773,14 +900,19 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		if node.IndexVar != "" {
 			loopScope.defineValue(node.IndexVar, c.valueFromDeclaredType("int", loopScope, node.IndexVar))
 		}
-		return c.checkBlock(node.Body, loopScope, deferred)
+		if err := c.checkBlock(node.Body, loopScope, deferred); err != nil {
+			return err
+		}
+		c.applyClonedScope(scope, loopScope)
+		return nil
 
 	case *ast.MatchStmt:
 		if _, err := c.checkExpr(node.Subject, scope, deferred); err != nil {
 			return err
 		}
+		branches := make([]*Scope, 0, len(node.Cases)+1)
 		for _, clause := range node.Cases {
-			caseScope := newScope(scope)
+			caseScope := cloneScope(scope)
 			for _, pattern := range clause.Patterns {
 				if err := c.checkPattern(pattern, caseScope, deferred); err != nil {
 					return err
@@ -789,8 +921,17 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 			if err := c.checkBlock(clause.Body, caseScope, deferred); err != nil {
 				return err
 			}
+			branches = append(branches, caseScope)
 		}
-		return c.checkBlock(node.ElseBody, newScope(scope), deferred)
+		if len(node.ElseBody) > 0 {
+			elseScope := cloneScope(scope)
+			if err := c.checkBlock(node.ElseBody, elseScope, deferred); err != nil {
+				return err
+			}
+			branches = append(branches, elseScope)
+		}
+		c.mergeAlternativeScopes(scope, branches)
+		return nil
 
 	case *ast.ModuleDef:
 		if err := c.validateModuleBody(node); err != nil {
@@ -835,7 +976,12 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		return c.validateValueAssignment(node.Name, target, value, scope, node.Line)
 
 	case *ast.ArenaStmt:
-		return c.checkBlock(node.Body, newScope(scope), deferred)
+		arenaScope := cloneScope(scope)
+		if err := c.checkBlock(node.Body, arenaScope, deferred); err != nil {
+			return err
+		}
+		c.applyClonedScope(scope, arenaScope)
+		return nil
 
 	case *ast.TagStmt:
 		return nil

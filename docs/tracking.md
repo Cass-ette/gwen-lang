@@ -136,6 +136,7 @@
 
 ## 上次更新
 
+2026-04-19 - Go checker 作用域对齐：`if/while/for/match/arena` 现在按语言文档与 runtime 语义共享父函数作用域，块内新绑定在 `check` 阶段可继续在块外使用；新增 4 个 Go checker 回归测试与 2 个定向 `go run ./cmd/gwen check` 验证样例
 2026-04-19 - Go 作用域语义修复：补齐 `global` 的运行时外层赋值逻辑，禁止误改 builtin，并为缺失外层绑定与类型失配补充 checker 拦截；同时修复 `parallel => results` 在 checker 中不可见的问题。新增 8 个 Go 回归测试，并验证 `examples/global_scope.gw` 与定向 `parallel => results` 样例
 2026-04-19 - Go `parallel` 运行时落地：每条顶层语句现在会并发执行，并在各自的外层环境快照里运行，避免共享可变局部状态；`=> results` 改为按源码顺序收集真实表达式值，`allowfail` 保留 `ok/err` 结果面；新增 5 个 Go 解释器回归测试覆盖真并发起跑、结果顺序、容错和环境隔离
 2026-04-19 - Python 发布收口：补 `pyproject.toml`、包版本号与 `gwen` console script；CLI 升级为 `run/check/repl --version --help`，同时保留 `python -m gwen file.gw` 兼容路径；README 对齐当前语义边界并注明 Python 版 `parallel` 仍为顺序执行；新增 6 个 CLI 回归测试，全套 284 通过

@@ -280,6 +280,42 @@ func main()
 endfunc`)
 }
 
+func TestIfBindingIsVisibleAfterBlock(t *testing.T) {
+	requireOK(t, `func main()
+  if true then
+    found := 1
+  endif
+  write(found)
+endfunc`)
+}
+
+func TestForLoopVariableIsVisibleAfterBlock(t *testing.T) {
+	requireOK(t, `func main()
+  for i in 1 to 1 do
+  endfor
+  write(i)
+endfunc`)
+}
+
+func TestMatchBindingIsVisibleAfterBlock(t *testing.T) {
+	requireOK(t, `func main()
+  match ok(42)
+    when ok(v) =>
+      write(v)
+  endmatch
+  write(v)
+endfunc`)
+}
+
+func TestArenaBindingIsVisibleAfterBlock(t *testing.T) {
+	requireOK(t, `func main()
+  arena scratch do
+    x := 1
+  endarena
+  write(x)
+endfunc`)
+}
+
 func TestDictLiteralValueMismatchRejected(t *testing.T) {
 	requireErrorContains(t, `func main()
   scores := dict[string, int]{"alice": "high"}
