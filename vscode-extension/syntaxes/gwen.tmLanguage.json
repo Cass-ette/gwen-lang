@@ -2,19 +2,10 @@
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
   "name": "Gwen",
   "scopeName": "source.gwen",
-  "fileTypes": [".gw"],
+  "fileTypes": ["gw"],
   "patterns": [
     {
       "include": "#comments"
-    },
-    {
-      "include": "#keywords"
-    },
-    {
-      "include": "#types"
-    },
-    {
-      "include": "#operators"
     },
     {
       "include": "#strings"
@@ -23,10 +14,22 @@
       "include": "#numbers"
     },
     {
-      "include": "#tags"
+      "include": "#declarations"
     },
     {
-      "include": "#functions"
+      "include": "#keywords"
+    },
+    {
+      "include": "#builtins"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#operators"
+    },
+    {
+      "include": "#tags"
     },
     {
       "include": "#identifiers"
@@ -36,8 +39,23 @@
     "comments": {
       "patterns": [
         {
-          "name": "comment.line.double-dash.gwen",
-          "match": "(--).*$",
+          "name": "comment.block.gwen",
+          "begin": "/\\*",
+          "end": "\\*/",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.begin.gwen"
+            }
+          },
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.definition.comment.end.gwen"
+            }
+          }
+        },
+        {
+          "name": "comment.line.double-slash.gwen",
+          "match": "(//).*$",
           "captures": {
             "1": {
               "name": "punctuation.definition.comment.gwen"
@@ -46,43 +64,186 @@
         }
       ]
     },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.gwen",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.gwen",
+              "match": "\\\\(?:n|r|t|\\\\|\"|')"
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.gwen",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.gwen",
+              "match": "\\\\(?:n|r|t|\\\\|\"|')"
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.gwen",
+          "match": "\\b0x[0-9a-fA-F]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.gwen",
+          "match": "\\b0b[01]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.gwen",
+          "match": "\\b[0-9]+\\.[0-9]+(?:[eE][+-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.integer.decimal.gwen",
+          "match": "\\b[0-9]+\\b"
+        }
+      ]
+    },
+    "declarations": {
+      "patterns": [
+        {
+          "name": "meta.definition.function.gwen",
+          "match": "\\b(func)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.function.gwen"
+            },
+            "2": {
+              "name": "entity.name.function.gwen"
+            }
+          }
+        },
+        {
+          "name": "meta.definition.module.gwen",
+          "match": "\\b(module)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.module.gwen"
+            },
+            "2": {
+              "name": "entity.name.namespace.gwen"
+            }
+          }
+        },
+        {
+          "name": "meta.definition.object.gwen",
+          "match": "\\b(object)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.object.gwen"
+            },
+            "2": {
+              "name": "entity.name.type.gwen"
+            }
+          }
+        },
+        {
+          "name": "meta.definition.type.gwen",
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*(=)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.type.gwen"
+            },
+            "2": {
+              "name": "entity.name.type.gwen"
+            },
+            "3": {
+              "name": "keyword.operator.assignment.gwen"
+            }
+          }
+        },
+        {
+          "name": "meta.import.from.gwen",
+          "match": "\\b(use)\\s+([A-Za-z_][A-Za-z0-9_]*(?:\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*)*)\\s+(from)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.import.gwen"
+            },
+            "2": {
+              "name": "entity.name.import.gwen"
+            },
+            "3": {
+              "name": "keyword.declaration.import.gwen"
+            },
+            "4": {
+              "name": "entity.name.namespace.gwen"
+            }
+          }
+        },
+        {
+          "name": "meta.import.module.gwen",
+          "match": "\\b(use)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b(?!\\s+from\\b)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.import.gwen"
+            },
+            "2": {
+              "name": "entity.name.namespace.gwen"
+            }
+          }
+        },
+        {
+          "name": "variable.language.self.gwen",
+          "match": "\\bself\\b"
+        },
+        {
+          "name": "entity.name.type.gwen",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
-          "name": "keyword.control.gwen",
-          "match": "\\b(if|then|elif|else|endif|while|do|endwhile|for|in|to|step|order|reverse|endfor|match|when|endmatch|return)\\b"
+          "name": "keyword.control.conditional.gwen",
+          "match": "\\b(if|then|elif|else|endif|match|when|endmatch|return)\\b"
         },
         {
-          "name": "keyword.control.gwen",
-          "match": "\\b(allowfail|parallel|section)\\b"
+          "name": "keyword.control.loop.gwen",
+          "match": "\\b(while|do|endwhile|for|in|to|step|with|index|order|reverse|endfor)\\b"
         },
         {
-          "name": "keyword.other.endblock.gwen",
-          "match": "\\b(endparallel|endsection|endarena)\\b"
+          "name": "keyword.control.parallel.gwen",
+          "match": "\\b(parallel|allowfail|endparallel|arena|endarena)\\b"
         },
         {
-          "name": "keyword.declaration.function.gwen",
-          "match": "\\b(func|endfunc)\\b"
+          "name": "keyword.declaration.gwen",
+          "match": "\\b(func|endfunc|module|endmodule|export|use|from|object|endobject|new|endnew|type|const|var|endvar|default|global)\\b"
         },
         {
-          "name": "keyword.declaration.module.gwen",
-          "match": "\\b(module|endmodule|export|use|from)\\b"
+          "name": "keyword.operator.word.gwen",
+          "match": "\\b(and|or|not|mod|as)\\b"
         },
         {
-          "name": "keyword.other.global.gwen",
-          "match": "\\b(global|arena)\\b"
-        },
-        {
-          "name": "keyword.operator.logical.gwen",
-          "match": "\\b(and|or|not|mod|ok|err)\\b"
-        },
-        {
-          "name": "keyword.constant.gwen",
+          "name": "constant.language.boolean.gwen",
           "match": "\\b(true|false)\\b"
+        }
+      ]
+    },
+    "builtins": {
+      "patterns": [
+        {
+          "name": "support.function.result.gwen",
+          "match": "\\b(ok|err)\\b(?=\\s*\\()"
         },
         {
-          "name": "keyword.control.gwen",
-          "match": "\\b(with|index)\\b"
+          "name": "support.function.builtin.gwen",
+          "match": "\\b(write|read|len|str|int|float|typeof|append|pop|removeat|insert|concat|sort|reversed|map|filter|range|enumerate|split|join|substring|contains|trim|replace|abs|min|max|sqrt|floor|ceil|haskey|get|keys|values|items|readfile|writefile|appendfile)\\b(?=\\s*\\()"
+        },
+        {
+          "name": "support.function.builtin.gwen",
+          "match": "\\b(asc|desc)\\b"
         }
       ]
     },
@@ -98,15 +259,11 @@
         },
         {
           "name": "storage.type.precision.gwen",
-          "match": "\\b(float32|float64|decimal)\\b"
+          "match": "\\b(float32|float64)\\b"
         },
         {
           "name": "storage.type.generic.gwen",
-          "match": "\\b(list|result)\\b"
-        },
-        {
-          "name": "keyword.cast.gwen",
-          "match": "\\bas\\b"
+          "match": "\\b(list|dict|result|money)\\b"
         }
       ]
     },
@@ -122,53 +279,7 @@
         },
         {
           "name": "keyword.operator.arithmetic.gwen",
-          "match": "(\\+|-\\*|/|\\^|//)"
-        }
-      ]
-    },
-    "strings": {
-      "patterns": [
-        {
-          "name": "string.quoted.double.gwen",
-          "begin": "\"",
-          "end": "\"",
-          "patterns": [
-            {
-              "name": "constant.character.escape.gwen",
-              "match": "\\\\(n|t|\\\\|\"|')"
-            }
-          ]
-        },
-        {
-          "name": "string.quoted.single.gwen",
-          "begin": "'",
-          "end": "'",
-          "patterns": [
-            {
-              "name": "constant.character.escape.gwen",
-              "match": "\\\\(n|t|\\\\|\"|')"
-            }
-          ]
-        }
-      ]
-    },
-    "numbers": {
-      "patterns": [
-        {
-          "name": "constant.numeric.integer.decimal.gwen",
-          "match": "\\b[0-9]+\\b"
-        },
-        {
-          "name": "constant.numeric.float.gwen",
-          "match": "\\b[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?\\b"
-        },
-        {
-          "name": "constant.numeric.hex.gwen",
-          "match": "\\b0x[0-9a-fA-F]+\\b"
-        },
-        {
-          "name": "constant.numeric.binary.gwen",
-          "match": "\\b0b[01]+\\b"
+          "match": "(\\+|-|\\*|/|\\^)"
         }
       ]
     },
@@ -176,35 +287,19 @@
       "patterns": [
         {
           "name": "entity.name.tag.gwen",
-          "match": "@[a-zA-Z_][a-zA-Z0-9_]*"
-        }
-      ]
-    },
-    "functions": {
-      "patterns": [
-        {
-          "name": "meta.function.gwen",
-          "match": "\\b(func)\\s+([a-zA-Z_][a-zA-Z0-9_]*)",
-          "captures": {
-            "1": {
-              "name": "keyword.declaration.function.gwen"
-            },
-            "2": {
-              "name": "entity.name.function.gwen"
-            }
-          }
-        },
-        {
-          "name": "support.function.builtin.gwen",
-          "match": "\\b(write|len|append|pop)\\b"
+          "match": "@[A-Za-z_][A-Za-z0-9_]*"
         }
       ]
     },
     "identifiers": {
       "patterns": [
         {
+          "name": "variable.other.member.gwen",
+          "match": "(?<=\\.)[A-Za-z_][A-Za-z0-9_]*"
+        },
+        {
           "name": "variable.other.gwen",
-          "match": "[a-zA-Z_][a-zA-Z0-9_]*"
+          "match": "[A-Za-z_][A-Za-z0-9_]*"
         }
       ]
     }

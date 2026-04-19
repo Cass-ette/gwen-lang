@@ -1,13 +1,20 @@
 # Gwen Language Support for VSCode
 
-VSCode extension for the Gwen programming language.
+VSCode extension for the current Gwen `v0.1` language surface.
 
 ## Features
 
-- **Syntax Highlighting**: Full support for Gwen keywords, types, operators, strings, numbers, and tags
-- **Code Snippets**: Quick insertion of common Gwen constructs (functions, loops, conditionals)
-- **Auto-indentation**: Smart indentation based on block structure
-- **Comment Support**: Toggle line comments with `Cmd+/` (macOS) or `Ctrl+/` (Windows/Linux)
+- Syntax highlighting for current Gwen keywords and block forms:
+  `object/endobject`, `new/endnew`, `module/endmodule`,
+  `use ... from ...`, `type`, `const`, `var/endvar`,
+  `parallel`, `allowfail`, `arena`
+- Comment support for `//` and `/* ... */`
+- Highlighting for builtins and official stdlib import names:
+  `list`, `string`, `math`, `dict`, `io`
+- Snippets for the constructs you actually write today:
+  functions, objects, modules, imports, `match ok/err`, `var default`,
+  `parallel`, `arena`
+- Auto-indentation for Gwen `endxxx` block syntax
 
 ## Installation
 
@@ -17,60 +24,59 @@ VSCode extension for the Gwen programming language.
 cd vscode-extension
 npm install -g @vscode/vsce
 vsce package
-code //install-extension gwen-lang-0.1.0.vsix
+code --install-extension gwen-lang-0.1.0.vsix
 ```
 
 ### Development Mode
 
-1. Open this folder in VSCode
-2. Press `F5` to launch Extension Development Host
-3. Open a `.gw` file to test
+1. Open `vscode-extension/` in VSCode
+2. Press `F5` to launch an Extension Development Host
+3. Open any `.gw` file and verify highlighting/snippets
 
 ## Snippets
 
 | Prefix | Description |
 |--------|-------------|
-| `func` | Function definition |
-| `if` / `ifelse` | If statement |
-| `while` | While loop |
-| `for` / `foreach` | For loops |
-| `match` | Pattern matching |
-| `module` | Module definition |
-| `var` | Variable declaration |
-| `ok` / `err` | Result types |
-| `global` | Global variable |
-| `arena` | Memory arena |
-| `parallel` | Parallel block |
-| `lambda` | Anonymous function |
-
-## Language Features Highlighted
-
-- **Keywords**: `func`, `if`, `while`, `for`, `match`, `module`, `return`, `parallel`
-- **Types**: `int`, `float`, `string`, `bool`, `list`, `result`
-- **Precision Types**: `int8`, `int16`, `int32`, `int64`, `float32`, `float64`
-- **Operators**: `:=`, `=`, `!=`, `<=`, `>=`, `->`, `=>`
-- **Built-ins**: `write`, `len`, `append`, `pop`
-- **Tags**: `@tagname` for navigation
+| `func` / `funcr` | Function definition |
+| `if` / `ifelse` | Conditional blocks |
+| `while`, `for`, `foreach` | Loop blocks |
+| `match`, `matchr` | Generic match / `result` match |
+| `module`, `usefrom`, `usemod` | Module definitions and imports |
+| `object`, `expobject` | Object definitions |
+| `type`, `const`, `var`, `vardefault` | Type alias and binding templates |
+| `ok`, `err` | Result constructors |
+| `global`, `arena`, `parallel`, `parallelr` | Runtime-oriented block forms |
+| `lambda`, `write`, `tag` | Common utility snippets |
 
 ## Example
 
 ```gwen
-// Gwen Hello World
+use range from list
+
+object Counter
+  values: list[int]
+
+  new() -> Counter
+    return Counter{
+      values := range(1, 3)
+    }
+  endnew
+
+  func print(self: Counter)
+    for value in self.values do
+      write(value)
+    endfor
+  endfunc
+endobject
+
 func main()
-  write("Hello, Gwen!")
+  counter := Counter.new()
+  counter.print()
 endfunc
 ```
 
-## Requirements
+## Notes
 
-- VSCode 1.60.0 or higher
-- Gwen interpreter installed (for running code)
-
-## Release Notes
-
-### 0.1.0
-
-- Initial release
-- Syntax highlighting for Gwen language
-- Code snippets for common patterns
-- Auto-indentation support
+- This extension currently provides syntax highlighting, comments, snippets, and indentation rules.
+- It does **not** ship a language server, formatter, or debugger.
+- Gwen still allows many stdlib-style builtins to be used directly, but the extension also highlights the recommended `use ... from list/string/math/dict/io` style.

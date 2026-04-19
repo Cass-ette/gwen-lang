@@ -1,6 +1,7 @@
 {
   "comments": {
-    "lineComment": "--"
+    "lineComment": "//",
+    "blockComment": ["/*", "*/"]
   },
   "brackets": [
     ["(", ")"],
@@ -8,11 +9,33 @@
     ["{", "}"]
   ],
   "autoClosingPairs": [
-    ["(", ")"],
-    ["[", "]"],
-    ["{", "}"],
-    ["\"", "\""],
-    ["'", "'"]
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "[",
+      "close": "]"
+    },
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": ["string", "comment"]
+    },
+    {
+      "open": "'",
+      "close": "'",
+      "notIn": ["string", "comment"]
+    },
+    {
+      "open": "/*",
+      "close": "*/",
+      "notIn": ["string"]
+    }
   ],
   "surroundingPairs": [
     ["(", ")"],
@@ -22,8 +45,8 @@
     ["'", "'"]
   ],
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(func|if|while|for|match|module|parallel|arena).*",
-    "decreaseIndentPattern": "^\\s*(endfunc|endif|endwhile|endfor|endmatch|endmodule|endparallel|endarena).*"
+    "increaseIndentPattern": "^\\s*(?:(?:export\\s+)?(?:func|module|object)\\b|new\\b|if\\b.*\\bthen\\b|elif\\b.*\\bthen\\b|else\\b|while\\b.*\\bdo\\b|for\\b.*\\bdo\\b|match\\b|parallel\\b.*\\bdo\\b|arena\\b.*\\bdo\\b|var\\b(?:\\s+default(?:\\s+.+)?)?)",
+    "decreaseIndentPattern": "^\\s*(?:elif\\b.*\\bthen\\b|else\\b|endfunc\\b|endnew\\b|endif\\b|endwhile\\b|endfor\\b|endmatch\\b|endmodule\\b|endobject\\b|endparallel\\b|endarena\\b|endvar\\b)"
   },
   "wordPattern": "[a-zA-Z_][a-zA-Z0-9_]*|@[a-zA-Z_][a-zA-Z0-9_]*"
 }

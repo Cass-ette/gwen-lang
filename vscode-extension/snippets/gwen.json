@@ -3,6 +3,15 @@
     "prefix": "func",
     "description": "Function definition",
     "body": [
+      "func ${1:name}(${2:params})",
+      "  ${3:body}",
+      "endfunc"
+    ]
+  },
+  "Function With Return": {
+    "prefix": "funcr",
+    "description": "Function definition with explicit return type",
+    "body": [
       "func ${1:name}(${2:params}) -> ${3:return_type}",
       "  ${4:body}",
       "endfunc"
@@ -10,7 +19,7 @@
   },
   "If Statement": {
     "prefix": "if",
-    "description": "If-then-else statement",
+    "description": "If statement",
     "body": [
       "if ${1:condition} then",
       "  ${2:body}",
@@ -60,10 +69,22 @@
     "description": "Pattern matching",
     "body": [
       "match ${1:subject}",
-      "  when ${2:pattern1} then",
+      "  when ${2:pattern1} =>",
       "    ${3:action1}",
       "  else",
       "    ${4:default_action}",
+      "endmatch"
+    ]
+  },
+  "Result Match": {
+    "prefix": "matchr",
+    "description": "Match on result with ok/err branches",
+    "body": [
+      "match ${1:result_value}",
+      "  when ok(${2:value}) =>",
+      "    ${3:handle_ok}",
+      "  when err(${4:e}) =>",
+      "    ${5:handle_err}",
       "endmatch"
     ]
   },
@@ -76,11 +97,80 @@
       "endmodule"
     ]
   },
-  "Variable Declaration": {
-    "prefix": "var",
-    "description": "Variable with type",
+  "Use From Module": {
+    "prefix": "usefrom",
+    "description": "Import names from a module",
     "body": [
-      "${1:name}: ${2:type} := ${3:value}"
+      "use ${1:name} from ${2:module}"
+    ]
+  },
+  "Use Module": {
+    "prefix": "usemod",
+    "description": "Import a module namespace",
+    "body": [
+      "use ${1:module}"
+    ]
+  },
+  "Object": {
+    "prefix": "object",
+    "description": "Object definition with constructor",
+    "body": [
+      "object ${1:Name}",
+      "  ${2:field}: ${3:type}",
+      "",
+      "  new(${4:value}: ${3:type}) -> ${1:Name}",
+      "    return ${1:Name}{",
+      "      ${2} := ${4}",
+      "    }",
+      "  endnew",
+      "endobject"
+    ]
+  },
+  "Export Object": {
+    "prefix": "expobject",
+    "description": "Exported object definition",
+    "body": [
+      "export object ${1:Name}",
+      "  ${2:field}: ${3:type}",
+      "",
+      "  new(${4:value}: ${3:type}) -> ${1:Name}",
+      "    return ${1:Name}{",
+      "      ${2} := ${4}",
+      "    }",
+      "  endnew",
+      "endobject"
+    ]
+  },
+  "Type Alias": {
+    "prefix": "type",
+    "description": "Transparent type alias",
+    "body": [
+      "type ${1:Name} = ${2:int}"
+    ]
+  },
+  "Const": {
+    "prefix": "const",
+    "description": "Immutable binding",
+    "body": [
+      "const ${1:NAME}: ${2:int} := ${3:value}"
+    ]
+  },
+  "Variable Block": {
+    "prefix": "var",
+    "description": "Batch variable declarations",
+    "body": [
+      "var",
+      "  ${1:name}: ${2:type} := ${3:value}",
+      "endvar"
+    ]
+  },
+  "Var Default": {
+    "prefix": "vardefault",
+    "description": "Variable block with shared default value",
+    "body": [
+      "var default ${1:0}",
+      "  ${2:name}: ${3:int}",
+      "endvar"
     ]
   },
   "Result Ok": {
@@ -117,14 +207,20 @@
     "prefix": "parallel",
     "description": "Parallel execution block",
     "body": [
-      "parallel",
-      "  section",
-      "    ${1:task1}",
-      "  endsection",
-      "  section",
-      "    ${2:task2}",
-      "  endsection",
-      "endparallel => ${3:results}"
+      "parallel do",
+      "  ${1:task_one()}",
+      "  ${2:task_two()}",
+      "endparallel"
+    ]
+  },
+  "Parallel Allowfail With Results": {
+    "prefix": "parallelr",
+    "description": "Parallel block with allowfail and result capture",
+    "body": [
+      "parallel allowfail => ${1:results} do",
+      "  ${2:task_one()}",
+      "  ${3:task_two()}",
+      "endparallel"
     ]
   },
   "Lambda": {
