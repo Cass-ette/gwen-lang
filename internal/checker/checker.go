@@ -423,8 +423,9 @@ func (c *Checker) applyClonedScope(dst *Scope, src *Scope) {
 	}
 }
 
-func (c *Checker) mergeAlternativeScopes(dst *Scope, branches []*Scope, context string, line int) error {
+func (c *Checker) mergeAlternativeScopes(base *Scope, dst *Scope, branches []*Scope, context string, line int) error {
 	if len(branches) == 0 {
+		c.applyClonedScope(dst, base)
 		return nil
 	}
 
@@ -432,44 +433,154 @@ func (c *Checker) mergeAlternativeScopes(dst *Scope, branches []*Scope, context 
 	mergedAliases := map[string]string{}
 	mergedObjects := map[string]*ObjectInfo{}
 
-	for name, value := range branches[0].values {
-		mergedValues[name] = value
-	}
-	for name, target := range branches[0].aliases {
-		mergedAliases[name] = target
-	}
-	for name, info := range branches[0].objects {
-		mergedObjects[name] = info
+	for name, value := range base.values {
+		merged := value
+		for _, branch := range branches {
+			branchValue, ok := branch.values[name]
+			if !ok {
+				branchValue = value
+			}
+			next, err := c.mergeValueInfo(dst, name, merged, branchValue, context, line)
+			if err != nil {
+				return err
+			}
+			merged = next
+		}
+		mergedValues[name] = merged
 	}
 
-	for _, branch := range branches[1:] {
-		for name, value := range branch.values {
-			if existing, ok := mergedValues[name]; ok {
-				merged, err := c.mergeValueInfo(dst, name, existing, value, context, line)
-				if err != nil {
-					return err
-				}
-				mergedValues[name] = merged
-				continue
+	for name := range intersectNewValueNames(base, branches) {
+		merged := branches[0].values[name]
+		for _, branch := range branches[1:] {
+			next, err := c.mergeValueInfo(dst, name, merged, branch.values[name], context, line)
+			if err != nil {
+				return err
 			}
-			mergedValues[name] = value
+			merged = next
 		}
-		for name, target := range branch.aliases {
-			if _, ok := mergedAliases[name]; !ok {
-				mergedAliases[name] = target
-			}
-		}
-		for name, info := range branch.objects {
-			if _, ok := mergedObjects[name]; !ok {
-				mergedObjects[name] = info
+		mergedValues[name] = merged
+	}
+
+	for name, target := range base.aliases {
+		for _, branch := range branches {
+			if branchTarget, ok := branch.aliases[name]; ok && branchTarget != target {
+				return semanticErrorf(line, "Type alias '%s' has inconsistent targets across %s branches: %s vs %s", name, context, target, branchTarget)
 			}
 		}
+		mergedAliases[name] = target
+	}
+	for name := range intersectNewAliasNames(base, branches) {
+		target := branches[0].aliases[name]
+		for _, branch := range branches[1:] {
+			if branch.aliases[name] != target {
+				return semanticErrorf(line, "Type alias '%s' has inconsistent targets across %s branches: %s vs %s", name, context, target, branch.aliases[name])
+			}
+		}
+		mergedAliases[name] = target
+	}
+
+	for name, info := range base.objects {
+		for _, branch := range branches {
+			if branchInfo, ok := branch.objects[name]; ok && !reflect.DeepEqual(branchInfo, info) {
+				return semanticErrorf(line, "Object '%s' has inconsistent definitions across %s branches", name, context)
+			}
+		}
+		mergedObjects[name] = info
+	}
+	for name := range intersectNewObjectNames(base, branches) {
+		info := branches[0].objects[name]
+		for _, branch := range branches[1:] {
+			if !reflect.DeepEqual(branch.objects[name], info) {
+				return semanticErrorf(line, "Object '%s' has inconsistent definitions across %s branches", name, context)
+			}
+		}
+		mergedObjects[name] = info
 	}
 
 	dst.values = mergedValues
 	dst.aliases = mergedAliases
 	dst.objects = mergedObjects
 	return nil
+}
+
+func intersectNewValueNames(base *Scope, branches []*Scope) map[string]struct{} {
+	result := map[string]struct{}{}
+	for name := range branches[0].values {
+		if _, exists := base.values[name]; exists {
+			continue
+		}
+		result[name] = struct{}{}
+	}
+	for _, branch := range branches[1:] {
+		for name := range result {
+			if _, ok := branch.values[name]; !ok {
+				delete(result, name)
+			}
+		}
+	}
+	return result
+}
+
+func intersectNewAliasNames(base *Scope, branches []*Scope) map[string]struct{} {
+	result := map[string]struct{}{}
+	for name := range branches[0].aliases {
+		if _, exists := base.aliases[name]; exists {
+			continue
+		}
+		result[name] = struct{}{}
+	}
+	for _, branch := range branches[1:] {
+		for name := range result {
+			if _, ok := branch.aliases[name]; !ok {
+				delete(result, name)
+			}
+		}
+	}
+	return result
+}
+
+func intersectNewObjectNames(base *Scope, branches []*Scope) map[string]struct{} {
+	result := map[string]struct{}{}
+	for name := range branches[0].objects {
+		if _, exists := base.objects[name]; exists {
+			continue
+		}
+		result[name] = struct{}{}
+	}
+	for _, branch := range branches[1:] {
+		for name := range result {
+			if _, ok := branch.objects[name]; !ok {
+				delete(result, name)
+			}
+		}
+	}
+	return result
+}
+
+func staticBool(expr any) (bool, bool) {
+	switch node := expr.(type) {
+	case *ast.BoolLiteral:
+		return node.Value, true
+	case *ast.UnaryOp:
+		if node.Op == "not" {
+			value, ok := staticBool(node.Operand)
+			if ok {
+				return !value, true
+			}
+		}
+	case *ast.BinaryOp:
+		if node.Op == "and" || node.Op == "or" {
+			left, leftOK := staticBool(node.Left)
+			right, rightOK := staticBool(node.Right)
+			if leftOK && rightOK {
+				if node.Op == "and" {
+					return left && right, true
+				}
+				return left || right, true
+			}
+		}
+	}
+	return false, false
 }
 
 func (c *Checker) mergeValueInfo(scope *Scope, name string, left *ValueInfo, right *ValueInfo, context string, line int) (*ValueInfo, error) {
@@ -871,29 +982,48 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 			return err
 		}
 		branches := make([]*Scope, 0, len(node.Elifs)+2)
-		thenScope := cloneScope(scope)
-		if err := c.checkBlock(node.Body, thenScope, deferred); err != nil {
-			return err
+		remainderReachable := true
+		if value, known := staticBool(node.Condition); !known || value {
+			thenScope := cloneScope(scope)
+			if err := c.checkBlock(node.Body, thenScope, deferred); err != nil {
+				return err
+			}
+			branches = append(branches, thenScope)
+			if known && value {
+				remainderReachable = false
+			}
 		}
-		branches = append(branches, thenScope)
 		for _, branch := range node.Elifs {
+			if !remainderReachable {
+				break
+			}
 			if _, err := c.checkExpr(branch.Condition, scope, deferred); err != nil {
 				return err
+			}
+			if value, known := staticBool(branch.Condition); known && !value {
+				continue
 			}
 			elifScope := cloneScope(scope)
 			if err := c.checkBlock(branch.Body, elifScope, deferred); err != nil {
 				return err
 			}
 			branches = append(branches, elifScope)
+			if value, known := staticBool(branch.Condition); known && value {
+				remainderReachable = false
+			}
 		}
-		if len(node.ElseBody) > 0 {
+		if remainderReachable && len(node.ElseBody) > 0 {
 			elseScope := cloneScope(scope)
 			if err := c.checkBlock(node.ElseBody, elseScope, deferred); err != nil {
 				return err
 			}
 			branches = append(branches, elseScope)
+			remainderReachable = false
 		}
-		return c.mergeAlternativeScopes(scope, branches, "if", node.Line)
+		if remainderReachable {
+			branches = append(branches, cloneScope(scope))
+		}
+		return c.mergeAlternativeScopes(scope, scope, branches, "if", node.Line)
 
 	case *ast.WhileStmt:
 		if _, err := c.checkExpr(node.Condition, scope, deferred); err != nil {
@@ -970,7 +1100,7 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 			}
 			branches = append(branches, elseScope)
 		}
-		return c.mergeAlternativeScopes(scope, branches, "match", node.Line)
+		return c.mergeAlternativeScopes(scope, scope, branches, "match", node.Line)
 
 	case *ast.ModuleDef:
 		if err := c.validateModuleBody(node); err != nil {

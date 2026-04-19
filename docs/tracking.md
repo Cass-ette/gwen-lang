@@ -136,6 +136,7 @@
 
 ## 上次更新
 
+2026-04-19 - Go definite assignment（第一步）：`if` / `match` 的新绑定现在只会在所有继续执行的可达分支都定义时才泄漏到块外；`if` 同时加入轻量常量布尔识别，保留 `if true then ... endif` 这类显然成立的写法。新增 3 个 Go checker 回归测试，并补 scope 文档说明“共享作用域”与“确定赋值”的区别
 2026-04-19 - Go checker 分支类型合并收紧：`if` / `match` 对同名变量做分支合并时，已知类型不再静默退化为 unknown；现在会在兼容时求共同类型（如 `int` + `float` -> `float`），在不兼容时直接报错。新增 3 个 Go checker 回归测试，并验证冲突/数值合并两个定向样例
 2026-04-19 - Go checker 作用域对齐：`if/while/for/match/arena` 现在按语言文档与 runtime 语义共享父函数作用域，块内新绑定在 `check` 阶段可继续在块外使用；新增 4 个 Go checker 回归测试与 2 个定向 `go run ./cmd/gwen check` 验证样例
 2026-04-19 - Go 作用域语义修复：补齐 `global` 的运行时外层赋值逻辑，禁止误改 builtin，并为缺失外层绑定与类型失配补充 checker 拦截；同时修复 `parallel => results` 在 checker 中不可见的问题。新增 8 个 Go 回归测试，并验证 `examples/global_scope.gw` 与定向 `parallel => results` 样例

@@ -289,6 +289,16 @@ func TestIfBindingIsVisibleAfterBlock(t *testing.T) {
 endfunc`)
 }
 
+func TestIfBindingMustBeAssignedOnContinuingPaths(t *testing.T) {
+	requireErrorContains(t, `func main()
+  cond := 1 = 1
+  if cond then
+    found := 1
+  endif
+  write(found)
+endfunc`, "Undefined variable: found")
+}
+
 func TestForLoopVariableIsVisibleAfterBlock(t *testing.T) {
 	requireOK(t, `func main()
   for i in 1 to 1 do
@@ -307,6 +317,29 @@ func TestMatchBindingIsVisibleAfterBlock(t *testing.T) {
 endfunc`)
 }
 
+func TestMatchBindingDoesNotLeakFromOnlyOneBranch(t *testing.T) {
+	requireErrorContains(t, `func main()
+  match ok(42)
+    when ok(v) =>
+      write(v)
+    when err(e) =>
+      write(e)
+  endmatch
+  write(v)
+endfunc`, "Undefined variable: v")
+}
+
+func TestIfKnownTrueElifBranchStillLeaksBinding(t *testing.T) {
+	requireOK(t, `func main()
+  if false then
+    never := 0
+  elif true then
+    x := 1
+  endif
+  write(x)
+endfunc`)
+}
+
 func TestArenaBindingIsVisibleAfterBlock(t *testing.T) {
 	requireOK(t, `func main()
   arena scratch do
@@ -318,7 +351,8 @@ endfunc`)
 
 func TestIfRejectsInconsistentBranchTypes(t *testing.T) {
 	requireErrorContains(t, `func main()
-  if true then
+  cond := 1 = 1
+  if cond then
     x := 1
   else
     x := "s"
@@ -341,7 +375,8 @@ endfunc`, "Variable 'x' has inconsistent types across match branches: int vs str
 
 func TestIfNumericBranchesMergeToFloat(t *testing.T) {
 	requireOK(t, `func main()
-  if true then
+  cond := 1 = 1
+  if cond then
     x := 1
   else
     x := 2.5
