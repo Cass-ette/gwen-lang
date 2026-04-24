@@ -1,0 +1,40 @@
+use sqlite
+use json
+
+func main()
+  dbpath := "/tmp/gwen_sqlite_basics.db"
+
+  match sqlite.open(dbpath)
+    when ok(db) =>
+      match sqlite.exec(db, "create table if not exists notes(id integer primary key, body text, visits integer, deleted_at text)", [])
+        when ok(created) => write("schema rows:", created)
+        when err(e) =>
+          write("schema failed:", e)
+          return
+      endmatch
+
+      match sqlite.exec(db, "insert into notes(body, visits, deleted_at) values(?, ?, ?)", ["ship it", 1, json.null()])
+        when ok(inserted) => write("inserted rows:", inserted)
+        when err(e) =>
+          write("insert failed:", e)
+          return
+      endmatch
+
+      match sqlite.query(db, "select body, visits, deleted_at from notes order by id desc limit 1", [])
+        when ok(rows) =>
+          latest := rows[0]
+          write("latest body:", latest["body"])
+          write("latest visits:", latest["visits"])
+          write("deleted_at is null:", json.isnull(latest["deleted_at"]))
+        when err(e) =>
+          write("query failed:", e)
+      endmatch
+
+      match sqlite.close(db)
+        when ok(code) => write("close:", code)
+        when err(e) => write("close failed:", e)
+      endmatch
+    when err(e) =>
+      write("open failed:", e)
+  endmatch
+endfunc

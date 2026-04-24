@@ -1,0 +1,12 @@
+use state
+
+func main()
+  counter: cell[int] := state.cell(0)
+
+  parallel do
+    state.update(counter, (n: int) => n + 1)
+    state.update(counter, (n: int) => n + 1)
+  endparallel
+
+  write(state.get(counter))
+endfunc

@@ -61,6 +61,8 @@ endfunc
 | `for`, `in`, `to`, `step`, `endfor` | 遍历 | 已实现 |
 | `order`, `reverse` | for 循环方向控制 | 已实现 |
 | `with`, `index` | for 循环辅助 | 已实现 |
+| `pass` | 显式空操作 | 已实现 |
+| `leave`, `next` | 命名循环控制 | 已实现 |
 | `match`, `when`, `endmatch` | 模式匹配 | 已实现 |
 | `ok`, `err` | Result 类型构造 | 已实现 |
 | `as` | 类型转换 | 已实现 |
@@ -117,6 +119,12 @@ substring(s, start, end)  // 子串
 contains(s, substr) // 包含检查
 trim(s)              // 去空白
 replace(s, old, new) // 替换
+
+// 文件
+readfile(path)       // 读全文
+readdir(path)        // 列目录项名称
+writefile(path, content)  // 覆盖写
+appendfile(path, content) // 追加写
 
 // 数学
 abs(x)               // 绝对值（int/float）

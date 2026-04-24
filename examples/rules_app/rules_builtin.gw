@@ -1,4 +1,5 @@
 module rules_builtin
+use Request, Decision from rules_model
 
 export func check_required_category(request: Request, decision: Decision) -> result[int]
   if trim(request.get_category()) = "" then

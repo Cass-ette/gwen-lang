@@ -157,6 +157,20 @@ type ReturnStmt struct {
 	Line  int
 }
 
+type PassStmt struct {
+	Line int
+}
+
+type LeaveStmt struct {
+	Name string
+	Line int
+}
+
+type NextStmt struct {
+	Name string
+	Line int
+}
+
 type IfBranch struct {
 	Condition any
 	Body      []any
@@ -172,6 +186,7 @@ type IfStmt struct {
 
 type WhileStmt struct {
 	Condition any
+	Name      string
 	Body      []any
 	Line      int
 }
@@ -182,6 +197,7 @@ type ForRangeStmt struct {
 	End       any
 	Step      any
 	Direction string
+	Name      string
 	Body      []any
 	Line      int
 }
@@ -190,6 +206,7 @@ type ForEachStmt struct {
 	Var      string
 	Iterable any
 	IndexVar string
+	Name     string
 	Body     []any
 	Line     int
 }

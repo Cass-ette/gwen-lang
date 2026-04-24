@@ -2,15 +2,21 @@ package interpreter
 
 import (
 	"bufio"
+	"database/sql"
 	stdjson "encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math"
+	"mime"
+	"net"
 	"net/http"
+	"net/textproto"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +24,7 @@ import (
 
 	"github.com/Cass-ette/gwen-lang/internal/ast"
 	"github.com/Cass-ette/gwen-lang/internal/parser"
+	_ "modernc.org/sqlite"
 )
 
 var (
@@ -60,6 +67,8 @@ var officialStdlibModules = map[string][]string{
 		"split",
 		"join",
 		"substring",
+		"startswith",
+		"endswith",
 		"contains",
 		"trim",
 		"replace",
@@ -81,9 +90,11 @@ var officialStdlibModules = map[string][]string{
 	},
 	"io": {
 		"readfile",
+		"readdir",
 		"writefile",
 		"appendfile",
 	},
+	"path": {},
 	"os": {
 		"args",
 		"cwd",
@@ -95,8 +106,10 @@ var officialStdlibModules = map[string][]string{
 		"nowunixms",
 		"nowrfc3339",
 	},
-	"json": {},
-	"http": {},
+	"json":   {},
+	"http":   {},
+	"state":  {},
+	"sqlite": {},
 }
 
 var moduleOnlyBuiltins = map[string]struct{}{
@@ -145,8 +158,45 @@ type MoneyValue struct {
 }
 
 type HTTPResponseValue struct {
-	Status int64
-	Body   string
+	Status  int64
+	Body    string
+	Headers map[string][]string
+}
+
+type HTTPRequestValue struct {
+	Method  string
+	Path    string
+	Body    string
+	Query   map[string]string
+	Headers map[string][]string
+	Cookies map[string]string
+}
+
+type HTTPReplyValue struct {
+	Status      int64
+	ContentType string
+	Body        string
+	Headers     map[string][]string
+}
+
+type HTTPServerValue struct {
+	Server *http.Server
+	Addr   string
+	ErrCh  chan error
+}
+
+type SqliteDBValue struct {
+	DB   *sql.DB
+	Path string
+}
+
+type CellValue struct {
+	mu    sync.Mutex
+	Value any
+}
+
+type ListValue struct {
+	Items []any
 }
 
 type JSONNullValue struct{}
@@ -292,8 +342,11 @@ func (e *Environment) IsLocalConst(name string) bool {
 	return ok
 }
 
-type returnSignal struct {
-	value any
+type execSignal struct {
+	Kind  string
+	Name  string
+	Value any
+	Line  int
 }
 
 type uninitialized struct{}
@@ -331,8 +384,14 @@ func (i *Interpreter) Run(program *ast.Program) error {
 }
 
 func (i *Interpreter) Execute(program *ast.Program) error {
-	_, err := i.execBlock(program.Statements, i.GlobalEnv)
-	return err
+	signal, err := i.execBlock(program.Statements, i.GlobalEnv)
+	if err != nil {
+		return err
+	}
+	if signal != nil && signal.Kind != "return" {
+		return runtimeErrorf(signal.Line, "%s '%s' used outside matching loop", signal.Kind, signal.Name)
+	}
+	return nil
 }
 
 func (i *Interpreter) RunWithSource(program *ast.Program, sourcePath string) error {
@@ -376,7 +435,7 @@ func (i *Interpreter) AddModuleSearchPath(path string) {
 	i.moduleSearchPaths = append([]string{absPath}, i.moduleSearchPaths...)
 }
 
-func (i *Interpreter) execBlock(statements []any, env *Environment) (*returnSignal, error) {
+func (i *Interpreter) execBlock(statements []any, env *Environment) (*execSignal, error) {
 	for _, stmt := range statements {
 		result, err := i.execStmt(stmt, env)
 		if err != nil {
@@ -389,7 +448,7 @@ func (i *Interpreter) execBlock(statements []any, env *Environment) (*returnSign
 	return nil, nil
 }
 
-func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error) {
+func (i *Interpreter) execStmt(stmt any, env *Environment) (*execSignal, error) {
 	switch node := stmt.(type) {
 	case *ast.FuncDef:
 		env.Set(node.Name, &Function{Node: node, Closure: env})
@@ -507,7 +566,7 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 
 	case *ast.ReturnStmt:
 		if node.Value == nil {
-			return &returnSignal{value: nil}, nil
+			return &execSignal{Kind: "return", Value: nil, Line: node.Line}, nil
 		}
 		if values, ok := node.Value.([]any); ok {
 			result := make([]any, 0, len(values))
@@ -518,13 +577,22 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 				}
 				result = append(result, value)
 			}
-			return &returnSignal{value: result}, nil
+			return &execSignal{Kind: "return", Value: result, Line: node.Line}, nil
 		}
 		value, err := i.evalExpr(node.Value, env)
 		if err != nil {
 			return nil, err
 		}
-		return &returnSignal{value: value}, nil
+		return &execSignal{Kind: "return", Value: value, Line: node.Line}, nil
+
+	case *ast.PassStmt:
+		return nil, nil
+
+	case *ast.LeaveStmt:
+		return &execSignal{Kind: "leave", Name: node.Name, Line: node.Line}, nil
+
+	case *ast.NextStmt:
+		return &execSignal{Kind: "next", Name: node.Name, Line: node.Line}, nil
 
 	case *ast.IfStmt:
 		condition, err := i.evalExpr(node.Condition, env)
@@ -571,6 +639,12 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 				return nil, err
 			}
 			if result != nil {
+				if consumed, exitLoop := consumeLoopSignal(result, node.Name); consumed {
+					if exitLoop {
+						return nil, nil
+					}
+					continue
+				}
 				return result, nil
 			}
 		}
@@ -643,6 +717,12 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 				return nil, err
 			}
 			if result != nil {
+				if consumed, exitLoop := consumeLoopSignal(result, node.Name); consumed {
+					if exitLoop {
+						return nil, nil
+					}
+					continue
+				}
 				return result, nil
 			}
 		}
@@ -667,6 +747,12 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 				return nil, err
 			}
 			if result != nil {
+				if consumed, exitLoop := consumeLoopSignal(result, node.Name); consumed {
+					if exitLoop {
+						return nil, nil
+					}
+					continue
+				}
 				return result, nil
 			}
 		}
@@ -702,8 +788,12 @@ func (i *Interpreter) execStmt(stmt any, env *Environment) (*returnSignal, error
 
 	case *ast.ModuleDef:
 		moduleEnv := NewEnvironment(env)
-		if _, err := i.execBlock(node.Body, moduleEnv); err != nil {
+		signal, err := i.execBlock(node.Body, moduleEnv)
+		if err != nil {
 			return nil, err
+		}
+		if signal != nil {
+			return signal, nil
 		}
 		namespace := NewEnvironment(nil)
 		for _, inner := range node.Body {
@@ -839,7 +929,7 @@ type parallelTaskResult struct {
 	err   error
 }
 
-func (i *Interpreter) execParallel(node *ast.ParallelStmt, env *Environment) (*returnSignal, error) {
+func (i *Interpreter) execParallel(node *ast.ParallelStmt, env *Environment) (*execSignal, error) {
 	results := make([]parallelTaskResult, len(node.Body))
 	var wg sync.WaitGroup
 
@@ -872,7 +962,7 @@ func (i *Interpreter) execParallel(node *ast.ParallelStmt, env *Environment) (*r
 			}
 			parallelValues = append(parallelValues, &OkValue{Value: result.value})
 		}
-		env.Set(node.ResultVar, parallelValues)
+		env.Set(node.ResultVar, newListValue(parallelValues))
 	}
 
 	return nil, nil
@@ -887,12 +977,20 @@ func (i *Interpreter) execParallelTask(stmt any, env *Environment) (any, error) 
 		return nil, err
 	}
 	if result != nil {
-		return result.value, nil
+		if result.Kind == "return" {
+			return result.Value, nil
+		}
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
 	}
 	return nil, nil
 }
 
 func (i *Interpreter) forkForParallel(env *Environment) (*Interpreter, *Environment) {
+	child, clonedEnv, _ := i.forkValueForParallel(env, nil)
+	return child, clonedEnv
+}
+
+func (i *Interpreter) forkValueForParallel(env *Environment, value any) (*Interpreter, *Environment, any) {
 	child := New()
 	child.Stdout = i.Stdout
 	child.stdioMu = i.stdioMu
@@ -905,7 +1003,11 @@ func (i *Interpreter) forkForParallel(env *Environment) (*Interpreter, *Environm
 		child.Modules[name] = cloner.cloneEnv(moduleEnv)
 	}
 
-	return child, cloner.cloneEnv(env)
+	var clonedValue any
+	if value != nil {
+		clonedValue = cloner.cloneValue(value)
+	}
+	return child, cloner.cloneEnv(env), clonedValue
 }
 
 type cloneContext struct {
@@ -924,6 +1026,7 @@ type cloneContext struct {
 	okValues          map[*OkValue]*OkValue
 	errValues         map[*ErrValue]*ErrValue
 	moneyValues       map[*MoneyValue]*MoneyValue
+	lists             map[*ListValue]*ListValue
 	slices            map[uintptr][]any
 	dicts             map[uintptr]map[any]any
 }
@@ -945,6 +1048,7 @@ func newCloneContext(parent *Interpreter, child *Interpreter) *cloneContext {
 		okValues:          map[*OkValue]*OkValue{},
 		errValues:         map[*ErrValue]*ErrValue{},
 		moneyValues:       map[*MoneyValue]*MoneyValue{},
+		lists:             map[*ListValue]*ListValue{},
 		slices:            map[uintptr][]any{},
 		dicts:             map[uintptr]map[any]any{},
 	}
@@ -1060,6 +1164,16 @@ func (c *cloneContext) cloneValue(value any) any {
 			return childBuiltin
 		}
 		return value
+	case *ListValue:
+		if cloned, ok := c.lists[value]; ok {
+			return cloned
+		}
+		cloned := &ListValue{Items: make([]any, len(value.Items))}
+		c.lists[value] = cloned
+		for idx, item := range value.Items {
+			cloned.Items[idx] = c.cloneValue(item)
+		}
+		return cloned
 	case []any:
 		ptr := reflect.ValueOf(value).Pointer()
 		if ptr != 0 {
@@ -1236,7 +1350,7 @@ func (i *Interpreter) evalExpr(expr any, env *Environment) (any, error) {
 			}
 			items = append(items, value)
 		}
-		return items, nil
+		return newListValue(items), nil
 	case *ast.DictLiteral:
 		items := map[any]any{}
 		for _, entry := range node.Entries {
@@ -1495,26 +1609,22 @@ func (i *Interpreter) evalAppendCall(call *ast.FuncCall, env *Environment) (any,
 	if len(call.Args) != 2 {
 		return nil, runtimeErrorf(call.Line, "append() expects 2 arguments, got %d", len(call.Args))
 	}
-	target, ok := assignmentTargetExpr(call.Args[0])
-	if !ok {
+	if _, ok := assignmentTargetExpr(call.Args[0]); !ok {
 		return nil, runtimeErrorf(call.Line, "append() first argument must be assignable list target")
 	}
 	listValue, err := i.evalExpr(call.Args[0], env)
 	if err != nil {
 		return nil, err
 	}
-	list, ok := listValue.([]any)
-	if !ok {
-		return nil, runtimeErrorf(call.Line, "append() requires list, got %s", typeNameOf(listValue))
+	list, err := requireMutableList(listValue, call.Line, "append")
+	if err != nil {
+		return nil, err
 	}
 	item, err := i.evalExpr(call.Args[1], env)
 	if err != nil {
 		return nil, err
 	}
-	list = append(list, item)
-	if err := i.assignTarget(target, list, env, call.Line); err != nil {
-		return nil, err
-	}
+	list.Items = append(list.Items, item)
 	return list, nil
 }
 
@@ -1522,27 +1632,23 @@ func (i *Interpreter) evalPopCall(call *ast.FuncCall, env *Environment) (any, er
 	if len(call.Args) != 1 {
 		return nil, runtimeErrorf(call.Line, "pop() expects 1 argument, got %d", len(call.Args))
 	}
-	target, ok := assignmentTargetExpr(call.Args[0])
-	if !ok {
+	if _, ok := assignmentTargetExpr(call.Args[0]); !ok {
 		return nil, runtimeErrorf(call.Line, "pop() first argument must be assignable list target")
 	}
 	listValue, err := i.evalExpr(call.Args[0], env)
 	if err != nil {
 		return nil, err
 	}
-	list, ok := listValue.([]any)
-	if !ok {
-		return nil, runtimeErrorf(call.Line, "pop() requires list, got %s", typeNameOf(listValue))
-	}
-	if len(list) == 0 {
-		return nil, runtimeErrorf(call.Line, "pop() from empty list")
-	}
-	removed := list[len(list)-1]
-	list[len(list)-1] = nil
-	list = list[:len(list)-1]
-	if err := i.assignTarget(target, list, env, call.Line); err != nil {
+	list, err := requireMutableList(listValue, call.Line, "pop")
+	if err != nil {
 		return nil, err
 	}
+	if len(list.Items) == 0 {
+		return nil, runtimeErrorf(call.Line, "pop() from empty list")
+	}
+	removed := list.Items[len(list.Items)-1]
+	list.Items[len(list.Items)-1] = nil
+	list.Items = list.Items[:len(list.Items)-1]
 	return removed, nil
 }
 
@@ -1550,17 +1656,16 @@ func (i *Interpreter) evalRemoveAtCall(call *ast.FuncCall, env *Environment) (an
 	if len(call.Args) != 2 {
 		return nil, runtimeErrorf(call.Line, "removeat() expects 2 arguments, got %d", len(call.Args))
 	}
-	target, ok := assignmentTargetExpr(call.Args[0])
-	if !ok {
+	if _, ok := assignmentTargetExpr(call.Args[0]); !ok {
 		return nil, runtimeErrorf(call.Line, "removeat() first argument must be assignable list target")
 	}
 	listValue, err := i.evalExpr(call.Args[0], env)
 	if err != nil {
 		return nil, err
 	}
-	list, ok := listValue.([]any)
-	if !ok {
-		return nil, runtimeErrorf(call.Line, "removeat() requires list, got %s", typeNameOf(listValue))
+	list, err := requireMutableList(listValue, call.Line, "removeat")
+	if err != nil {
+		return nil, err
 	}
 	index, err := i.evalExpr(call.Args[1], env)
 	if err != nil {
@@ -1570,14 +1675,13 @@ func (i *Interpreter) evalRemoveAtCall(call *ast.FuncCall, env *Environment) (an
 	if !ok {
 		return nil, runtimeErrorf(call.Line, "removeat() index must be int, got %s", typeNameOf(index))
 	}
-	if intIndex < 0 || intIndex >= int64(len(list)) {
+	if intIndex < 0 || intIndex >= int64(len(list.Items)) {
 		return nil, runtimeErrorf(call.Line, "removeat() index out of range: %d", intIndex)
 	}
-	removed := list[intIndex]
-	list = append(list[:intIndex], list[intIndex+1:]...)
-	if err := i.assignTarget(target, list, env, call.Line); err != nil {
-		return nil, err
-	}
+	removed := list.Items[intIndex]
+	copy(list.Items[intIndex:], list.Items[intIndex+1:])
+	list.Items[len(list.Items)-1] = nil
+	list.Items = list.Items[:len(list.Items)-1]
 	return removed, nil
 }
 
@@ -1585,17 +1689,16 @@ func (i *Interpreter) evalInsertCall(call *ast.FuncCall, env *Environment) (any,
 	if len(call.Args) != 3 {
 		return nil, runtimeErrorf(call.Line, "insert() expects 3 arguments, got %d", len(call.Args))
 	}
-	target, ok := assignmentTargetExpr(call.Args[0])
-	if !ok {
+	if _, ok := assignmentTargetExpr(call.Args[0]); !ok {
 		return nil, runtimeErrorf(call.Line, "insert() first argument must be assignable list target")
 	}
 	listValue, err := i.evalExpr(call.Args[0], env)
 	if err != nil {
 		return nil, err
 	}
-	list, ok := listValue.([]any)
-	if !ok {
-		return nil, runtimeErrorf(call.Line, "insert() requires list, got %s", typeNameOf(listValue))
+	list, err := requireMutableList(listValue, call.Line, "insert")
+	if err != nil {
+		return nil, err
 	}
 	indexValue, err := i.evalExpr(call.Args[1], env)
 	if err != nil {
@@ -1605,19 +1708,16 @@ func (i *Interpreter) evalInsertCall(call *ast.FuncCall, env *Environment) (any,
 	if !ok {
 		return nil, runtimeErrorf(call.Line, "insert() index must be int, got %s", typeNameOf(indexValue))
 	}
-	if index < 0 || index > int64(len(list)) {
+	if index < 0 || index > int64(len(list.Items)) {
 		return nil, runtimeErrorf(call.Line, "insert() index out of range: %d", index)
 	}
 	item, err := i.evalExpr(call.Args[2], env)
 	if err != nil {
 		return nil, err
 	}
-	list = append(list, nil)
-	copy(list[index+1:], list[index:])
-	list[index] = item
-	if err := i.assignTarget(target, list, env, call.Line); err != nil {
-		return nil, err
-	}
+	list.Items = append(list.Items, nil)
+	copy(list.Items[index+1:], list.Items[index:])
+	list.Items[index] = item
 	return nil, nil
 }
 
@@ -1633,7 +1733,10 @@ func (i *Interpreter) callFunction(fn *Function, args []any, line int) (any, err
 	if result == nil {
 		return nil, nil
 	}
-	return result.value, nil
+	if result.Kind != "return" {
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
+	}
+	return result.Value, nil
 }
 
 func (i *Interpreter) callLambda(fn *Lambda, args []any, line int) (any, error) {
@@ -1648,7 +1751,10 @@ func (i *Interpreter) callLambda(fn *Lambda, args []any, line int) (any, error) 
 	if result == nil {
 		return nil, nil
 	}
-	return result.value, nil
+	if result.Kind != "return" {
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
+	}
+	return result.Value, nil
 }
 
 func (i *Interpreter) callMethod(method *BoundMethod, args []any, line int) (any, error) {
@@ -1670,7 +1776,10 @@ func (i *Interpreter) callMethod(method *BoundMethod, args []any, line int) (any
 	if result == nil {
 		return nil, nil
 	}
-	return result.value, nil
+	if result.Kind != "return" {
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
+	}
+	return result.Value, nil
 }
 
 func (i *Interpreter) callConstructor(constructor *ConstructorRef, args []any, line int) (any, error) {
@@ -1688,7 +1797,10 @@ func (i *Interpreter) callConstructor(constructor *ConstructorRef, args []any, l
 	if result == nil {
 		return nil, runtimeErrorf(line, "Constructor '%s.new' did not return a value", constructor.Object.Name)
 	}
-	instance, ok := result.value.(*ObjectValue)
+	if result.Kind != "return" {
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
+	}
+	instance, ok := result.Value.(*ObjectValue)
 	if !ok || instance.TypeName != constructor.Object.Name {
 		return nil, runtimeErrorf(line, "Constructor '%s.new' must return a '%s' instance", constructor.Object.Name, constructor.Object.Name)
 	}
@@ -1946,6 +2058,8 @@ func (i *Interpreter) setupBuiltins() {
 			return nil, runtimeErrorf(0, "len() expects 1 argument, got %d", len(args))
 		}
 		switch value := args[0].(type) {
+		case *ListValue:
+			return int64(len(value.Items)), nil
 		case []any:
 			return int64(len(value)), nil
 		case string:
@@ -2024,7 +2138,7 @@ func (i *Interpreter) setupBuiltins() {
 		for current := start; compareRange(current, end, step); current += step {
 			items = append(items, current)
 		}
-		return items, nil
+		return newListValue(items), nil
 	}))
 	i.GlobalEnv.Set("enumerate", Builtin(func(args []any) (any, error) {
 		if len(args) != 1 {
@@ -2036,9 +2150,9 @@ func (i *Interpreter) setupBuiltins() {
 		}
 		result := make([]any, 0, len(items))
 		for idx, item := range items {
-			result = append(result, []any{int64(idx), item})
+			result = append(result, newListValue([]any{int64(idx), item}))
 		}
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("map", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
@@ -2056,7 +2170,7 @@ func (i *Interpreter) setupBuiltins() {
 			}
 			result = append(result, mapped)
 		}
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("filter", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
@@ -2079,87 +2193,90 @@ func (i *Interpreter) setupBuiltins() {
 				result = append(result, item)
 			}
 		}
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("append", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
 			return nil, runtimeErrorf(0, "append() expects 2 arguments, got %d", len(args))
 		}
-		list, ok := args[0].([]any)
-		if !ok {
-			return nil, runtimeErrorf(0, "append() requires list, got %s", typeNameOf(args[0]))
+		list, err := requireMutableList(args[0], 0, "append")
+		if err != nil {
+			return nil, err
 		}
-		list = append(list, args[1])
+		list.Items = append(list.Items, args[1])
 		return list, nil
 	}))
 	i.GlobalEnv.Set("pop", Builtin(func(args []any) (any, error) {
 		if len(args) != 1 {
 			return nil, runtimeErrorf(0, "pop() expects 1 argument, got %d", len(args))
 		}
-		list, ok := args[0].([]any)
-		if !ok {
-			return nil, runtimeErrorf(0, "pop() requires list, got %s", typeNameOf(args[0]))
+		list, err := requireMutableList(args[0], 0, "pop")
+		if err != nil {
+			return nil, err
 		}
-		if len(list) == 0 {
+		if len(list.Items) == 0 {
 			return nil, runtimeErrorf(0, "pop() from empty list")
 		}
-		return list[len(list)-1], nil
+		removed := list.Items[len(list.Items)-1]
+		list.Items[len(list.Items)-1] = nil
+		list.Items = list.Items[:len(list.Items)-1]
+		return removed, nil
 	}))
 	i.GlobalEnv.Set("concat", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
 			return nil, runtimeErrorf(0, "concat() expects 2 arguments, got %d", len(args))
 		}
-		left, ok := args[0].([]any)
+		left, ok := listLikeItems(args[0])
 		if !ok {
 			return nil, runtimeErrorf(0, "concat() requires list as first argument, got %s", typeNameOf(args[0]))
 		}
-		right, ok := args[1].([]any)
+		right, ok := listLikeItems(args[1])
 		if !ok {
 			return nil, runtimeErrorf(0, "concat() requires list as second argument, got %s", typeNameOf(args[1]))
 		}
 		result := append([]any{}, left...)
 		result = append(result, right...)
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("removeat", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
 			return nil, runtimeErrorf(0, "removeat() expects 2 arguments, got %d", len(args))
 		}
-		list, ok := args[0].([]any)
-		if !ok {
-			return nil, runtimeErrorf(0, "removeat() requires list, got %s", typeNameOf(args[0]))
+		list, err := requireMutableList(args[0], 0, "removeat")
+		if err != nil {
+			return nil, err
 		}
 		index, err := toInt64(args[1], 0)
 		if err != nil {
 			return nil, err
 		}
-		if index < 0 || index >= int64(len(list)) {
+		if index < 0 || index >= int64(len(list.Items)) {
 			return nil, runtimeErrorf(0, "removeat() index out of range: %d", index)
 		}
-		removed := list[index]
-		copy(list[index:], list[index+1:])
-		list[len(list)-1] = nil
-		list = list[:len(list)-1]
+		removed := list.Items[index]
+		copy(list.Items[index:], list.Items[index+1:])
+		list.Items[len(list.Items)-1] = nil
+		list.Items = list.Items[:len(list.Items)-1]
 		return removed, nil
 	}))
 	i.GlobalEnv.Set("insert", Builtin(func(args []any) (any, error) {
 		if len(args) != 3 {
 			return nil, runtimeErrorf(0, "insert() expects 3 arguments, got %d", len(args))
 		}
-		list, ok := args[0].([]any)
-		if !ok {
-			return nil, runtimeErrorf(0, "insert() requires list, got %s", typeNameOf(args[0]))
+		list, err := requireMutableList(args[0], 0, "insert")
+		if err != nil {
+			return nil, err
 		}
 		index, err := toInt64(args[1], 0)
 		if err != nil {
 			return nil, err
 		}
-		if index < 0 || index > int64(len(list)) {
+		if index < 0 || index > int64(len(list.Items)) {
 			return nil, runtimeErrorf(0, "insert() index out of range: %d", index)
 		}
-		list = append(list, nil)
-		copy(list[index+1:], list[index:])
-		list[index] = args[2]
+		list.Items = append(list.Items, nil)
+		copy(list.Items[index+1:], list.Items[index:])
+		list.Items[index] = args[2]
 		return list, nil
 	}))
 	i.GlobalEnv.Set("asc", Builtin(func(args []any) (any, error) {
@@ -2178,7 +2295,7 @@ func (i *Interpreter) setupBuiltins() {
 		if len(args) != 1 {
 			return nil, runtimeErrorf(0, "reversed() expects 1 argument, got %d", len(args))
 		}
-		items, ok := args[0].([]any)
+		items, ok := listLikeItems(args[0])
 		if !ok {
 			return nil, runtimeErrorf(0, "reversed() requires list, got %s", typeNameOf(args[0]))
 		}
@@ -2186,13 +2303,13 @@ func (i *Interpreter) setupBuiltins() {
 		for idx := len(items) - 1; idx >= 0; idx-- {
 			result = append(result, items[idx])
 		}
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("sort", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
 			return nil, runtimeErrorf(0, "sort() expects 2 arguments, got %d", len(args))
 		}
-		items, ok := args[0].([]any)
+		items, ok := listLikeItems(args[0])
 		if !ok {
 			return nil, runtimeErrorf(0, "sort() requires list, got %s", typeNameOf(args[0]))
 		}
@@ -2211,7 +2328,7 @@ func (i *Interpreter) setupBuiltins() {
 				}
 			}
 		}
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("split", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
@@ -2230,12 +2347,12 @@ func (i *Interpreter) setupBuiltins() {
 			for _, ch := range value {
 				parts = append(parts, string(ch))
 			}
-			return parts, nil
+			return newListValue(parts), nil
 		}
 		for _, part := range strings.Split(value, sep) {
 			parts = append(parts, part)
 		}
-		return parts, nil
+		return newListValue(parts), nil
 	}))
 	i.GlobalEnv.Set("join", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
@@ -2275,6 +2392,34 @@ func (i *Interpreter) setupBuiltins() {
 			return nil, runtimeErrorf(0, "substring() bounds out of range")
 		}
 		return value[start : end+1], nil
+	}))
+	i.GlobalEnv.Set("startswith", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "startswith() expects 2 arguments, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "startswith() requires string input, got %s", typeNameOf(args[0]))
+		}
+		prefix, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "startswith() prefix must be string, got %s", typeNameOf(args[1]))
+		}
+		return strings.HasPrefix(value, prefix), nil
+	}))
+	i.GlobalEnv.Set("endswith", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "endswith() expects 2 arguments, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "endswith() requires string input, got %s", typeNameOf(args[0]))
+		}
+		suffix, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "endswith() suffix must be string, got %s", typeNameOf(args[1]))
+		}
+		return strings.HasSuffix(value, suffix), nil
 	}))
 	i.GlobalEnv.Set("contains", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
@@ -2426,7 +2571,7 @@ func (i *Interpreter) setupBuiltins() {
 		for key := range dict {
 			result = append(result, key)
 		}
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("values", Builtin(func(args []any) (any, error) {
 		if len(args) != 1 {
@@ -2440,7 +2585,7 @@ func (i *Interpreter) setupBuiltins() {
 		for _, value := range dict {
 			result = append(result, value)
 		}
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("items", Builtin(func(args []any) (any, error) {
 		if len(args) != 1 {
@@ -2452,9 +2597,9 @@ func (i *Interpreter) setupBuiltins() {
 		}
 		result := make([]any, 0, len(dict))
 		for key, value := range dict {
-			result = append(result, []any{key, value})
+			result = append(result, newListValue([]any{key, value}))
 		}
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("readfile", Builtin(func(args []any) (any, error) {
 		if len(args) != 1 {
@@ -2469,6 +2614,24 @@ func (i *Interpreter) setupBuiltins() {
 			return &ErrValue{Value: err.Error()}, nil
 		}
 		return &OkValue{Value: string(data)}, nil
+	}))
+	i.GlobalEnv.Set("readdir", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "readdir() expects 1 argument, got %d", len(args))
+		}
+		path, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "readdir() requires string path, got %s", typeNameOf(args[0]))
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		result := make([]any, 0, len(entries))
+		for _, entry := range entries {
+			result = append(result, entry.Name())
+		}
+		return &OkValue{Value: newListValue(result)}, nil
 	}))
 	i.GlobalEnv.Set("writefile", Builtin(func(args []any) (any, error) {
 		if len(args) != 2 {
@@ -2519,7 +2682,7 @@ func (i *Interpreter) setupBuiltins() {
 		for _, arg := range i.ProgramArgs {
 			result = append(result, arg)
 		}
-		return result, nil
+		return newListValue(result), nil
 	}))
 	i.GlobalEnv.Set("cwd", Builtin(func(args []any) (any, error) {
 		if len(args) != 0 {
@@ -2591,8 +2754,28 @@ func (i *Interpreter) setupStdlibModules() {
 		}
 	}
 	i.addStdlibModuleBuiltin("http", "get", i.httpGetBuiltin())
+	i.addStdlibModuleBuiltin("http", "request", i.httpRequestBuiltin())
+	i.addStdlibModuleBuiltin("http", "listen", i.httpListenBuiltin())
+	i.addStdlibModuleBuiltin("http", "addr", i.httpAddrBuiltin())
+	i.addStdlibModuleBuiltin("http", "wait", i.httpWaitBuiltin())
+	i.addStdlibModuleBuiltin("http", "close", i.httpCloseBuiltin())
+	i.addStdlibModuleBuiltin("http", "method", i.httpMethodBuiltin())
+	i.addStdlibModuleBuiltin("http", "path", i.httpPathBuiltin())
+	i.addStdlibModuleBuiltin("http", "requestbody", i.httpRequestBodyBuiltin())
+	i.addStdlibModuleBuiltin("http", "requestheader", i.httpRequestHeaderBuiltin())
+	i.addStdlibModuleBuiltin("http", "requestcookie", i.httpRequestCookieBuiltin())
 	i.addStdlibModuleBuiltin("http", "status", i.httpStatusBuiltin())
-	i.addStdlibModuleBuiltin("http", "body", i.httpBodyBuiltin())
+	i.addStdlibModuleBuiltin("http", "responsebody", i.httpResponseBodyBuiltin())
+	i.addStdlibModuleBuiltin("http", "responseheader", i.httpResponseHeaderBuiltin())
+	i.addStdlibModuleBuiltin("http", "query", i.httpQueryBuiltin())
+	i.addStdlibModuleBuiltin("http", "route", i.httpRouteBuiltin())
+	i.addStdlibModuleBuiltin("http", "text", i.httpTextBuiltin())
+	i.addStdlibModuleBuiltin("http", "html", i.httpHTMLBuiltin())
+	i.addStdlibModuleBuiltin("http", "json", i.httpJSONBuiltin())
+	i.addStdlibModuleBuiltin("http", "redirect", i.httpRedirectBuiltin())
+	i.addStdlibModuleBuiltin("http", "withheader", i.httpWithHeaderBuiltin())
+	i.addStdlibModuleBuiltin("http", "withcookie", i.httpWithCookieBuiltin())
+	i.addStdlibModuleBuiltin("http", "static", i.httpStaticBuiltin())
 	i.addStdlibModuleBuiltin("json", "parseobject", i.jsonParseObjectBuiltin())
 	i.addStdlibModuleBuiltin("json", "parsearray", i.jsonParseArrayBuiltin())
 	i.addStdlibModuleBuiltin("json", "stringify", i.jsonStringifyBuiltin())
@@ -2600,6 +2783,17 @@ func (i *Interpreter) setupStdlibModules() {
 	i.addStdlibModuleBuiltin("json", "arrayof", i.jsonArrayBuiltin())
 	i.addStdlibModuleBuiltin("json", "null", i.jsonNullBuiltin())
 	i.addStdlibModuleBuiltin("json", "isnull", i.jsonIsNullBuiltin())
+	i.addStdlibModuleBuiltin("state", "cell", i.stateCellBuiltin())
+	i.addStdlibModuleBuiltin("state", "get", i.stateGetBuiltin())
+	i.addStdlibModuleBuiltin("state", "set", i.stateSetBuiltin())
+	i.addStdlibModuleBuiltin("state", "update", i.stateUpdateBuiltin())
+	i.addStdlibModuleBuiltin("sqlite", "open", i.sqliteOpenBuiltin())
+	i.addStdlibModuleBuiltin("sqlite", "close", i.sqliteCloseBuiltin())
+	i.addStdlibModuleBuiltin("sqlite", "exec", i.sqliteExecBuiltin())
+	i.addStdlibModuleBuiltin("sqlite", "query", i.sqliteQueryBuiltin())
+	i.addStdlibModuleBuiltin("path", "basename", i.pathBasenameBuiltin())
+	i.addStdlibModuleBuiltin("path", "dirname", i.pathDirnameBuiltin())
+	i.addStdlibModuleBuiltin("path", "joinpath", i.pathJoinBuiltin())
 }
 
 func (i *Interpreter) hideModuleOnlyBuiltins() {
@@ -2643,23 +2837,43 @@ func (i *Interpreter) httpGetBuiltin() Builtin {
 			}
 			timeoutMS = value
 		}
+		return performHTTPRequest("http.get()", "GET", url, "", map[string]string{}, timeoutMS)
+	})
+}
 
-		client := &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond}
-		resp, err := client.Get(url)
-		if err != nil {
-			return &ErrValue{Value: err.Error()}, nil
+func (i *Interpreter) httpRequestBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 4 && len(args) != 5 {
+			return nil, runtimeErrorf(0, "http.request() expects 4 or 5 arguments, got %d", len(args))
 		}
-		defer resp.Body.Close()
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return &ErrValue{Value: err.Error()}, nil
+		method, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.request() requires string method, got %s", typeNameOf(args[0]))
 		}
-
-		return &OkValue{Value: &HTTPResponseValue{
-			Status: int64(resp.StatusCode),
-			Body:   string(body),
-		}}, nil
+		url, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.request() requires string url, got %s", typeNameOf(args[1]))
+		}
+		body, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.request() requires string body, got %s", typeNameOf(args[2]))
+		}
+		headers, err := convertHTTPHeaderDict("http.request()", args[3])
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		timeoutMS := int64(5000)
+		if len(args) == 5 {
+			value, ok := args[4].(int64)
+			if !ok {
+				return nil, runtimeErrorf(0, "http.request() requires int timeoutms, got %s", typeNameOf(args[4]))
+			}
+			if value < 0 {
+				return nil, runtimeErrorf(0, "http.request() timeoutms must be >= 0")
+			}
+			timeoutMS = value
+		}
+		return performHTTPRequest("http.request()", method, url, body, headers, timeoutMS)
 	})
 }
 
@@ -2676,16 +2890,827 @@ func (i *Interpreter) httpStatusBuiltin() Builtin {
 	})
 }
 
-func (i *Interpreter) httpBodyBuiltin() Builtin {
+func (i *Interpreter) httpListenBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.listen() expects 2 arguments, got %d", len(args))
+		}
+
+		addr, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.listen() requires string addr, got %s", typeNameOf(args[0]))
+		}
+
+		handler := args[1]
+		switch handler.(type) {
+		case Builtin, *Function, *Lambda, *BoundMethod:
+		default:
+			return nil, runtimeErrorf(0, "http.listen() requires callable handler, got %s", typeNameOf(args[1]))
+		}
+
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+
+		serverValue := &HTTPServerValue{
+			Addr:  listener.Addr().String(),
+			ErrCh: make(chan error, 1),
+		}
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reply, err := i.invokeHTTPHandler(handler, r)
+				if err != nil {
+					reply, _ = makeHTTPReplyValue("http.listen()", 500, "text/plain; charset=utf-8", err.Error())
+				}
+				if writeErr := writeHTTPReply(w, reply); writeErr != nil {
+					http.Error(w, writeErr.Error(), http.StatusInternalServerError)
+				}
+			}),
+		}
+		serverValue.Server = server
+
+		go func() {
+			err := server.Serve(listener)
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
+			}
+			serverValue.ErrCh <- err
+			close(serverValue.ErrCh)
+		}()
+
+		return &OkValue{Value: serverValue}, nil
+	})
+}
+
+func (i *Interpreter) httpAddrBuiltin() Builtin {
 	return Builtin(func(args []any) (any, error) {
 		if len(args) != 1 {
-			return nil, runtimeErrorf(0, "http.body() expects 1 argument, got %d", len(args))
+			return nil, runtimeErrorf(0, "http.addr() expects 1 argument, got %d", len(args))
+		}
+		server, ok := args[0].(*HTTPServerValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.addr() requires HttpServer, got %s", typeNameOf(args[0]))
+		}
+		return server.Addr, nil
+	})
+}
+
+func (i *Interpreter) httpWaitBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.wait() expects 1 argument, got %d", len(args))
+		}
+		server, ok := args[0].(*HTTPServerValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.wait() requires HttpServer, got %s", typeNameOf(args[0]))
+		}
+		err, ok := <-server.ErrCh
+		if !ok || err == nil {
+			return &OkValue{Value: int64(0)}, nil
+		}
+		return &ErrValue{Value: err.Error()}, nil
+	})
+}
+
+func (i *Interpreter) httpCloseBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.close() expects 1 argument, got %d", len(args))
+		}
+		server, ok := args[0].(*HTTPServerValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.close() requires HttpServer, got %s", typeNameOf(args[0]))
+		}
+		if err := server.Server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: int64(0)}, nil
+	})
+}
+
+func (i *Interpreter) httpMethodBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.method() expects 1 argument, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.method() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		return request.Method, nil
+	})
+}
+
+func (i *Interpreter) httpPathBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.path() expects 1 argument, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.path() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		return request.Path, nil
+	})
+}
+
+func (i *Interpreter) httpRequestBodyBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.requestbody() expects 1 argument, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestbody() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		return request.Body, nil
+	})
+}
+
+func (i *Interpreter) httpRequestHeaderBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.requestheader() expects 3 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestheader() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		key, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestheader() requires string key, got %s", typeNameOf(args[1]))
+		}
+		fallback, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestheader() requires string fallback, got %s", typeNameOf(args[2]))
+		}
+		value, err := lookupHTTPHeader(request.Headers, key, fallback)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return value, nil
+	})
+}
+
+func (i *Interpreter) httpRequestCookieBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.requestcookie() expects 3 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestcookie() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		name, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestcookie() requires string name, got %s", typeNameOf(args[1]))
+		}
+		fallback, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestcookie() requires string fallback, got %s", typeNameOf(args[2]))
+		}
+		value, err := lookupHTTPCookie(request.Cookies, name, fallback)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return value, nil
+	})
+}
+
+func (i *Interpreter) httpResponseBodyBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.responsebody() expects 1 argument, got %d", len(args))
 		}
 		response, ok := args[0].(*HTTPResponseValue)
 		if !ok {
-			return nil, runtimeErrorf(0, "http.body() requires HttpResponse, got %s", typeNameOf(args[0]))
+			return nil, runtimeErrorf(0, "http.responsebody() requires HttpResponse, got %s", typeNameOf(args[0]))
 		}
 		return response.Body, nil
+	})
+}
+
+func (i *Interpreter) httpResponseHeaderBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.responseheader() expects 3 arguments, got %d", len(args))
+		}
+		response, ok := args[0].(*HTTPResponseValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.responseheader() requires HttpResponse, got %s", typeNameOf(args[0]))
+		}
+		key, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.responseheader() requires string key, got %s", typeNameOf(args[1]))
+		}
+		fallback, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.responseheader() requires string fallback, got %s", typeNameOf(args[2]))
+		}
+		value, err := lookupHTTPHeader(response.Headers, key, fallback)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return value, nil
+	})
+}
+
+func (i *Interpreter) httpQueryBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.query() expects 3 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.query() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		key, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.query() requires string key, got %s", typeNameOf(args[1]))
+		}
+		fallback, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.query() requires string fallback, got %s", typeNameOf(args[2]))
+		}
+		if value, ok := request.Query[key]; ok {
+			return value, nil
+		}
+		return fallback, nil
+	})
+}
+
+func (i *Interpreter) httpRouteBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.route() expects 2 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.route() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		pattern, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.route() requires string pattern, got %s", typeNameOf(args[1]))
+		}
+		matched, params := routeRequestPath(request.Path, pattern)
+		return []any{matched, params}, nil
+	})
+}
+
+func (i *Interpreter) httpTextBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.text() expects 2 arguments, got %d", len(args))
+		}
+		status, ok := args[0].(int64)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.text() requires int status, got %s", typeNameOf(args[0]))
+		}
+		body, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.text() requires string body, got %s", typeNameOf(args[1]))
+		}
+		reply, err := makeHTTPReplyValue("http.text()", status, "text/plain; charset=utf-8", body)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return reply, nil
+	})
+}
+
+func (i *Interpreter) httpHTMLBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.html() expects 2 arguments, got %d", len(args))
+		}
+		status, ok := args[0].(int64)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.html() requires int status, got %s", typeNameOf(args[0]))
+		}
+		body, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.html() requires string body, got %s", typeNameOf(args[1]))
+		}
+		reply, err := makeHTTPReplyValue("http.html()", status, "text/html; charset=utf-8", body)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return reply, nil
+	})
+}
+
+func (i *Interpreter) httpJSONBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.json() expects 2 arguments, got %d", len(args))
+		}
+		status, ok := args[0].(int64)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.json() requires int status, got %s", typeNameOf(args[0]))
+		}
+		reply, err := makeJSONHTTPReply(status, args[1])
+		if err != nil {
+			if strings.HasPrefix(err.Error(), "http.json() status must") {
+				return nil, runtimeErrorf(0, "%s", err.Error())
+			}
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: reply}, nil
+	})
+}
+
+func (i *Interpreter) httpRedirectBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.redirect() expects 2 arguments, got %d", len(args))
+		}
+		status, ok := args[0].(int64)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.redirect() requires int status, got %s", typeNameOf(args[0]))
+		}
+		if status < 300 || status > 399 {
+			return nil, runtimeErrorf(0, "http.redirect() status must be between 300 and 399")
+		}
+		location, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.redirect() requires string location, got %s", typeNameOf(args[1]))
+		}
+		reply, err := makeHTTPReplyValue("http.redirect()", status, "", "")
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		if err := setHTTPReplyHeader(reply, "Location", location); err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return reply, nil
+	})
+}
+
+func (i *Interpreter) httpWithHeaderBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.withheader() expects 3 arguments, got %d", len(args))
+		}
+		reply, ok := args[0].(*HTTPReplyValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withheader() requires HttpReply, got %s", typeNameOf(args[0]))
+		}
+		key, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withheader() requires string key, got %s", typeNameOf(args[1]))
+		}
+		value, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withheader() requires string value, got %s", typeNameOf(args[2]))
+		}
+		cloned := cloneHTTPReplyValue(reply)
+		if err := setHTTPReplyHeader(cloned, key, value); err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) httpWithCookieBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.withcookie() expects 3 arguments, got %d", len(args))
+		}
+		reply, ok := args[0].(*HTTPReplyValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withcookie() requires HttpReply, got %s", typeNameOf(args[0]))
+		}
+		name, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withcookie() requires string name, got %s", typeNameOf(args[1]))
+		}
+		value, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withcookie() requires string value, got %s", typeNameOf(args[2]))
+		}
+		cloned := cloneHTTPReplyValue(reply)
+		if err := appendHTTPReplyCookie(cloned, name, value); err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) httpStaticBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.static() expects 3 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.static() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		prefix, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.static() requires string prefix, got %s", typeNameOf(args[1]))
+		}
+		root, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.static() requires string root, got %s", typeNameOf(args[2]))
+		}
+		if !matchesHTTPPathPrefix(request.Path, prefix) {
+			return []any{false, &ErrValue{Value: fmt.Sprintf("path %q is not under prefix %q", request.Path, prefix)}}, nil
+		}
+		reply, err := loadStaticHTTPReply(request.Path, prefix, root)
+		if err != nil {
+			return []any{true, &ErrValue{Value: err.Error()}}, nil
+		}
+		return []any{true, &OkValue{Value: reply}}, nil
+	})
+}
+
+func (i *Interpreter) invokeHTTPHandler(handler any, request *http.Request) (*HTTPReplyValue, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read request body: %w", err)
+	}
+	query := map[string]string{}
+	for key, values := range request.URL.Query() {
+		if len(values) > 0 {
+			query[key] = values[0]
+		}
+	}
+	cookies := map[string]string{}
+	for _, cookie := range request.Cookies() {
+		cookies[cookie.Name] = cookie.Value
+	}
+	gwenRequest := &HTTPRequestValue{
+		Method:  request.Method,
+		Path:    request.URL.Path,
+		Body:    string(body),
+		Query:   query,
+		Headers: copyHTTPHeaders(request.Header),
+		Cookies: cookies,
+	}
+
+	taskInterp, _, clonedHandler := i.forkValueForParallel(i.GlobalEnv, handler)
+	if clonedHandler == nil {
+		clonedHandler = handler
+	}
+	value, err := taskInterp.callCallable(clonedHandler, []any{gwenRequest}, 0)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeHTTPHandlerReply(value)
+}
+
+func normalizeHTTPHandlerReply(value any) (*HTTPReplyValue, error) {
+	switch value := value.(type) {
+	case *HTTPReplyValue:
+		return value, nil
+	case *OkValue:
+		reply, ok := value.Value.(*HTTPReplyValue)
+		if !ok {
+			return nil, fmt.Errorf("http.listen() handler ok(...) must wrap HttpReply, got %s", typeNameOf(value.Value))
+		}
+		return reply, nil
+	case *ErrValue:
+		return makeHTTPReplyValue("http.listen()", 500, "text/plain; charset=utf-8", formatDisplayValue(value.Value))
+	case nil:
+		return nil, fmt.Errorf("http.listen() handler returned nil; expected HttpReply or result[HttpReply]")
+	default:
+		return nil, fmt.Errorf("http.listen() handler must return HttpReply or result[HttpReply], got %s", typeNameOf(value))
+	}
+}
+
+func makeHTTPReplyValue(label string, status int64, contentType string, body string) (*HTTPReplyValue, error) {
+	if status < 100 || status > 999 {
+		return nil, fmt.Errorf("%s status must be between 100 and 999", label)
+	}
+	return &HTTPReplyValue{
+		Status:      status,
+		ContentType: contentType,
+		Body:        body,
+		Headers:     map[string][]string{},
+	}, nil
+}
+
+func makeJSONHTTPReply(status int64, value any) (*HTTPReplyValue, error) {
+	encoded, err := encodeJSONValue(value)
+	if err != nil {
+		return nil, err
+	}
+	data, err := stdjson.Marshal(encoded)
+	if err != nil {
+		return nil, err
+	}
+	return makeHTTPReplyValue("http.json()", status, "application/json; charset=utf-8", string(data))
+}
+
+func performHTTPRequest(label string, method string, url string, body string, headers map[string]string, timeoutMS int64) (any, error) {
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return nil, runtimeErrorf(0, "%s method must not be empty", label)
+	}
+	client := &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond}
+	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		return &ErrValue{Value: err.Error()}, nil
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return &ErrValue{Value: err.Error()}, nil
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &ErrValue{Value: err.Error()}, nil
+	}
+
+	return &OkValue{Value: &HTTPResponseValue{
+		Status:  int64(resp.StatusCode),
+		Body:    string(data),
+		Headers: copyHTTPHeaders(resp.Header),
+	}}, nil
+}
+
+func writeHTTPReply(writer http.ResponseWriter, reply *HTTPReplyValue) error {
+	if reply == nil {
+		return fmt.Errorf("http.listen() cannot write nil HttpReply")
+	}
+	for key, values := range reply.Headers {
+		for _, value := range values {
+			writer.Header().Add(key, value)
+		}
+	}
+	if reply.ContentType != "" {
+		writer.Header().Set("Content-Type", reply.ContentType)
+	}
+	writer.WriteHeader(int(reply.Status))
+	_, err := io.WriteString(writer, reply.Body)
+	return err
+}
+
+func copyHTTPHeaders(headers http.Header) map[string][]string {
+	copied := map[string][]string{}
+	for key, values := range headers {
+		if len(values) == 0 {
+			continue
+		}
+		canonical := textproto.CanonicalMIMEHeaderKey(key)
+		cloned := make([]string, 0, len(values))
+		cloned = append(cloned, values...)
+		copied[canonical] = cloned
+	}
+	return copied
+}
+
+func canonicalHTTPHeaderKey(key string) string {
+	return textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(key))
+}
+
+func convertHTTPHeaderDict(label string, value any) (map[string]string, error) {
+	if value == nil {
+		return nil, fmt.Errorf("%s requires dict[string, string] headers, got nil", label)
+	}
+	headers, ok := value.(map[any]any)
+	if !ok {
+		return nil, fmt.Errorf("%s requires dict[string, string] headers, got %s", label, typeNameOf(value))
+	}
+	converted := map[string]string{}
+	for rawKey, rawValue := range headers {
+		key, ok := rawKey.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s header key must be string, got %s", label, typeNameOf(rawKey))
+		}
+		headerValue, ok := rawValue.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s header '%s' must be string, got %s", label, key, typeNameOf(rawValue))
+		}
+		canonical := canonicalHTTPHeaderKey(key)
+		if canonical == "" {
+			return nil, fmt.Errorf("%s header key must not be empty", label)
+		}
+		converted[canonical] = headerValue
+	}
+	return converted, nil
+}
+
+func lookupHTTPHeader(headers map[string][]string, key string, fallback string) (string, error) {
+	canonical := canonicalHTTPHeaderKey(key)
+	if canonical == "" {
+		return "", fmt.Errorf("http header key must not be empty")
+	}
+	if values, ok := headers[canonical]; ok && len(values) > 0 {
+		return values[0], nil
+	}
+	return fallback, nil
+}
+
+func lookupHTTPCookie(cookies map[string]string, name string, fallback string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("http cookie name must not be empty")
+	}
+	if value, ok := cookies[name]; ok {
+		return value, nil
+	}
+	return fallback, nil
+}
+
+func cloneHTTPReplyValue(reply *HTTPReplyValue) *HTTPReplyValue {
+	if reply == nil {
+		return nil
+	}
+	cloned := &HTTPReplyValue{
+		Status:      reply.Status,
+		ContentType: reply.ContentType,
+		Body:        reply.Body,
+		Headers:     map[string][]string{},
+	}
+	for key, values := range reply.Headers {
+		cloned.Headers[key] = append([]string{}, values...)
+	}
+	return cloned
+}
+
+func setHTTPReplyHeader(reply *HTTPReplyValue, key string, value string) error {
+	canonical := canonicalHTTPHeaderKey(key)
+	if canonical == "" {
+		return fmt.Errorf("http header key must not be empty")
+	}
+	if canonical == "Content-Type" {
+		delete(reply.Headers, canonical)
+		reply.ContentType = value
+		return nil
+	}
+	if reply.Headers == nil {
+		reply.Headers = map[string][]string{}
+	}
+	reply.Headers[canonical] = []string{value}
+	return nil
+}
+
+func appendHTTPReplyHeader(reply *HTTPReplyValue, key string, value string) error {
+	canonical := canonicalHTTPHeaderKey(key)
+	if canonical == "" {
+		return fmt.Errorf("http header key must not be empty")
+	}
+	if canonical == "Content-Type" {
+		delete(reply.Headers, canonical)
+		reply.ContentType = value
+		return nil
+	}
+	if reply.Headers == nil {
+		reply.Headers = map[string][]string{}
+	}
+	reply.Headers[canonical] = append(reply.Headers[canonical], value)
+	return nil
+}
+
+func appendHTTPReplyCookie(reply *HTTPReplyValue, name string, value string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("http cookie name must not be empty")
+	}
+	encoded := (&http.Cookie{Name: name, Value: value, Path: "/"}).String()
+	if encoded == "" {
+		return fmt.Errorf("http.withcookie() could not encode cookie %q", name)
+	}
+	return appendHTTPReplyHeader(reply, "Set-Cookie", encoded)
+}
+
+func responseHeaderValues(reply *HTTPReplyValue, key string) []string {
+	if reply == nil {
+		return nil
+	}
+	canonical := canonicalHTTPHeaderKey(key)
+	if canonical == "" {
+		return nil
+	}
+	if canonical == "Content-Type" && reply.ContentType != "" {
+		return []string{reply.ContentType}
+	}
+	return reply.Headers[canonical]
+}
+
+func responseHasHeaderValue(reply *HTTPReplyValue, key string, value string) bool {
+	for _, current := range responseHeaderValues(reply, key) {
+		if current == value {
+			return true
+		}
+	}
+	return false
+}
+
+func routeRequestPath(requestPath string, pattern string) (bool, map[any]any) {
+	pathSegments := splitRouteSegments(requestPath)
+	patternSegments := splitRouteSegments(pattern)
+	if len(pathSegments) != len(patternSegments) {
+		return false, map[any]any{}
+	}
+
+	params := map[any]any{}
+	for idx, current := range patternSegments {
+		if strings.HasPrefix(current, ":") && len(current) > 1 {
+			params[current[1:]] = pathSegments[idx]
+			continue
+		}
+		if current != pathSegments[idx] {
+			return false, map[any]any{}
+		}
+	}
+	return true, params
+}
+
+func splitRouteSegments(value string) []string {
+	trimmed := strings.Trim(value, "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
+}
+
+func matchesHTTPPathPrefix(requestPath string, prefix string) bool {
+	if prefix == "/" {
+		return strings.HasPrefix(requestPath, "/")
+	}
+	return strings.HasPrefix(requestPath, prefix)
+}
+
+func loadStaticHTTPReply(requestPath string, prefix string, root string) (*HTTPReplyValue, error) {
+	if !matchesHTTPPathPrefix(requestPath, prefix) {
+		return nil, fmt.Errorf("path %q is not under prefix %q", requestPath, prefix)
+	}
+
+	relative := strings.TrimPrefix(requestPath, prefix)
+	relative = strings.TrimPrefix(relative, "/")
+	if relative == "" {
+		relative = "index.html"
+	}
+	cleaned := strings.TrimPrefix(path.Clean("/"+relative), "/")
+	fullPath := filepath.Join(root, filepath.FromSlash(cleaned))
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	contentType := mime.TypeByExtension(filepath.Ext(fullPath))
+	if contentType == "" {
+		contentType = http.DetectContentType(data)
+	}
+	if strings.HasPrefix(contentType, "text/") && !strings.Contains(contentType, "charset=") {
+		contentType += "; charset=utf-8"
+	}
+	return makeHTTPReplyValue("http.static()", 200, contentType, string(data))
+}
+
+func (i *Interpreter) pathBasenameBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "path.basename() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "path.basename() requires string path, got %s", typeNameOf(args[0]))
+		}
+		if value == "" {
+			return "", nil
+		}
+		return path.Base(value), nil
+	})
+}
+
+func (i *Interpreter) pathDirnameBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "path.dirname() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "path.dirname() requires string path, got %s", typeNameOf(args[0]))
+		}
+		if value == "" {
+			return "", nil
+		}
+		return path.Dir(value), nil
+	})
+}
+
+func (i *Interpreter) pathJoinBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "path.joinpath() expects 2 arguments, got %d", len(args))
+		}
+		left, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "path.joinpath() requires string left path, got %s", typeNameOf(args[0]))
+		}
+		right, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "path.joinpath() requires string right path, got %s", typeNameOf(args[1]))
+		}
+		return path.Join(left, right), nil
 	})
 }
 
@@ -2723,7 +3748,7 @@ func (i *Interpreter) jsonParseArrayBuiltin() Builtin {
 		if err != nil {
 			return &ErrValue{Value: err.Error()}, nil
 		}
-		array, ok := value.([]any)
+		array, ok := value.(*ListValue)
 		if !ok {
 			return &ErrValue{Value: "json.parsearray() requires top-level array"}, nil
 		}
@@ -2769,7 +3794,7 @@ func (i *Interpreter) jsonArrayBuiltin() Builtin {
 	return Builtin(func(args []any) (any, error) {
 		items := make([]any, len(args))
 		copy(items, args)
-		return items, nil
+		return newListValue(items), nil
 	})
 }
 
@@ -2790,6 +3815,450 @@ func (i *Interpreter) jsonIsNullBuiltin() Builtin {
 		_, ok := args[0].(*JSONNullValue)
 		return ok, nil
 	})
+}
+
+func (i *Interpreter) stateCellBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "state.cell() expects 1 argument, got %d", len(args))
+		}
+		cloned, err := cloneStateValue("state.cell()", args[0])
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return &CellValue{Value: cloned}, nil
+	})
+}
+
+func (i *Interpreter) stateGetBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "state.get() expects 1 argument, got %d", len(args))
+		}
+		cell, ok := args[0].(*CellValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "state.get() requires cell, got %s", typeNameOf(args[0]))
+		}
+		cell.mu.Lock()
+		snapshot := cell.Value
+		cell.mu.Unlock()
+
+		cloned, err := cloneStateValue("state.get()", snapshot)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) stateSetBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "state.set() expects 2 arguments, got %d", len(args))
+		}
+		cell, ok := args[0].(*CellValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "state.set() requires cell, got %s", typeNameOf(args[0]))
+		}
+		stored, err := cloneStateValue("state.set()", args[1])
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+
+		cell.mu.Lock()
+		cell.Value = stored
+		cell.mu.Unlock()
+
+		cloned, err := cloneStateValue("state.set()", stored)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) stateUpdateBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "state.update() expects 2 arguments, got %d", len(args))
+		}
+		cell, ok := args[0].(*CellValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "state.update() requires cell, got %s", typeNameOf(args[0]))
+		}
+
+		cell.mu.Lock()
+		current := cell.Value
+		working, err := cloneStateValue("state.update()", current)
+		if err != nil {
+			cell.mu.Unlock()
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		next, err := i.callCallable(args[1], []any{working}, 0)
+		if err != nil {
+			cell.mu.Unlock()
+			return nil, err
+		}
+		stored, err := cloneStateValue("state.update()", next)
+		if err != nil {
+			cell.mu.Unlock()
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		cell.Value = stored
+		cell.mu.Unlock()
+
+		cloned, err := cloneStateValue("state.update()", stored)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) sqliteOpenBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "sqlite.open() expects 1 argument, got %d", len(args))
+		}
+		path, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.open() requires string path, got %s", typeNameOf(args[0]))
+		}
+
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		if err := db.Ping(); err != nil {
+			_ = db.Close()
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: &SqliteDBValue{DB: db, Path: path}}, nil
+	})
+}
+
+func (i *Interpreter) sqliteCloseBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "sqlite.close() expects 1 argument, got %d", len(args))
+		}
+		db, ok := args[0].(*SqliteDBValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.close() requires SqliteDB, got %s", typeNameOf(args[0]))
+		}
+		if err := db.DB.Close(); err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: int64(0)}, nil
+	})
+}
+
+func (i *Interpreter) sqliteExecBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 && len(args) != 3 {
+			return nil, runtimeErrorf(0, "sqlite.exec() expects 2 or 3 arguments, got %d", len(args))
+		}
+		db, ok := args[0].(*SqliteDBValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.exec() requires SqliteDB, got %s", typeNameOf(args[0]))
+		}
+		statement, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.exec() requires string sql, got %s", typeNameOf(args[1]))
+		}
+
+		params := []any{}
+		if len(args) == 3 {
+			var err error
+			params, err = convertSQLiteParams("sqlite.exec()", args[2])
+			if err != nil {
+				return nil, runtimeErrorf(0, "%s", err.Error())
+			}
+		}
+
+		result, err := db.DB.Exec(statement, params...)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: affected}, nil
+	})
+}
+
+func (i *Interpreter) sqliteQueryBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 && len(args) != 3 {
+			return nil, runtimeErrorf(0, "sqlite.query() expects 2 or 3 arguments, got %d", len(args))
+		}
+		db, ok := args[0].(*SqliteDBValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.query() requires SqliteDB, got %s", typeNameOf(args[0]))
+		}
+		statement, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.query() requires string sql, got %s", typeNameOf(args[1]))
+		}
+
+		params := []any{}
+		if len(args) == 3 {
+			var err error
+			params, err = convertSQLiteParams("sqlite.query()", args[2])
+			if err != nil {
+				return nil, runtimeErrorf(0, "%s", err.Error())
+			}
+		}
+
+		rows, err := db.DB.Query(statement, params...)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		defer rows.Close()
+
+		columns, err := rows.Columns()
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+
+		items := []any{}
+		for rows.Next() {
+			rawValues := make([]any, len(columns))
+			dest := make([]any, len(columns))
+			for idx := range rawValues {
+				dest[idx] = &rawValues[idx]
+			}
+			if err := rows.Scan(dest...); err != nil {
+				return &ErrValue{Value: err.Error()}, nil
+			}
+
+			row := map[any]any{}
+			for idx, name := range columns {
+				converted, err := convertSQLiteRowValue(rawValues[idx])
+				if err != nil {
+					return &ErrValue{Value: err.Error()}, nil
+				}
+				row[name] = converted
+			}
+			items = append(items, row)
+		}
+		if err := rows.Err(); err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: newListValue(items)}, nil
+	})
+}
+
+func convertSQLiteParams(label string, value any) ([]any, error) {
+	items, ok := listLikeItems(value)
+	if !ok {
+		return nil, fmt.Errorf("%s requires list params, got %s", label, typeNameOf(value))
+	}
+	params := make([]any, len(items))
+	for idx, item := range items {
+		converted, err := convertSQLiteParamValue(label, idx, item)
+		if err != nil {
+			return nil, err
+		}
+		params[idx] = converted
+	}
+	return params, nil
+}
+
+func convertSQLiteParamValue(label string, idx int, value any) (any, error) {
+	switch value := value.(type) {
+	case int64, float64, string, bool:
+		return value, nil
+	case *JSONNullValue:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("%s param %d only supports int/float/string/bool/json.null(), got %s", label, idx+1, typeNameOf(value))
+	}
+}
+
+func convertSQLiteRowValue(value any) (any, error) {
+	switch value := value.(type) {
+	case nil:
+		return jsonNullValue, nil
+	case int64:
+		return value, nil
+	case float64:
+		return value, nil
+	case bool:
+		return value, nil
+	case string:
+		return value, nil
+	case []byte:
+		return string(value), nil
+	case int:
+		return int64(value), nil
+	case int8:
+		return int64(value), nil
+	case int16:
+		return int64(value), nil
+	case int32:
+		return int64(value), nil
+	case uint8:
+		return int64(value), nil
+	case uint16:
+		return int64(value), nil
+	case uint32:
+		return int64(value), nil
+	case uint:
+		if uint64(value) > math.MaxInt64 {
+			return nil, fmt.Errorf("sqlite.query() unsigned integer %d exceeds Gwen int range", value)
+		}
+		return int64(value), nil
+	case uint64:
+		if value > math.MaxInt64 {
+			return nil, fmt.Errorf("sqlite.query() unsigned integer %d exceeds Gwen int range", value)
+		}
+		return int64(value), nil
+	case float32:
+		return float64(value), nil
+	case time.Time:
+		return value.Format(time.RFC3339Nano), nil
+	default:
+		return nil, fmt.Errorf("sqlite.query() cannot convert column value of type %T", value)
+	}
+}
+
+type stateCloneContext struct {
+	lists        map[*ListValue]*ListValue
+	slices       map[uintptr][]any
+	dicts        map[uintptr]map[any]any
+	okValues     map[*OkValue]*OkValue
+	errValues    map[*ErrValue]*ErrValue
+	objectValues map[*ObjectValue]*ObjectValue
+}
+
+func cloneStateValue(label string, value any) (any, error) {
+	return newStateCloneContext().clone(label, value)
+}
+
+func newStateCloneContext() *stateCloneContext {
+	return &stateCloneContext{
+		lists:        map[*ListValue]*ListValue{},
+		slices:       map[uintptr][]any{},
+		dicts:        map[uintptr]map[any]any{},
+		okValues:     map[*OkValue]*OkValue{},
+		errValues:    map[*ErrValue]*ErrValue{},
+		objectValues: map[*ObjectValue]*ObjectValue{},
+	}
+}
+
+func (c *stateCloneContext) clone(label string, value any) (any, error) {
+	switch value := value.(type) {
+	case nil, int64, float64, string, bool, uninitialized:
+		return value, nil
+	case *MoneyValue:
+		return &MoneyValue{Raw: value.Raw, Currency: value.Currency}, nil
+	case *JSONNullValue:
+		return jsonNullValue, nil
+	case *CellValue:
+		return value, nil
+	case *ListValue:
+		if cloned, ok := c.lists[value]; ok {
+			return cloned, nil
+		}
+		cloned := &ListValue{Items: make([]any, len(value.Items))}
+		c.lists[value] = cloned
+		for idx, item := range value.Items {
+			next, err := c.clone(label, item)
+			if err != nil {
+				return nil, err
+			}
+			cloned.Items[idx] = next
+		}
+		return cloned, nil
+	case []any:
+		ptr := reflect.ValueOf(value).Pointer()
+		if ptr != 0 {
+			if cloned, ok := c.slices[ptr]; ok {
+				return cloned, nil
+			}
+		}
+		cloned := make([]any, len(value))
+		if ptr != 0 {
+			c.slices[ptr] = cloned
+		}
+		for idx, item := range value {
+			next, err := c.clone(label, item)
+			if err != nil {
+				return nil, err
+			}
+			cloned[idx] = next
+		}
+		return cloned, nil
+	case map[any]any:
+		ptr := reflect.ValueOf(value).Pointer()
+		if ptr != 0 {
+			if cloned, ok := c.dicts[ptr]; ok {
+				return cloned, nil
+			}
+		}
+		cloned := make(map[any]any, len(value))
+		if ptr != 0 {
+			c.dicts[ptr] = cloned
+		}
+		for key, item := range value {
+			nextKey, err := c.clone(label, key)
+			if err != nil {
+				return nil, err
+			}
+			nextValue, err := c.clone(label, item)
+			if err != nil {
+				return nil, err
+			}
+			cloned[nextKey] = nextValue
+		}
+		return cloned, nil
+	case *OkValue:
+		if cloned, ok := c.okValues[value]; ok {
+			return cloned, nil
+		}
+		cloned := &OkValue{}
+		c.okValues[value] = cloned
+		next, err := c.clone(label, value.Value)
+		if err != nil {
+			return nil, err
+		}
+		cloned.Value = next
+		return cloned, nil
+	case *ErrValue:
+		if cloned, ok := c.errValues[value]; ok {
+			return cloned, nil
+		}
+		cloned := &ErrValue{}
+		c.errValues[value] = cloned
+		next, err := c.clone(label, value.Value)
+		if err != nil {
+			return nil, err
+		}
+		cloned.Value = next
+		return cloned, nil
+	case *ObjectValue:
+		if cloned, ok := c.objectValues[value]; ok {
+			return cloned, nil
+		}
+		cloned := &ObjectValue{
+			TypeName: value.TypeName,
+			Fields:   map[string]any{},
+			Object:   value.Object,
+		}
+		c.objectValues[value] = cloned
+		for name, fieldValue := range value.Fields {
+			next, err := c.clone(label, fieldValue)
+			if err != nil {
+				return nil, err
+			}
+			cloned.Fields[name] = next
+		}
+		return cloned, nil
+	default:
+		return nil, fmt.Errorf("%s only supports data values, got %s", label, typeNameOf(value))
+	}
 }
 
 func decodeJSONText(text string) (any, error) {
@@ -2835,7 +4304,7 @@ func convertDecodedJSON(value any) (any, error) {
 			}
 			items[idx] = converted
 		}
-		return items, nil
+		return newListValue(items), nil
 	case map[string]any:
 		object := make(map[any]any, len(value))
 		for key, item := range value {
@@ -2859,6 +4328,16 @@ func encodeJSONValue(value any) (any, error) {
 		return value, nil
 	case *JSONNullValue:
 		return nil, nil
+	case *ListValue:
+		items := make([]any, len(value.Items))
+		for idx, item := range value.Items {
+			encoded, err := encodeJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			items[idx] = encoded
+		}
+		return items, nil
 	case []any:
 		items := make([]any, len(value))
 		for idx, item := range value {
@@ -3076,7 +4555,7 @@ func isKnownType(typeName string) bool {
 		return true
 	}
 	switch typeName {
-	case "int", "float", "string", "bool", "list", "dict", "func", "result", "float32", "float64", "HttpResponse", "JsonNull":
+	case "int", "float", "string", "bool", "list", "dict", "func", "result", "float32", "float64", "HttpRequest", "HttpReply", "HttpResponse", "HttpServer", "JsonNull", "SqliteDB", "cell":
 		return true
 	}
 	if strings.HasPrefix(typeName, "money[") && strings.HasSuffix(typeName, "]") {
@@ -3126,16 +4605,41 @@ func coerceIfTyped(value any, typeName string, line int) (any, error) {
 		return nil, runtimeErrorf(line, "Type mismatch: expected bool, got %s", typeNameOf(value))
 	case "list", "dict", "func", "result":
 		return value, nil
+	case "cell":
+		if _, ok := value.(*CellValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected cell, got %s", typeNameOf(value))
+	case "HttpRequest":
+		if _, ok := value.(*HTTPRequestValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected HttpRequest, got %s", typeNameOf(value))
+	case "HttpReply":
+		if _, ok := value.(*HTTPReplyValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected HttpReply, got %s", typeNameOf(value))
 	case "HttpResponse":
 		if _, ok := value.(*HTTPResponseValue); ok {
 			return value, nil
 		}
 		return nil, runtimeErrorf(line, "Type mismatch: expected HttpResponse, got %s", typeNameOf(value))
+	case "HttpServer":
+		if _, ok := value.(*HTTPServerValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected HttpServer, got %s", typeNameOf(value))
 	case "JsonNull":
 		if _, ok := value.(*JSONNullValue); ok {
 			return value, nil
 		}
 		return nil, runtimeErrorf(line, "Type mismatch: expected JsonNull, got %s", typeNameOf(value))
+	case "SqliteDB":
+		if _, ok := value.(*SqliteDBValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected SqliteDB, got %s", typeNameOf(value))
 	default:
 		if objectValue, ok := value.(*ObjectValue); ok && objectValue.TypeName == typeName {
 			return value, nil
@@ -3168,6 +4672,35 @@ func coerceIntRange(value any, typeName string, line int) (any, error) {
 	return intValue, nil
 }
 
+func newListValue(items []any) *ListValue {
+	if items == nil {
+		items = []any{}
+	}
+	return &ListValue{Items: items}
+}
+
+func listLikeItems(value any) ([]any, bool) {
+	switch value := value.(type) {
+	case *ListValue:
+		return value.Items, true
+	case []any:
+		return value, true
+	default:
+		return nil, false
+	}
+}
+
+func requireMutableList(value any, line int, name string) (*ListValue, error) {
+	list, ok := value.(*ListValue)
+	if ok {
+		return list, nil
+	}
+	if _, ok := value.([]any); ok {
+		return nil, runtimeErrorf(line, "%s() requires mutable list, got multi-value result", name)
+	}
+	return nil, runtimeErrorf(line, "%s() requires list, got %s", name, typeNameOf(value))
+}
+
 func zeroValue(typeName string, line int) (any, error) {
 	switch typeName {
 	case "int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32":
@@ -3179,7 +4712,7 @@ func zeroValue(typeName string, line int) (any, error) {
 	case "bool":
 		return false, nil
 	case "list":
-		return []any{}, nil
+		return newListValue(nil), nil
 	case "dict":
 		return map[any]any{}, nil
 	default:
@@ -3329,6 +4862,15 @@ func compareValues(op string, left, right any, line int) (bool, error) {
 
 func indexValue(object, index any, line int) (any, error) {
 	switch object := object.(type) {
+	case *ListValue:
+		intIndex, ok := index.(int64)
+		if !ok {
+			return nil, runtimeErrorf(line, "List index must be int, got %s", typeNameOf(index))
+		}
+		if intIndex < 0 || intIndex >= int64(len(object.Items)) {
+			return nil, runtimeErrorf(line, "Index out of range: %d", intIndex)
+		}
+		return object.Items[intIndex], nil
 	case []any:
 		intIndex, ok := index.(int64)
 		if !ok {
@@ -3360,6 +4902,16 @@ func indexValue(object, index any, line int) (any, error) {
 
 func assignIndex(object, index, value any, line int) error {
 	switch object := object.(type) {
+	case *ListValue:
+		intIndex, ok := index.(int64)
+		if !ok {
+			return runtimeErrorf(line, "List index must be int, got %s", typeNameOf(index))
+		}
+		if intIndex < 0 || intIndex >= int64(len(object.Items)) {
+			return runtimeErrorf(line, "Index out of range: %d", intIndex)
+		}
+		object.Items[intIndex] = value
+		return nil
 	case []any:
 		intIndex, ok := index.(int64)
 		if !ok {
@@ -3380,6 +4932,8 @@ func assignIndex(object, index, value any, line int) error {
 
 func toSlice(value any, line int) ([]any, error) {
 	switch value := value.(type) {
+	case *ListValue:
+		return value.Items, nil
 	case []any:
 		return value, nil
 	case string:
@@ -3398,6 +4952,20 @@ func compareRange(current, end, step int64) bool {
 		return current <= end
 	}
 	return current >= end
+}
+
+func consumeLoopSignal(signal *execSignal, loopName string) (consumed bool, exitLoop bool) {
+	if signal == nil || loopName == "" || signal.Name != loopName {
+		return false, false
+	}
+	switch signal.Kind {
+	case "leave":
+		return true, true
+	case "next":
+		return true, false
+	default:
+		return false, false
+	}
 }
 
 func requireBool(value any, context string, line int) error {
@@ -3424,6 +4992,8 @@ func typeNameOf(value any) string {
 		return "string"
 	case bool:
 		return "bool"
+	case *ListValue:
+		return "list"
 	case []any:
 		return "list"
 	case map[any]any:
@@ -3434,10 +5004,20 @@ func typeNameOf(value any) string {
 		return "err"
 	case *MoneyValue:
 		return "money[" + value.Currency + "]"
+	case *CellValue:
+		return "cell"
+	case *HTTPRequestValue:
+		return "HttpRequest"
+	case *HTTPReplyValue:
+		return "HttpReply"
 	case *HTTPResponseValue:
 		return "HttpResponse"
+	case *HTTPServerValue:
+		return "HttpServer"
 	case *JSONNullValue:
 		return "JsonNull"
+	case *SqliteDBValue:
+		return "SqliteDB"
 	case Builtin, *Function, *Lambda:
 		return "func"
 	case *Environment:
@@ -3464,34 +5044,51 @@ func formatValue(value any) string {
 	case float64:
 		return formatFloat(value)
 	case string:
-		return "'" + strings.ReplaceAll(value, "'", "\\'") + "'"
+		return formatJSONString(value)
 	case bool:
 		if value {
-			return "True"
+			return "true"
 		}
-		return "False"
+		return "false"
+	case *ListValue:
+		parts := make([]string, 0, len(value.Items))
+		for _, item := range value.Items {
+			parts = append(parts, formatValue(item))
+		}
+		return "[" + strings.Join(parts, ",") + "]"
 	case []any:
 		parts := make([]string, 0, len(value))
 		for _, item := range value {
 			parts = append(parts, formatValue(item))
 		}
-		return "[" + strings.Join(parts, ", ") + "]"
+		return "[" + strings.Join(parts, ",") + "]"
 	case map[any]any:
 		parts := make([]string, 0, len(value))
 		for key, item := range value {
-			parts = append(parts, fmt.Sprintf("%s: %s", formatValue(key), formatValue(item)))
+			parts = append(parts, fmt.Sprintf("%s:%s", formatValue(key), formatValue(item)))
 		}
-		return "{" + strings.Join(parts, ", ") + "}"
+		sort.Strings(parts)
+		return "{" + strings.Join(parts, ",") + "}"
 	case *OkValue:
 		return value.String()
 	case *ErrValue:
 		return value.String()
 	case *MoneyValue:
 		return formatMoney(value)
+	case *CellValue:
+		return "<cell>"
+	case *HTTPRequestValue:
+		return fmt.Sprintf("<HttpRequest %s %s>", value.Method, value.Path)
+	case *HTTPReplyValue:
+		return fmt.Sprintf("<HttpReply %d>", value.Status)
 	case *HTTPResponseValue:
 		return fmt.Sprintf("<HttpResponse %d>", value.Status)
+	case *HTTPServerValue:
+		return fmt.Sprintf("<HttpServer %s>", value.Addr)
 	case *JSONNullValue:
 		return "null"
+	case *SqliteDBValue:
+		return fmt.Sprintf("<SqliteDB %s>", value.Path)
 	case *Function:
 		return "<func " + value.Node.Name + ">"
 	case *Lambda:
@@ -3503,6 +5100,14 @@ func formatValue(value any) string {
 	default:
 		return fmt.Sprint(value)
 	}
+}
+
+func formatJSONString(value string) string {
+	encoded, err := stdjson.Marshal(value)
+	if err != nil {
+		return strconv.Quote(value)
+	}
+	return string(encoded)
 }
 
 func formatDisplayValue(value any) string {

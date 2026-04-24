@@ -61,6 +61,9 @@ const (
 	EndObject
 	New
 	EndNew
+	Pass
+	Leave
+	Next
 	Assign
 	Arrow
 	FatArrow
@@ -145,6 +148,9 @@ var typeNames = [...]string{
 	"ENDOBJECT",
 	"NEW",
 	"ENDNEW",
+	"PASS",
+	"LEAVE",
+	"NEXT",
 	"ASSIGN",
 	"ARROW",
 	"FAT_ARROW",

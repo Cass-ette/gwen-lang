@@ -113,6 +113,38 @@ write(x)""")
     assert out == "5"
 
 
+def test_pass():
+    out = run("""pass
+write("ok")""")
+    assert out == "ok"
+
+
+def test_named_loop_next_and_leave():
+    out = run("""x := 0
+while true do scan
+  x := x + 1
+  if x < 3 then
+    next scan
+  endif
+  leave scan
+endwhile scan
+write(x)""")
+    assert out == "3"
+
+
+def test_nested_leave_outer():
+    out = run("""hits := 0
+while true do outer
+  for i in 1 to 3 do inner
+    hits := hits + 1
+    leave outer
+  endfor inner
+  hits := 99
+endwhile outer
+write(hits)""")
+    assert out == "1"
+
+
 def test_for_range():
     out = run("""sum := 0
 for i in 1 to 5 do
@@ -248,6 +280,18 @@ endmodule
 
 use helper from math_utils
 write(helper(7))""")
+
+
+def test_leave_outside_loop_rejected():
+    import pytest
+    with pytest.raises(Exception, match="leave targets unknown loop 'scan'"):
+        run("leave scan")
+
+
+def test_next_outside_loop_rejected():
+    import pytest
+    with pytest.raises(Exception, match="next targets unknown loop 'scan'"):
+        run("next scan")
 
 
 def test_module_namespace_only_exposes_exports():
@@ -595,6 +639,47 @@ endfunc""")
     assert out == "9999"
 
 
+def test_mixed_explicit_integer_precision_rejected():
+    import pytest
+    with pytest.raises(Exception, match="mixed precision operation '\\+' requires explicit conversion: int8 and int16"):
+        run("""func main()
+  a: int8 := 1
+  b: int16 := 2
+  c := a + b
+  write(c)
+endfunc""")
+
+
+def test_mixed_explicit_float_precision_rejected():
+    import pytest
+    with pytest.raises(Exception, match="mixed precision operation '\\+' requires explicit conversion: float32 and float64"):
+        run("""func main()
+  a: float32 := 0.1
+  b: float64 := 0.2
+  c := a + b
+  write(c)
+endfunc""")
+
+
+def test_same_explicit_precision_allowed():
+    out = run("""func main()
+  a: int32 := 1
+  b: int32 := 2
+  c := a + b
+  write(c)
+endfunc""")
+    assert out == "3"
+
+
+def test_explicit_precision_with_literal_allowed():
+    out = run("""func main()
+  a: float32 := 0.1
+  b := a + 0.2
+  write(b)
+endfunc""")
+    assert out != ""
+
+
 def test_semantic_unknown_type_rejected():
     import pytest
     with pytest.raises(Exception, match="Unknown type: MissingType"):
@@ -893,12 +978,18 @@ def test_stdlib_cross_module_imports_work(tmp_path):
     path = tmp_path / "demo.txt"
     path.write_text("hello", encoding="utf-8")
     out = run(f"""func main()
-  use trim from string
+  use trim, startswith, endswith from string
   use abs from math
   use haskey from dict
   use readfile from io
+  use basename, dirname, joinpath from path
 
   write(trim("  hi  "))
+  write(startswith("docs/stdlib.md", "docs/"))
+  write(endswith("docs/stdlib.md", ".md"))
+  write(basename("docs/stdlib.md"))
+  write(dirname("docs/stdlib.md"))
+  write(joinpath("docs", "stdlib.md"))
   write(abs(-3))
   d := dict[string, int]{{"a": 1}}
   write(haskey(d, "a"))
@@ -907,7 +998,21 @@ def test_stdlib_cross_module_imports_work(tmp_path):
     when err(e) => write(e)
   endmatch
 endfunc""")
-    assert out == "hi\n3\nTrue\nhello"
+    assert out == "hi\nTrue\nTrue\nstdlib.md\ndocs\ndocs/stdlib.md\n3\nTrue\nhello"
+
+
+def test_stdlib_io_readdir_works(tmp_path):
+    (tmp_path / "b.txt").write_text("b", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "nested").mkdir()
+    out = run(f"""func main()
+  use readdir from io
+  match readdir("{tmp_path}")
+    when ok(entries) => write(entries)
+    when err(e) => write(e)
+  endmatch
+endfunc""")
+    assert out == "['a.txt', 'b.txt', 'nested']"
 
 
 def test_stdlib_list_map_filter_range_enumerate_work():

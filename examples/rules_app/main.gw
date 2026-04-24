@@ -6,122 +6,15 @@
 // - exercise result-based rule execution with explicit error handling
 // - exercise match-based reporting over final decisions
 
-object Request
-  id: string
-  customer: string
-  amount: float
-  country: string
-  customer_tier: string
-  docs_complete: bool
-  category: string
-
-  new(id: string, customer: string, amount: float, country: string, customer_tier: string, docs_complete: bool, category: string) -> Request
-    return Request{
-      id := id,
-      customer := customer,
-      amount := amount,
-      country := country,
-      customer_tier := customer_tier,
-      docs_complete := docs_complete,
-      category := category
-    }
-  endnew
-
-  func get_id(self: Request) -> string
-    return self.id
-  endfunc
-
-  func get_customer(self: Request) -> string
-    return self.customer
-  endfunc
-
-  func get_amount(self: Request) -> float
-    return self.amount
-  endfunc
-
-  func get_country(self: Request) -> string
-    return self.country
-  endfunc
-
-  func get_customer_tier(self: Request) -> string
-    return self.customer_tier
-  endfunc
-
-  func has_complete_docs(self: Request) -> bool
-    return self.docs_complete
-  endfunc
-
-  func get_category(self: Request) -> string
-    return self.category
-  endfunc
-
-  func describe(self: Request) -> string
-    parts := [
-      self.id,
-      self.customer,
-      self.country,
-      self.customer_tier,
-      self.category,
-      str(self.amount)
-    ]
-    return join(parts, " | ")
-  endfunc
-endobject
-
-object Decision
-  request_id: string
-  status: string
-  reasons: list
-
-  new(request_id: string) -> Decision
-    return Decision{
-      request_id := request_id,
-      status := "approve",
-      reasons := []
-    }
-  endnew
-
-  func get_request_id(self: Decision) -> string
-    return self.request_id
-  endfunc
-
-  func get_status(self: Decision) -> string
-    return self.status
-  endfunc
-
-  func get_reasons(self: Decision) -> list
-    return concat([], self.reasons)
-  endfunc
-
-  func add_reason(self: Decision, reason: string)
-    append(self.reasons, reason)
-  endfunc
-
-  func mark_review(self: Decision, reason: string)
-    if self.status = "approve" then
-      self.status := "review"
-    endif
-    self.add_reason("review: " + reason)
-  endfunc
-
-  func mark_reject(self: Decision, reason: string)
-    self.status := "reject"
-    self.add_reason("reject: " + reason)
-  endfunc
-
-  func add_note(self: Decision, reason: string)
-    self.add_reason("note: " + reason)
-  endfunc
-endobject
+use Request, Decision from rules_model
 
 func main()
-  use default_rules, run_rules from rules_engine
+  use run_rules from rules_engine
   use print_decision, print_batch_summary from rules_report
   use seed_requests from rules_seed
 
   write("== Gwen Rules App ==")
 
-  rules := default_rules()
   requests := seed_requests()
 
   approved := 0
@@ -130,7 +23,7 @@ func main()
   errors := 0
 
   for request in requests do
-    match run_rules(request, rules)
+    match run_rules(request)
       when ok(decision) =>
         print_decision(request, decision)
         match decision.get_status()

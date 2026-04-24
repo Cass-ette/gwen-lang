@@ -120,6 +120,26 @@ func (p *Parser) parseStatement() (any, error) {
 		}
 	}
 
+	if tok.Type == token.Identifier {
+		switch tok.Value {
+		case "pass":
+			next := p.peekNext()
+			if next == nil || next.Type == token.Newline || next.Type == token.EOF {
+				return p.parsePass()
+			}
+		case "leave":
+			next := p.peekNext()
+			if next != nil && next.Type == token.Identifier {
+				return p.parseLeave()
+			}
+		case "next":
+			next := p.peekNext()
+			if next != nil && next.Type == token.Identifier {
+				return p.parseNext()
+			}
+		}
+	}
+
 	return p.parseAssignmentOrExpr()
 }
 
@@ -776,23 +796,9 @@ func (p *Parser) parseFuncDef(exported bool) (any, error) {
 	var returnType any
 	if p.at(token.Arrow) {
 		p.advance()
-		typeNode, err := p.parseType()
+		returnType, err = p.parseReturnTypeAnnotation()
 		if err != nil {
 			return nil, err
-		}
-		typeNodes := []any{typeNode}
-		for p.at(token.Comma) {
-			p.advance()
-			typeNode, err := p.parseType()
-			if err != nil {
-				return nil, err
-			}
-			typeNodes = append(typeNodes, typeNode)
-		}
-		if len(typeNodes) == 1 {
-			returnType = typeNodes[0]
-		} else {
-			returnType = typeNodes
 		}
 	}
 
@@ -843,7 +849,7 @@ func (p *Parser) parseType() (any, error) {
 		if _, err := p.expect(token.Arrow); err != nil {
 			return nil, err
 		}
-		returnType, err := p.parseType()
+		returnType, err := p.parseReturnTypeAnnotation()
 		if err != nil {
 			return nil, err
 		}
@@ -973,6 +979,7 @@ func (p *Parser) parseWhile() (any, error) {
 	if _, err := p.expect(token.Do); err != nil {
 		return nil, err
 	}
+	name := p.parseOptionalLineLabel()
 	body, err := p.parseBlockUntil(token.EndWhile)
 	if err != nil {
 		return nil, err
@@ -980,7 +987,14 @@ func (p *Parser) parseWhile() (any, error) {
 	if _, err := p.expect(token.EndWhile); err != nil {
 		return nil, err
 	}
-	return &ast.WhileStmt{Condition: condition, Body: body, Line: tok.Line}, nil
+	endName, err := p.parseOptionalLoopEndName()
+	if err != nil {
+		return nil, err
+	}
+	if name != "" && endName != "" && name != endName {
+		return nil, p.errorf(p.peek(), "loop name mismatch: started %q, ended %q", name, endName)
+	}
+	return &ast.WhileStmt{Condition: condition, Name: firstNonEmpty(name, endName), Body: body, Line: tok.Line}, nil
 }
 
 func (p *Parser) parseFor() (any, error) {
@@ -1026,6 +1040,7 @@ func (p *Parser) parseFor() (any, error) {
 		if _, err := p.expect(token.Do); err != nil {
 			return nil, err
 		}
+		loopName := p.parseOptionalLineLabel()
 		body, err := p.parseBlockUntil(token.EndFor)
 		if err != nil {
 			return nil, err
@@ -1033,12 +1048,20 @@ func (p *Parser) parseFor() (any, error) {
 		if _, err := p.expect(token.EndFor); err != nil {
 			return nil, err
 		}
+		endName, err := p.parseOptionalLoopEndName()
+		if err != nil {
+			return nil, err
+		}
+		if loopName != "" && endName != "" && loopName != endName {
+			return nil, p.errorf(p.peek(), "loop name mismatch: started %q, ended %q", loopName, endName)
+		}
 		return &ast.ForRangeStmt{
 			Var:       nameTok.Value,
 			Start:     start,
 			End:       end,
 			Step:      step,
 			Direction: direction,
+			Name:      firstNonEmpty(loopName, endName),
 			Body:      body,
 			Line:      tok.Line,
 		}, nil
@@ -1064,6 +1087,7 @@ func (p *Parser) parseFor() (any, error) {
 			return nil, err
 		}
 	}
+	loopName := p.parseOptionalLineLabel()
 	body, err := p.parseBlockUntil(token.EndFor)
 	if err != nil {
 		return nil, err
@@ -1071,10 +1095,18 @@ func (p *Parser) parseFor() (any, error) {
 	if _, err := p.expect(token.EndFor); err != nil {
 		return nil, err
 	}
+	endName, err := p.parseOptionalLoopEndName()
+	if err != nil {
+		return nil, err
+	}
+	if loopName != "" && endName != "" && loopName != endName {
+		return nil, p.errorf(p.peek(), "loop name mismatch: started %q, ended %q", loopName, endName)
+	}
 	return &ast.ForEachStmt{
 		Var:      nameTok.Value,
 		Iterable: start,
 		IndexVar: indexVar,
+		Name:     firstNonEmpty(loopName, endName),
 		Body:     body,
 		Line:     tok.Line,
 	}, nil
@@ -1261,6 +1293,50 @@ func (p *Parser) parseReturn() (any, error) {
 		value = values
 	}
 	return &ast.ReturnStmt{Value: value, Line: tok.Line}, nil
+}
+
+func (p *Parser) parsePass() (any, error) {
+	tok := p.peek()
+	if tok.Type == token.Pass {
+		p.advance()
+	} else if tok.Type == token.Identifier && tok.Value == "pass" {
+		p.advance()
+	} else {
+		return nil, p.errorf(tok, "expected 'pass'")
+	}
+	return &ast.PassStmt{Line: tok.Line}, nil
+}
+
+func (p *Parser) parseLeave() (any, error) {
+	tok := p.peek()
+	if tok.Type == token.Leave {
+		p.advance()
+	} else if tok.Type == token.Identifier && tok.Value == "leave" {
+		p.advance()
+	} else {
+		return nil, p.errorf(tok, "expected 'leave'")
+	}
+	nameTok, err := p.expect(token.Identifier)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.LeaveStmt{Name: nameTok.Value, Line: tok.Line}, nil
+}
+
+func (p *Parser) parseNext() (any, error) {
+	tok := p.peek()
+	if tok.Type == token.Next {
+		p.advance()
+	} else if tok.Type == token.Identifier && tok.Value == "next" {
+		p.advance()
+	} else {
+		return nil, p.errorf(tok, "expected 'next'")
+	}
+	nameTok, err := p.expect(token.Identifier)
+	if err != nil {
+		return nil, err
+	}
+	return &ast.NextStmt{Name: nameTok.Value, Line: tok.Line}, nil
 }
 
 func (p *Parser) parseGlobal() (any, error) {
@@ -1546,7 +1622,7 @@ func (p *Parser) parseConstructorDef(objectName string) (*ast.ConstructorDef, er
 	var returnType any
 	if p.at(token.Arrow) {
 		p.advance()
-		returnType, err = p.parseType()
+		returnType, err = p.parseReturnTypeAnnotation()
 		if err != nil {
 			return nil, err
 		}
@@ -1596,7 +1672,7 @@ func (p *Parser) parseMethodDef() (*ast.MethodDef, error) {
 	var returnType any
 	if p.at(token.Arrow) {
 		p.advance()
-		returnType, err = p.parseType()
+		returnType, err = p.parseReturnTypeAnnotation()
 		if err != nil {
 			return nil, err
 		}
@@ -1615,6 +1691,29 @@ func (p *Parser) parseMethodDef() (*ast.MethodDef, error) {
 		Body:       body,
 		Line:       tok.Line,
 	}, nil
+}
+
+func (p *Parser) parseReturnTypeAnnotation() (any, error) {
+	typeNode, err := p.parseType()
+	if err != nil {
+		return nil, err
+	}
+	typeNodes := []any{typeNode}
+	for p.at(token.Comma) {
+		if p.pos+2 < len(p.tokens) && p.tokens[p.pos+1].Type == token.Identifier && p.tokens[p.pos+2].Type == token.Colon {
+			break
+		}
+		p.advance()
+		typeNode, err := p.parseType()
+		if err != nil {
+			return nil, err
+		}
+		typeNodes = append(typeNodes, typeNode)
+	}
+	if len(typeNodes) == 1 {
+		return typeNodes[0], nil
+	}
+	return typeNodes, nil
 }
 
 func (p *Parser) peek() token.Token {
@@ -1661,6 +1760,31 @@ func (p *Parser) skipNewlines() {
 	}
 }
 
+func (p *Parser) parseOptionalLineLabel() string {
+	if !p.at(token.Identifier) {
+		return ""
+	}
+	next := p.peekNext()
+	if next == nil {
+		return ""
+	}
+	if next.Type != token.Newline && next.Type != token.EOF {
+		return ""
+	}
+	return p.advance().Value
+}
+
+func (p *Parser) parseOptionalLoopEndName() (string, error) {
+	if !p.at(token.Identifier) {
+		return "", nil
+	}
+	next := p.peekNext()
+	if next != nil && next.Type != token.Newline && next.Type != token.EOF {
+		return "", p.errorf(p.peek(), "expected newline after loop name")
+	}
+	return p.advance().Value, nil
+}
+
 func (p *Parser) errorf(tok token.Token, format string, args ...any) error {
 	return &Error{
 		Message: fmt.Sprintf(format, args...),
@@ -1679,6 +1803,15 @@ func assignmentTarget(expr any) (any, bool) {
 	default:
 		return nil, false
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func lineOf(node any) int {

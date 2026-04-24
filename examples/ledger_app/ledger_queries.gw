@@ -1,5 +1,6 @@
 module ledger_queries
 use print_lines from ledger_view
+use Ledger from ledger_model
 
 export func print_query_results(ledger: Ledger, title: string, category: string = "", kind: string = "", month: string = "", note_keyword: string = "")
   lines := ledger.list_entries(category, kind, month, note_keyword)

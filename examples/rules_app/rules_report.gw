@@ -1,4 +1,5 @@
 module rules_report
+use Request, Decision from rules_model
 
 export func print_decision(request: Request, decision: Decision)
   write("Request:", request.describe())

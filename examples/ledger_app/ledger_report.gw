@@ -1,10 +1,11 @@
 module ledger_report
 use print_lines from ledger_view
+use Ledger from ledger_model
 
 func category_lines(ledger: Ledger, month: string = "") -> list[string]
   totals := ledger.category_totals(month)
   categories := sort(keys(totals), asc)
-  lines := []
+  lines: list[string] := []
   for category in categories do
     append(lines, category + " => " + str(totals[category]))
   endfor

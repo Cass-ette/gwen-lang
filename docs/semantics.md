@@ -65,6 +65,7 @@
 - `money[T] * float`（精度损失，需显式 `as float`）
 - `string + int`（必须显式 `str(n)`）
 - `list + non-list`（类型不匹配）
+- 不同**显式精度类型**直接混算（如 `int8 + int16`, `float32 + float64`），需先 `as` 到同一目标类型
 
 ### 2.2 比较运算
 
@@ -117,7 +118,27 @@
 - `for x in int`（非可遍历类型报错）
 - `for x in result`（错误处理类型禁止遍历）
 
-### 3.3 match 模式
+### 3.3 显式循环控制
+
+- `pass` 是显式空操作，不产生运行时效果。
+- Gwen 不提供隐式 `break` / `continue`。
+- 需要跳出或进入下一轮时，使用命名循环配合 `leave <name>` / `next <name>`：
+
+```
+while running do scan
+  if bad_line then
+    next scan
+  endif
+
+  if done then
+    leave scan
+  endif
+endwhile scan
+```
+
+- `leave` / `next` 只能指向当前或外层的已命名循环；不能跨函数、方法、构造器或 lambda。
+
+### 3.4 match 模式
 
 | Subject 类型 | 允许的模式 | 强制覆盖 |
 |--------------|------------|----------|
@@ -210,7 +231,7 @@
 | 运行时类型不匹配 | 抛错 | `'if' condition must be bool` |
 | 算术溢出（定宽类型） | 抛错 | `int8 overflow` |
 | 索引/键不存在 | 抛错 | `index out of range` |
-| 可能失败的操作 | `result[T]` | `readfile`, `as`（future） |
+| 可能失败的操作 | `result[T]` | `readfile`, `readdir`, `as`（future） |
 
 **原则**：错误不静默，失败即崩溃（或强制处理的 `result`）。
 

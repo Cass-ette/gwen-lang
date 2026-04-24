@@ -1,0 +1,21 @@
+use http
+use args from os
+
+func target_url() -> string
+  argv := args()
+  if len(argv) >= 1 then
+    return argv[0]
+  endif
+  return "https://httpbin.org/post"
+endfunc
+
+func main()
+  headers := dict[string, string]{"Content-Type": "application/json"}
+  match http.request("POST", target_url(), "{\"lang\":\"gwen\"}", headers)
+    when ok(resp) =>
+      write("status:", http.status(resp))
+      write("content-type:", http.responseheader(resp, "Content-Type", "missing"))
+    when err(e) =>
+      write("request failed:", e)
+  endmatch
+endfunc

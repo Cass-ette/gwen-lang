@@ -298,6 +298,18 @@ func main()
 endfunc`, "Cannot assign (string) -> int to 'f' ((int) -> int)")
 }
 
+func TestMultiReturnFunctionTypeCallAccepted(t *testing.T) {
+	requireOK(t, `func pair(x: int) -> int, int
+  return x, x + 1
+endfunc
+
+func main()
+  f: (int) -> int, int := pair
+  left, right := f(4)
+  write(left, right)
+endfunc`)
+}
+
 func TestMultiAssignCountMismatchRejected(t *testing.T) {
 	requireErrorContains(t, `func one() -> int
   return 1
@@ -399,6 +411,52 @@ func TestForRangeZeroIterationBindingDoesNotLeak(t *testing.T) {
   for i in 1 to 0 step 1 do
     x := i
   endfor
+  write(x)
+endfunc`, "Undefined variable: x")
+}
+
+func TestPassStatementAccepted(t *testing.T) {
+	requireOK(t, `func main()
+  pass
+endfunc`)
+}
+
+func TestLeaveOutsideLoopRejected(t *testing.T) {
+	requireErrorContains(t, `func main()
+  leave scan
+endfunc`, "leave targets unknown loop 'scan'")
+}
+
+func TestNextOutsideLoopRejected(t *testing.T) {
+	requireErrorContains(t, `func main()
+  next scan
+endfunc`, "next targets unknown loop 'scan'")
+}
+
+func TestNamedLoopControlAccepted(t *testing.T) {
+	requireOK(t, `func main()
+  while true do scan
+    next scan
+  endwhile scan
+endfunc`)
+}
+
+func TestNestedLeaveOuterAccepted(t *testing.T) {
+	requireOK(t, `func main()
+  while true do outer
+    while true do inner
+      leave outer
+    endwhile inner
+  endwhile outer
+endfunc`)
+}
+
+func TestLeavePreventsLaterBindingLeak(t *testing.T) {
+	requireErrorContains(t, `func main()
+  while true do scan
+    leave scan
+    x := 1
+  endwhile scan
   write(x)
 endfunc`, "Undefined variable: x")
 }
@@ -577,15 +635,79 @@ func main()
 endfunc`)
 }
 
+func TestStringAndPathStdlibModulesTypeCheck(t *testing.T) {
+	requireOK(t, `use startswith, endswith from string
+use basename, dirname, joinpath from path
+
+func main()
+  head: bool := startswith("docs/stdlib.md", "docs/")
+  tail: bool := endswith("docs/stdlib.md", ".md")
+  file: string := basename("docs/stdlib.md")
+  dir: string := dirname("docs/stdlib.md")
+  joined: string := joinpath(dir, file)
+  write(head, tail, joined)
+endfunc`)
+}
+
+func TestReadPromptRequiresString(t *testing.T) {
+	requireErrorContains(t, `func main()
+  name := read(1)
+  write(name)
+endfunc`, "Argument 'prompt' to 'read' expects string, got int")
+}
+
 func TestHTTPModuleNamespaceImportTypeCheck(t *testing.T) {
 	requireOK(t, `use http
 
 func main()
   response: result[HttpResponse] := http.get("https://example.com")
   match response
-    when ok(resp) => write(http.status(resp), len(http.body(resp)))
+    when ok(resp) => write(http.status(resp), len(http.responsebody(resp)))
     when err(e) => write(e)
   endmatch
+endfunc`)
+}
+
+func TestHTTPRequestModuleTypeCheck(t *testing.T) {
+	requireOK(t, `use http
+
+func main()
+  headers := dict[string, string]{"Authorization": "Bearer demo", "Content-Type": "application/json"}
+  response: result[HttpResponse] := http.request("POST", "https://example.com/api", "{\"ok\":true}", headers)
+  match response
+    when ok(resp) => write(http.status(resp), http.responseheader(resp, "X-Trace", "missing"))
+    when err(e) => write(e)
+  endmatch
+endfunc`)
+}
+
+func TestHTTPServerModuleTypeCheck(t *testing.T) {
+	requireOK(t, `use http
+use json
+
+func handle(req: HttpRequest) -> result[HttpReply]
+  matched, params := http.route(req, "/hello/:name")
+  if matched then
+    session := http.requestcookie(req, "session", "guest")
+    reply := http.withheader(http.text(200, http.requestheader(req, "X-Token", "guest")), "X-Mode", "demo")
+    write(reply)
+    redirected := http.withcookie(http.redirect(303, "/home"), "session", session)
+    write(redirected)
+    return http.json(200, json.objectof("name", params["name"], "lang", http.query(req, "lang", "en"), "method", http.method(req), "body", http.requestbody(req), "session", session))
+  endif
+  matched, served := http.static(req, "/assets/", "examples/http_server_public")
+  if matched then
+    match served
+      when ok(reply) => return ok(reply)
+      when err(e) => return ok(http.text(404, e))
+    endmatch
+  endif
+  return ok(http.text(404, "missing"))
+endfunc
+
+func main()
+  started: result[HttpServer] := http.listen("127.0.0.1:0", handle)
+  write(started, http.static)
 endfunc`)
 }
 
@@ -600,6 +722,116 @@ func main()
   nothing: JsonNull := json.null()
   write(encoded, parsed, items, json.isnull(nothing))
 endfunc`)
+}
+
+func TestStateModuleTypeCheck(t *testing.T) {
+	requireOK(t, `use state
+
+func main()
+  counter: cell[int] := state.cell(0)
+  current: int := state.get(counter)
+  next: int := state.set(counter, current + 1)
+  done: int := state.update(counter, (n: int) => n + 1)
+  write(current, next, done)
+endfunc`)
+}
+
+func TestEnumerateInfersListOfLists(t *testing.T) {
+	requireOK(t, `use enumerate from list
+
+func main()
+  indexed: list[list] := enumerate(["a", "b", "c"])
+  write(indexed[1][0], indexed[1][1])
+endfunc`)
+}
+
+func TestItemsInfersListOfLists(t *testing.T) {
+	requireOK(t, `use items from dict
+
+func main()
+  scores := dict[string, int]{"alice": 1, "bob": 2}
+  pairs: list[list] := items(scores)
+  write(len(pairs))
+endfunc`)
+}
+
+func TestPopInfersTypedItem(t *testing.T) {
+	requireOK(t, `use pop from list
+
+func main()
+  items: list[int] := [1, 2, 3]
+  last: int := pop(items)
+  write(last, items)
+endfunc`)
+}
+
+func TestRemoveAtInfersTypedItem(t *testing.T) {
+	requireOK(t, `use removeat from list
+
+func main()
+  items: list[int] := [10, 20, 30]
+  removed: int := removeat(items, 1)
+  write(removed, items)
+endfunc`)
+}
+
+func TestStateSetRejectsWrongValueType(t *testing.T) {
+	requireErrorContains(t, `use state
+
+func main()
+  counter: cell[int] := state.cell(0)
+  state.set(counter, "bad")
+endfunc`, "Argument 'value' to 'set' expects int, got string")
+}
+
+func TestStateUpdateRejectsWrongCallbackSignature(t *testing.T) {
+	requireErrorContains(t, `use state
+
+func main()
+  counter: cell[int] := state.cell(0)
+  state.update(counter, (s: string) => s)
+endfunc`, "Argument 'f' to 'update' expects (int) -> int")
+}
+
+func TestStateUpdateRejectsWrongCallbackReturnType(t *testing.T) {
+	requireErrorContains(t, `use state
+
+func main()
+  counter: cell[int] := state.cell(0)
+  state.update(counter, (n: int) => "bad")
+endfunc`, "Argument 'f' to 'update' must return int, got string")
+}
+
+func TestSqliteModuleTypeCheck(t *testing.T) {
+	requireOK(t, `use sqlite
+use json
+
+func main()
+  match sqlite.open("/tmp/gwen_sqlite_demo.db")
+    when ok(db) =>
+      handle: SqliteDB := db
+      created: result[int] := sqlite.exec(handle, "create table if not exists notes(id integer primary key, body text, deleted_at text)", [])
+      inserted: result[int] := sqlite.exec(handle, "insert into notes(body, deleted_at) values(?, ?)", ["ship it", json.null()])
+      rows: result[list[dict]] := sqlite.query(handle, "select body, deleted_at from notes order by id", [])
+      closed: result[int] := sqlite.close(handle)
+      write(created, inserted, rows, closed)
+    when err(e) =>
+      write(e)
+  endmatch
+endfunc`)
+}
+
+func TestSqliteExecRejectsNonListParams(t *testing.T) {
+	requireErrorContains(t, `use sqlite
+
+func main()
+  match sqlite.open(":memory:")
+    when ok(db) =>
+      sqlite.exec(db, "select 1", 1)
+    when err(e) =>
+      write(e)
+  endmatch
+endfunc`, "Argument 'params' to 'exec' expects list, got int")
 }
 
 func TestOSTimeModuleOnlyBuiltinsRequireImport(t *testing.T) {
@@ -635,6 +867,16 @@ func main()
 endfunc`, "Argument 'timeoutms' to 'get' expects int, got string")
 }
 
+func TestHTTPRequestHeadersRequireStringDict(t *testing.T) {
+	requireErrorContains(t, `use http
+
+func main()
+  headers := dict[string, int]{"X-Trace": 1}
+  body := http.request("POST", "https://example.com", "{}", headers)
+  write(body)
+endfunc`, "Argument 'headers' to 'request' expects dict[string, string], got dict[string, int]")
+}
+
 func TestHTTPStatusRequiresResponseType(t *testing.T) {
 	requireErrorContains(t, `use http
 
@@ -642,6 +884,65 @@ func main()
   code := http.status("bad")
   write(code)
 endfunc`, "Argument 'response' to 'status' expects HttpResponse, got string")
+}
+
+func TestHTTPRequestBodyRequiresRequestType(t *testing.T) {
+	requireErrorContains(t, `use http
+
+func main()
+  body := http.requestbody("bad")
+  write(body)
+endfunc`, "Argument 'request' to 'requestbody' expects HttpRequest, got string")
+}
+
+func TestHTTPQueryRequiresExplicitFallback(t *testing.T) {
+	requireErrorContains(t, `use http
+
+func handle(req: HttpRequest) -> HttpReply
+  return http.text(200, http.query(req, "lang"))
+endfunc`, "Missing argument: fallback")
+}
+
+func TestHTTPResponseHeaderRequiresResponseType(t *testing.T) {
+	requireErrorContains(t, `use http
+
+func main()
+  value := http.responseheader("bad", "X-Trace", "none")
+  write(value)
+endfunc`, "Argument 'response' to 'responseheader' expects HttpResponse, got string")
+}
+
+func TestHTTPRequestCookieRequiresRequestType(t *testing.T) {
+	requireErrorContains(t, `use http
+
+func main()
+  value := http.requestcookie("bad", "session", "guest")
+  write(value)
+endfunc`, "Argument 'request' to 'requestcookie' expects HttpRequest, got string")
+}
+
+func TestHTTPListenRejectsWrongHandlerParameter(t *testing.T) {
+	requireErrorContains(t, `use http
+
+func bad(req: string) -> HttpReply
+  return http.text(200, req)
+endfunc
+
+func main()
+  http.listen("127.0.0.1:0", bad)
+endfunc`, "Argument 'handler' to 'listen' expects (HttpRequest) -> ...")
+}
+
+func TestHTTPListenRejectsWrongHandlerReturnType(t *testing.T) {
+	requireErrorContains(t, `use http
+
+func bad(req: HttpRequest) -> string
+  return "nope"
+endfunc
+
+func main()
+  http.listen("127.0.0.1:0", bad)
+endfunc`, "Argument 'handler' to 'listen' must return HttpReply or result[HttpReply]")
 }
 
 func TestJSONParseObjectRequiresString(t *testing.T) {
@@ -811,6 +1112,41 @@ id: UserId := 17
 func TestUseRejectsModuleNamespaceConflict(t *testing.T) {
 	requireErrorContains(t, `math := 1
 use math`, "Cannot import module 'math': name already defined in current scope")
+}
+
+func TestMixedExplicitIntegerPrecisionRejected(t *testing.T) {
+	requireErrorContains(t, `func main()
+  a: int8 := 1
+  b: int16 := 2
+  c := a + b
+  write(c)
+endfunc`, "mixed precision operation '+' requires explicit conversion: int8 and int16")
+}
+
+func TestMixedExplicitFloatPrecisionRejected(t *testing.T) {
+	requireErrorContains(t, `func main()
+  a: float32 := 0.1
+  b: float64 := 0.2
+  c := a + b
+  write(c)
+endfunc`, "mixed precision operation '+' requires explicit conversion: float32 and float64")
+}
+
+func TestSameExplicitPrecisionAllowed(t *testing.T) {
+	requireOK(t, `func main()
+  a: int32 := 1
+  b: int32 := 2
+  c := a + b
+  write(c)
+endfunc`)
+}
+
+func TestExplicitPrecisionWithLiteralStillAllowed(t *testing.T) {
+	requireOK(t, `func main()
+  a: float32 := 0.1
+  b := a + 0.2
+  write(b)
+endfunc`)
 }
 
 func TestUseRejectsModuleFileWithExtraTopLevelStatements(t *testing.T) {

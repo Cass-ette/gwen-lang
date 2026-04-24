@@ -4,7 +4,7 @@
 module segment_tree
 
 // Build segment tree from array
-export func build(tree: list, arr: list, node: int, start: int, end: int)
+export func build(tree: list[int], arr: list[int], node: int, start: int, end: int)
   // write("build", node, start, end)
   if start = end then
     tree[node] := arr[start]
@@ -21,7 +21,7 @@ export func build(tree: list, arr: list, node: int, start: int, end: int)
 endfunc
 
 // Query sum in range [left, right]
-export func query(tree: list, node: int, start: int, end: int, left: int, right: int)
+export func query(tree: list[int], node: int, start: int, end: int, left: int, right: int) -> result[int]
   // Out of range
   if right < start or end < left then
     return ok(0)
@@ -54,7 +54,7 @@ export func query(tree: list, node: int, start: int, end: int, left: int, right:
 endfunc
 
 // Update element at index to new value
-export func update(tree: list, node: int, start: int, end: int, index: int, value: int)
+export func update(tree: list[int], node: int, start: int, end: int, index: int, value: int)
   if start = end then
     tree[node] := value
   else
@@ -73,8 +73,8 @@ export func update(tree: list, node: int, start: int, end: int, index: int, valu
 endfunc
 
 // Helper: create tree array with size 4*n initialized to 0
-export func create_tree(n: int)
-  tree := []
+export func create_tree(n: int) -> list[int]
+  tree: list[int] := []
   for i in 1 to int(n * 4) do
     append(tree, 0)
   endfor

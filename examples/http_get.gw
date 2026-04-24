@@ -1,10 +1,19 @@
 use http
+use args from os
+
+func target_url() -> string
+  argv := args()
+  if len(argv) >= 1 then
+    return argv[0]
+  endif
+  return "https://example.com"
+endfunc
 
 func main()
-  match http.get("https://example.com")
+  match http.get(target_url())
     when ok(resp) =>
       write("status:", http.status(resp))
-      write("bytes:", len(http.body(resp)))
+      write("bytes:", len(http.responsebody(resp)))
     when err(e) => write("http failed:", e)
   endmatch
 endfunc

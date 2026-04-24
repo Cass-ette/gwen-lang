@@ -2,11 +2,15 @@ package interpreter_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -33,11 +37,56 @@ func runProgram(t *testing.T, source string) (*interpreter.Interpreter, string) 
 	return interp, strings.TrimSpace(out.String())
 }
 
+func startHTTPServer(t *testing.T, source string) (*interpreter.Interpreter, *interpreter.HTTPServerValue) {
+	t.Helper()
+
+	interp, _ := runProgram(t, source)
+	value, err := interp.GlobalEnv.Get("started")
+	if err != nil {
+		if startup, startupErr := interp.GlobalEnv.Get("startup_error"); startupErr == nil {
+			t.Fatalf("server failed to start: %v", startup)
+		}
+		t.Fatalf("missing started server handle: %v", err)
+	}
+	server, ok := value.(*interpreter.HTTPServerValue)
+	if !ok {
+		t.Fatalf("started has wrong type: %T", value)
+	}
+	return interp, server
+}
+
+func stopHTTPServer(t *testing.T, server *interpreter.HTTPServerValue) {
+	t.Helper()
+
+	if err := server.Server.Close(); err != nil && !strings.Contains(err.Error(), "Server closed") {
+		t.Fatalf("close failed: %v", err)
+	}
+	select {
+	case <-server.ErrCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for server shutdown")
+	}
+}
+
 func runSource(t *testing.T, source string) string {
 	t.Helper()
 
 	_, out := runProgram(t, source)
 	return out
+}
+
+func requireListItems(t *testing.T, value any) []any {
+	t.Helper()
+
+	switch value := value.(type) {
+	case *interpreter.ListValue:
+		return value.Items
+	case []any:
+		return value
+	default:
+		t.Fatalf("list type mismatch: got %T", value)
+		return nil
+	}
 }
 
 func requireRuntimeErrorContains(t *testing.T, source string, want string) {
@@ -123,8 +172,8 @@ func TestStringConcat(t *testing.T) {
 
 func TestComparison(t *testing.T) {
 	out := runSource(t, "write(3 = 3)")
-	if out != "True" {
-		t.Fatalf("output mismatch: got %q want %q", out, "True")
+	if out != "true" {
+		t.Fatalf("output mismatch: got %q want %q", out, "true")
 	}
 }
 
@@ -172,6 +221,43 @@ func TestWhile(t *testing.T) {
 	out := runSource(t, "x := 0\nwhile x < 5 do\n  x := x + 1\nendwhile\nwrite(x)")
 	if out != "5" {
 		t.Fatalf("output mismatch: got %q want %q", out, "5")
+	}
+}
+
+func TestPass(t *testing.T) {
+	out := runSource(t, "pass\nwrite(\"ok\")")
+	if out != "ok" {
+		t.Fatalf("output mismatch: got %q want %q", out, "ok")
+	}
+}
+
+func TestNamedWhileNextAndLeave(t *testing.T) {
+	out := runSource(t, `x := 0
+while true do scan
+  x := x + 1
+  if x < 3 then
+    next scan
+  endif
+  leave scan
+endwhile scan
+write(x)`)
+	if out != "3" {
+		t.Fatalf("output mismatch: got %q want %q", out, "3")
+	}
+}
+
+func TestNestedLeaveOuter(t *testing.T) {
+	out := runSource(t, `hits := 0
+while true do outer
+  for i in 1 to 3 do inner
+    hits := hits + 1
+    leave outer
+  endfor inner
+  hits := 99
+endwhile outer
+write(hits)`)
+	if out != "1" {
+		t.Fatalf("output mismatch: got %q want %q", out, "1")
 	}
 }
 
@@ -346,10 +432,45 @@ func TestExtendedStdlibModules(t *testing.T) {
   write(floor(2.9))
   write(ceil(2.1))
 endfunc`)
-	want := "[1, 2]\n3\n[2, 1]\n[3, 2, 1]\nhi hi\n3\n2.0\n2.0\n3.0"
+	want := "[1,2]\n3\n[2,1]\n[3,2,1]\nhi hi\n3\n2.0\n2.0\n3.0"
 	if out != want {
 		t.Fatalf("output mismatch:\n got: %q\nwant: %q", out, want)
 	}
+}
+
+func TestStringStartsWithEndsWithModuleImport(t *testing.T) {
+	out := runSource(t, `func main()
+  use startswith, endswith from string
+
+  write(startswith("gwen-lang", "gwen"))
+  write(startswith("gwen-lang", "lang"))
+  write(endswith("gwen-lang", "lang"))
+  write(endswith("gwen-lang", "gwen"))
+endfunc`)
+	if out != "true\nfalse\ntrue\nfalse" {
+		t.Fatalf("output mismatch: got %q want %q", out, "true\nfalse\ntrue\nfalse")
+	}
+}
+
+func TestPathModuleHelpers(t *testing.T) {
+	out := runSource(t, `func main()
+  use basename, dirname, joinpath from path
+
+  write(basename("docs/stdlib.md"))
+  write(dirname("docs/stdlib.md"))
+  write(joinpath("docs", "stdlib.md"))
+endfunc`)
+	if out != "stdlib.md\ndocs\ndocs/stdlib.md" {
+		t.Fatalf("output mismatch: got %q want %q", out, "stdlib.md\ndocs\ndocs/stdlib.md")
+	}
+}
+
+func TestLeaveOutsideLoopRejectedAtRuntime(t *testing.T) {
+	requireRuntimeErrorContains(t, "leave scan", "leave 'scan' used outside matching loop")
+}
+
+func TestNextOutsideLoopRejectedAtRuntime(t *testing.T) {
+	requireRuntimeErrorContains(t, "next scan", "next 'scan' used outside matching loop")
 }
 
 func TestObjectMethod(t *testing.T) {
@@ -417,9 +538,45 @@ func TestIndexAssignInLoop(t *testing.T) {
 
 func TestAppendAndRemoveAtMutateListTarget(t *testing.T) {
 	out := runSource(t, "items := []\nappend(items, 1)\nappend(items, 2)\nappend(items, 3)\nremoveat(items, 1)\nwrite(items)")
-	if out != "[1, 3]" {
-		t.Fatalf("output mismatch: got %q want %q", out, "[1, 3]")
+	if out != "[1,3]" {
+		t.Fatalf("output mismatch: got %q want %q", out, "[1,3]")
 	}
+}
+
+func TestAppendMutatesListAcrossFunctionBoundary(t *testing.T) {
+	out := runSource(t, `func add(xs: list, value: string)
+  append(xs, value)
+endfunc
+
+items := []
+add(items, "x")
+write(items)`)
+	if out != "[\"x\"]" {
+		t.Fatalf("output mismatch: got %q want %q", out, "[\"x\"]")
+	}
+}
+
+func TestInsertAndRemoveAtMutateListAcrossFunctionBoundary(t *testing.T) {
+	out := runSource(t, `func reshape(xs: list)
+  insert(xs, 1, 2)
+  removeat(xs, 0)
+endfunc
+
+items := [1, 3]
+reshape(items)
+write(items)`)
+	if out != "[2,3]" {
+		t.Fatalf("output mismatch: got %q want %q", out, "[2,3]")
+	}
+}
+
+func TestAppendRejectsCapturedMultiReturnValue(t *testing.T) {
+	requireRuntimeErrorContains(t, `func pair() -> int, int
+  return 1, 2
+endfunc
+
+values := pair()
+append(values, 3)`, "append() requires mutable list, got multi-value result")
 }
 
 func TestObjectPrivateFieldAccessForbidden(t *testing.T) {
@@ -449,7 +606,7 @@ func TestTypeofObjectInstance(t *testing.T) {
 
 func TestStdlibListModuleImport(t *testing.T) {
 	out := runSource(t, "use map, filter, range, enumerate from list\n\nfunc main()\n  nums := range(1, 5)\n  write(\"Original:\", nums)\n  doubled := map(nums, (x: int) => x * 2)\n  write(\"Doubled:\", doubled)\n  evens := filter(nums, (x: int) => x mod 2 = 0)\n  write(\"Evens:\", evens)\n  indexed := enumerate([\"a\", \"b\", \"c\"])\n  write(\"Indexed:\", indexed)\nendfunc")
-	want := "Original: [1, 2, 3, 4, 5]\nDoubled: [2, 4, 6, 8, 10]\nEvens: [2, 4]\nIndexed: [[0, 'a'], [1, 'b'], [2, 'c']]"
+	want := "Original: [1,2,3,4,5]\nDoubled: [2,4,6,8,10]\nEvens: [2,4]\nIndexed: [[0,\"a\"],[1,\"b\"],[2,\"c\"]]"
 	if out != want {
 		t.Fatalf("output mismatch:\n got: %q\nwant: %q", out, want)
 	}
@@ -524,7 +681,7 @@ func TestDictBuiltins(t *testing.T) {
   endfor
   write("total =", total)
 endfunc`)
-	if !strings.Contains(out, "has zoe? False") {
+	if !strings.Contains(out, "has zoe? false") {
 		t.Fatalf("expected haskey output, got %q", out)
 	}
 	if !strings.Contains(out, "zoe default = 0") {
@@ -570,6 +727,32 @@ endfunc`, path)
 	}
 	if !strings.Contains(out, "appended 10 bytes") {
 		t.Fatalf("expected appendfile output, got %q", out)
+	}
+}
+
+func TestReadDirBuiltin(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("b"), 0o644); err != nil {
+		t.Fatalf("write fixture failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatalf("write fixture failed: %v", err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir fixture failed: %v", err)
+	}
+
+	source := fmt.Sprintf(`use readdir from io
+
+func main()
+  match readdir(%q)
+    when ok(entries) => write(entries)
+    when err(e) => write("failed:", e)
+  endmatch
+endfunc`, dir)
+	out := runSource(t, source)
+	if !strings.Contains(out, "[") || !strings.Contains(out, "a.txt") || !strings.Contains(out, "b.txt") || !strings.Contains(out, "nested") {
+		t.Fatalf("expected directory entries, got %q", out)
 	}
 }
 
@@ -644,8 +827,8 @@ endfunc`)
 	if time.Since(start) < 15*time.Millisecond {
 		t.Fatalf("sleep() returned too quickly")
 	}
-	if out != "True\nTrue\nTrue" {
-		t.Fatalf("output mismatch: got %q want %q", out, "True\nTrue\nTrue")
+	if out != "true\ntrue\ntrue" {
+		t.Fatalf("output mismatch: got %q want %q", out, "true\ntrue\ntrue")
 	}
 }
 
@@ -671,8 +854,8 @@ func main()
   write(contains(time.nowrfc3339(), "T"))
 endfunc`)
 
-	if out != "argc 0\ncwd True\nenv present\nTrue\nTrue\nTrue" {
-		t.Fatalf("output mismatch: got %q want %q", out, "argc 0\ncwd True\nenv present\nTrue\nTrue\nTrue")
+	if out != "argc 0\ncwd true\nenv present\ntrue\ntrue\ntrue" {
+		t.Fatalf("output mismatch: got %q want %q", out, "argc 0\ncwd true\nenv present\ntrue\ntrue\ntrue")
 	}
 }
 
@@ -688,6 +871,7 @@ func TestHTTPModuleGet(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("X-Trace", "abc123")
 		fmt.Fprint(w, "ok")
 	}))
 	defer server.Close()
@@ -698,14 +882,15 @@ func main()
   match http.get(%q)
     when ok(resp) =>
       write(http.status(resp))
-      write(http.body(resp))
+      write(http.responseheader(resp, "X-Trace", "missing"))
+      write(http.responsebody(resp))
     when err(e) => write("err", e)
   endmatch
 endfunc`, server.URL+"/health")
 
 	out := runSource(t, source)
-	if out != "200\nok" {
-		t.Fatalf("output mismatch: got %q want %q", out, "200\nok")
+	if out != "200\nabc123\nok" {
+		t.Fatalf("output mismatch: got %q want %q", out, "200\nabc123\nok")
 	}
 }
 
@@ -721,14 +906,57 @@ func main()
   match http.get(%q)
     when ok(resp) =>
       write(http.status(resp))
-      write(contains(http.body(resp), "bad gateway"))
+      write(contains(http.responsebody(resp), "bad gateway"))
     when err(e) => write("err", e)
   endmatch
 endfunc`, server.URL)
 
 	out := runSource(t, source)
-	if out != "502\nTrue" {
+	if out != "502\ntrue" {
 		t.Fatalf("expected structured non-2xx response, got %q", out)
+	}
+}
+
+func TestHTTPModuleRequestWithHeadersAndBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer demo" {
+			t.Fatalf("unexpected auth header: %q", got)
+		}
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("unexpected content-type: %q", got)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read failed: %v", err)
+		}
+		if string(body) != "{\"name\":\"Ada\"}" {
+			t.Fatalf("unexpected body: %q", string(body))
+		}
+		w.Header().Set("X-Trace", "req-1")
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, "created")
+	}))
+	defer server.Close()
+
+	source := fmt.Sprintf(`use http
+
+func main()
+  headers := dict[string, string]{"Authorization": "Bearer demo", "Content-Type": "application/json"}
+  match http.request("POST", %q, "{\"name\":\"Ada\"}", headers)
+    when ok(resp) =>
+      write(http.status(resp))
+      write(http.responseheader(resp, "X-Trace", "missing"))
+      write(http.responsebody(resp))
+    when err(e) => write("err", e)
+  endmatch
+endfunc`, server.URL)
+
+	out := runSource(t, source)
+	if out != "201\nreq-1\ncreated" {
+		t.Fatalf("output mismatch: got %q want %q", out, "201\nreq-1\ncreated")
 	}
 }
 
@@ -743,7 +971,7 @@ func TestHTTPModuleGetInsideParallel(t *testing.T) {
 func main()
   parallel do
     match http.get(%q)
-      when ok(resp) => write(http.body(resp))
+      when ok(resp) => write(http.responsebody(resp))
       when err(e) => write("err", e)
     endmatch
   endparallel
@@ -765,8 +993,852 @@ func main()
   endmatch
 endfunc`)
 
-	if out != "True" {
-		t.Fatalf("output mismatch: got %q want %q", out, "True")
+	if out != "true" {
+		t.Fatalf("output mismatch: got %q want %q", out, "true")
+	}
+}
+
+func TestHTTPServerLifecycleBuiltins(t *testing.T) {
+	out := runSource(t, `use http
+
+func handle(req: HttpRequest) -> HttpReply
+  return http.text(200, "ok")
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    write(contains(http.addr(server), ":"))
+    match http.close(server)
+      when ok(code) => write(code = 0)
+      when err(e) => write(e)
+    endmatch
+    match http.wait(server)
+      when ok(code) => write(code = 0)
+      when err(e) => write(e)
+    endmatch
+  when err(e) =>
+    write(e)
+endmatch`)
+
+	if out != "true\ntrue\ntrue" {
+		t.Fatalf("output mismatch: got %q want %q", out, "true\ntrue\ntrue")
+	}
+}
+
+func TestHTTPServerRouteQueryAndJSON(t *testing.T) {
+	source := `use http
+use json
+
+func handle(req: HttpRequest) -> result[HttpReply]
+  matched, params := http.route(req, "/hello/:name")
+  if matched then
+    return http.json(200, json.objectof("method", http.method(req), "name", params["name"], "lang", http.query(req, "lang", "en"), "body", http.requestbody(req)))
+  endif
+  return ok(http.text(404, "missing"))
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    started := server
+  when err(e) =>
+    startup_error := e
+endmatch`
+
+	_, server := startHTTPServer(t, source)
+	defer stopHTTPServer(t, server)
+
+	req, err := http.NewRequest(http.MethodPost, "http://"+server.Addr+"/hello/Ada?lang=zh", strings.NewReader("nihao"))
+	if err != nil {
+		t.Fatalf("new request failed: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status: got %d want %d", resp.StatusCode, http.StatusOK)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Fatalf("unexpected content-type: %q", got)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	payload := map[string]any{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	if payload["method"] != "POST" || payload["name"] != "Ada" || payload["lang"] != "zh" || payload["body"] != "nihao" {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}
+
+func TestHTTPServerRequestAndResponseHeaders(t *testing.T) {
+	source := `use http
+
+func handle(req: HttpRequest) -> HttpReply
+  token := http.requestheader(req, "X-Token", "missing")
+  return http.withheader(http.text(200, token), "X-Server", "gwen")
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    started := server
+  when err(e) =>
+    startup_error := e
+endmatch`
+
+	_, server := startHTTPServer(t, source)
+	defer stopHTTPServer(t, server)
+
+	req, err := http.NewRequest(http.MethodGet, "http://"+server.Addr+"/", nil)
+	if err != nil {
+		t.Fatalf("new request failed: %v", err)
+	}
+	req.Header.Set("X-Token", "secret")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(body) != "secret" {
+		t.Fatalf("unexpected body: %q", string(body))
+	}
+	if got := resp.Header.Get("X-Server"); got != "gwen" {
+		t.Fatalf("unexpected X-Server header: %q", got)
+	}
+}
+
+func TestHTTPServerRedirectAndCookies(t *testing.T) {
+	source := `use http
+
+func handle(req: HttpRequest) -> HttpReply
+  if http.path(req) = "/login" then
+    reply := http.redirect(303, "/home")
+    reply := http.withcookie(reply, "session", "abc")
+    reply := http.withcookie(reply, "theme", "light")
+    return reply
+  endif
+  session := http.requestcookie(req, "session", "guest")
+  theme := http.requestcookie(req, "theme", "plain")
+  return http.text(200, session + "/" + theme)
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    started := server
+  when err(e) =>
+    startup_error := e
+endmatch`
+
+	_, server := startHTTPServer(t, source)
+	defer stopHTTPServer(t, server)
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get("http://" + server.Addr + "/login")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("unexpected redirect status: got %d want %d", resp.StatusCode, http.StatusSeeOther)
+	}
+	if got := resp.Header.Get("Location"); got != "/home" {
+		t.Fatalf("unexpected location header: %q", got)
+	}
+	cookies := resp.Header.Values("Set-Cookie")
+	if len(cookies) != 2 {
+		t.Fatalf("unexpected Set-Cookie count: %#v", cookies)
+	}
+	if !slices.Contains(cookies, "session=abc; Path=/") {
+		t.Fatalf("missing session cookie: %#v", cookies)
+	}
+	if !slices.Contains(cookies, "theme=light; Path=/") {
+		t.Fatalf("missing theme cookie: %#v", cookies)
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "http://"+server.Addr+"/home", nil)
+	if err != nil {
+		t.Fatalf("new request failed: %v", err)
+	}
+	req.Header.Add("Cookie", "session=abc")
+	req.Header.Add("Cookie", "theme=light")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(body) != "abc/light" {
+		t.Fatalf("unexpected cookie echo body: %q", string(body))
+	}
+}
+
+func TestHTTPSessionNotesFlow(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "session_notes.db")
+	source := fmt.Sprintf(`use http
+use json
+use sqlite
+
+notes_db: SqliteDB
+
+func current_session(req: HttpRequest) -> string
+  return http.requestcookie(req, "session", "guest")
+endfunc
+
+func login_count(session: string) -> result[int]
+  if session = "guest" then
+    return ok(0)
+  endif
+
+  match sqlite.query(notes_db, "select login_count from sessions where session_name = ? limit 1", [session])
+    when ok(rows) =>
+      if len(rows) = 0 then
+        return ok(0)
+      endif
+      return ok(int(rows[0]["login_count"]))
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func note_count(session: string) -> result[int]
+  if session = "guest" then
+    return ok(0)
+  endif
+
+  match sqlite.query(notes_db, "select count(*) as total from notes where session_name = ?", [session])
+    when ok(rows) =>
+      if len(rows) = 0 then
+        return ok(0)
+      endif
+      return ok(int(rows[0]["total"]))
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func notes_for(session: string) -> result[list[string]]
+  if session = "guest" then
+    return ok([])
+  endif
+
+  match sqlite.query(notes_db, "select body from notes where session_name = ? order by id", [session])
+    when ok(rows) =>
+      notes: list[string] := []
+      for row in rows do
+        append(notes, str(row["body"]))
+      endfor
+      return ok(notes)
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func bump_login_count(name: string) -> result[int]
+  match sqlite.exec(notes_db, "insert into sessions(session_name, login_count) values(?, 1) on conflict(session_name) do update set login_count = login_count + 1", [name])
+    when ok(rows) =>
+      updated_rows := rows
+    when err(e) =>
+      return err(e)
+  endmatch
+  return login_count(name)
+endfunc
+
+func append_note(session: string, text: string) -> result[int]
+  match sqlite.exec(notes_db, "insert into notes(session_name, body) values(?, ?)", [session, text])
+    when ok(rows) =>
+      inserted_rows := rows
+    when err(e) =>
+      return err(e)
+  endmatch
+  return note_count(session)
+endfunc
+
+func api_me(session: string) -> result[HttpReply]
+  match login_count(session)
+    when ok(logins) =>
+      match note_count(session)
+        when ok(notes_total) =>
+          return http.json(200, json.objectof("session", session, "login_count", logins, "note_count", notes_total))
+        when err(e) =>
+          return err(e)
+      endmatch
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func api_notes(req: HttpRequest, session: string) -> result[HttpReply]
+  if session = "guest" then
+    return ok(http.text(401, "login required"))
+  endif
+
+  if http.method(req) = "GET" then
+    match notes_for(session)
+      when ok(notes) =>
+        return http.json(200, json.objectof("session", session, "count", len(notes), "notes", notes))
+      when err(e) =>
+        return err(e)
+    endmatch
+  endif
+
+  if http.method(req) = "POST" then
+    match json.parseobject(http.requestbody(req))
+      when ok(payload) =>
+        if not haskey(payload, "text") then
+          return ok(http.text(400, "missing text"))
+        endif
+        text := trim(str(payload["text"]))
+        if text = "" then
+          return ok(http.text(400, "missing text"))
+        endif
+        match append_note(session, text)
+          when ok(total) =>
+            return http.json(201, json.objectof("session", session, "count", total, "last", text))
+          when err(e) =>
+            return err(e)
+        endmatch
+      when err(e) =>
+        return ok(http.text(400, "bad json"))
+    endmatch
+  endif
+
+  reply := http.withheader(http.text(405, "method not allowed"), "Allow", "GET, POST")
+  return ok(reply)
+endfunc
+
+func handle(req: HttpRequest) -> result[HttpReply]
+  session := current_session(req)
+
+  matched, params := http.route(req, "/login/:name")
+  if matched then
+    name := trim(params["name"])
+    match bump_login_count(name)
+      when ok(total) =>
+        login_total := total
+      when err(e) =>
+        return err(e)
+    endmatch
+    reply := http.redirect(303, "/")
+    reply := http.withcookie(reply, "session", name)
+    return ok(reply)
+  endif
+
+  if http.path(req) = "/api/me" then
+    return api_me(session)
+  endif
+
+  if http.path(req) = "/api/notes" then
+    return api_notes(req, session)
+  endif
+
+  return ok(http.text(404, "not found"))
+endfunc
+
+match sqlite.open(%q)
+  when ok(db) =>
+    notes_db := db
+    match sqlite.exec(notes_db, "create table if not exists sessions(session_name text primary key, login_count integer not null)", [])
+      when ok(rows) =>
+        schema_sessions_rows := rows
+      when err(e) =>
+        startup_error := e
+    endmatch
+    match sqlite.exec(notes_db, "create table if not exists notes(id integer primary key autoincrement, session_name text not null, body text not null)", [])
+      when ok(rows) =>
+        schema_notes_rows := rows
+        match http.listen("127.0.0.1:0", handle)
+          when ok(server) =>
+            started := server
+          when err(e) =>
+            startup_error := e
+        endmatch
+      when err(e) =>
+        startup_error := e
+    endmatch
+  when err(e) =>
+    startup_error := e
+endmatch`, dbPath)
+
+	interp, server := startHTTPServer(t, source)
+	defer stopHTTPServer(t, server)
+	if value, err := interp.GlobalEnv.Get("notes_db"); err == nil {
+		if db, ok := value.(*interpreter.SqliteDBValue); ok {
+			defer db.DB.Close()
+		}
+	}
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	resp, err := client.Get("http://" + server.Addr + "/login/Ada")
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Fatalf("unexpected login status: got %d want %d", resp.StatusCode, http.StatusSeeOther)
+	}
+	cookies := resp.Cookies()
+	if len(cookies) == 0 || cookies[0].Name != "session" || cookies[0].Value != "Ada" {
+		t.Fatalf("unexpected login cookies: %#v", cookies)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, "http://"+server.Addr+"/api/notes", strings.NewReader("{\"text\":\"ship it\"}"))
+	if err != nil {
+		t.Fatalf("new request failed: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookies[0])
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("note create request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("unexpected note create status: got %d want %d", resp.StatusCode, http.StatusCreated)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	created := map[string]any{}
+	if err := json.Unmarshal(body, &created); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	if created["session"] != "Ada" || created["last"] != "ship it" || created["count"] != float64(1) {
+		t.Fatalf("unexpected note create payload: %#v", created)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, "http://"+server.Addr+"/api/me", nil)
+	if err != nil {
+		t.Fatalf("new request failed: %v", err)
+	}
+	req.AddCookie(cookies[0])
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("me request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	me := map[string]any{}
+	if err := json.Unmarshal(body, &me); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	if me["session"] != "Ada" || me["login_count"] != float64(1) || me["note_count"] != float64(1) {
+		t.Fatalf("unexpected me payload: %#v", me)
+	}
+
+	req, err = http.NewRequest(http.MethodGet, "http://"+server.Addr+"/api/notes", nil)
+	if err != nil {
+		t.Fatalf("new request failed: %v", err)
+	}
+	req.AddCookie(cookies[0])
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("notes request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	notes := map[string]any{}
+	if err := json.Unmarshal(body, &notes); err != nil {
+		t.Fatalf("json decode failed: %v", err)
+	}
+	items, ok := notes["notes"].([]any)
+	if !ok || len(items) != 1 || items[0] != "ship it" {
+		t.Fatalf("unexpected notes payload: %#v", notes)
+	}
+}
+
+func TestHTTPWithCookieDefaultsToRootPath(t *testing.T) {
+	source := `use http
+
+func handle(req: HttpRequest) -> HttpReply
+  if http.path(req) = "/login" then
+    reply := http.redirect(303, "/")
+    reply := http.withcookie(reply, "session", "Ada")
+    return reply
+  endif
+
+  return http.text(200, http.requestcookie(req, "session", "guest"))
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    started := server
+  when err(e) =>
+    startup_error := e
+endmatch`
+
+	_, server := startHTTPServer(t, source)
+	defer stopHTTPServer(t, server)
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookie jar init failed: %v", err)
+	}
+	client := &http.Client{Jar: jar}
+
+	resp, err := client.Get("http://" + server.Addr + "/login")
+	if err != nil {
+		t.Fatalf("login request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if string(body) != "Ada" {
+		t.Fatalf("cookie did not reach root path: got %q want %q", string(body), "Ada")
+	}
+}
+
+func TestHTTPServerHandlesRequestsConcurrently(t *testing.T) {
+	program, err := parser.Parse(`use http
+
+func handle(req: HttpRequest) -> HttpReply
+  return http.text(200, block(http.path(req)))
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    started := server
+  when err(e) =>
+    startup_error := e
+endmatch`)
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+
+	interp := interpreter.New()
+	startedPaths := make(chan string, 2)
+	release := make(chan struct{}, 2)
+	interp.GlobalEnv.Set("block", interpreter.Builtin(func(args []any) (any, error) {
+		path, ok := args[0].(string)
+		if !ok {
+			t.Fatalf("expected string arg, got %T", args[0])
+		}
+		startedPaths <- path
+		<-release
+		return path, nil
+	}))
+
+	if err := interp.Run(program); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+
+	value, err := interp.GlobalEnv.Get("started")
+	if err != nil {
+		t.Fatalf("missing started server handle: %v", err)
+	}
+	server, ok := value.(*interpreter.HTTPServerValue)
+	if !ok {
+		t.Fatalf("started has wrong type: %T", value)
+	}
+	defer stopHTTPServer(t, server)
+
+	type fetchResult struct {
+		body string
+		err  error
+	}
+	results := make(chan fetchResult, 2)
+	fetch := func(path string) {
+		resp, err := http.Get("http://" + server.Addr + path)
+		if err != nil {
+			results <- fetchResult{err: err}
+			return
+		}
+		defer resp.Body.Close()
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			results <- fetchResult{err: err}
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			results <- fetchResult{err: fmt.Errorf("unexpected status for %s: %d", path, resp.StatusCode)}
+			return
+		}
+		results <- fetchResult{body: string(body)}
+	}
+
+	go fetch("/one")
+
+	var first string
+	select {
+	case first = <-startedPaths:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first handler did not start")
+	}
+
+	go fetch("/two")
+
+	var second string
+	select {
+	case second = <-startedPaths:
+		if second == first {
+			t.Fatalf("expected distinct handler paths, got %q twice", first)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("second handler did not start while first request was still blocked")
+	}
+
+	release <- struct{}{}
+	release <- struct{}{}
+
+	seenBodies := map[string]struct{}{}
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			t.Fatalf("request failed: %v", result.err)
+		}
+		seenBodies[result.body] = struct{}{}
+	}
+
+	if len(seenBodies) != 2 {
+		t.Fatalf("unexpected response bodies: %#v", seenBodies)
+	}
+	if _, ok := seenBodies[first]; !ok {
+		t.Fatalf("missing first response body %q in %#v", first, seenBodies)
+	}
+	if _, ok := seenBodies[second]; !ok {
+		t.Fatalf("missing second response body %q in %#v", second, seenBodies)
+	}
+}
+
+func TestHTTPServerRequestSnapshotsIsolateModuleState(t *testing.T) {
+	source := `use http
+
+hits := dict[string, int]{}
+
+func handle(req: HttpRequest) -> HttpReply
+  path := http.path(req)
+  if not haskey(hits, path) then
+    hits[path] := 0
+  endif
+  hits[path] := hits[path] + 1
+  return http.text(200, str(hits[path]))
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    started := server
+  when err(e) =>
+    startup_error := e
+endmatch`
+
+	_, server := startHTTPServer(t, source)
+	defer stopHTTPServer(t, server)
+
+	for idx := range 2 {
+		resp, err := http.Get("http://" + server.Addr + "/hits")
+		if err != nil {
+			t.Fatalf("request %d failed: %v", idx+1, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("read %d failed: %v", idx+1, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status on request %d: got %d want %d", idx+1, resp.StatusCode, http.StatusOK)
+		}
+		if string(body) != "1" {
+			t.Fatalf("unexpected body on request %d: got %q want %q", idx+1, string(body), "1")
+		}
+	}
+}
+
+func TestHTTPServerCanShareStateCellAcrossRequests(t *testing.T) {
+	source := `use http
+use state
+
+hits: cell[int] := state.cell(0)
+
+func handle(req: HttpRequest) -> HttpReply
+  total := state.update(hits, (n: int) => n + 1)
+  return http.text(200, str(total))
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    started := server
+  when err(e) =>
+    startup_error := e
+endmatch`
+
+	_, server := startHTTPServer(t, source)
+	defer stopHTTPServer(t, server)
+
+	wantBodies := []string{"1", "2"}
+	for idx, want := range wantBodies {
+		resp, err := http.Get("http://" + server.Addr + "/hits")
+		if err != nil {
+			t.Fatalf("request %d failed: %v", idx+1, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("read %d failed: %v", idx+1, err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("unexpected status on request %d: got %d want %d", idx+1, resp.StatusCode, http.StatusOK)
+		}
+		if string(body) != want {
+			t.Fatalf("unexpected body on request %d: got %q want %q", idx+1, string(body), want)
+		}
+	}
+}
+
+func TestHTTPServerStaticFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.css"), []byte("body { color: teal; }\n"), 0o644); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+
+	source := fmt.Sprintf(`use http
+
+func handle(req: HttpRequest) -> result[HttpReply]
+  matched, served := http.static(req, "/assets/", %q)
+  if matched then
+    match served
+      when ok(reply) => return ok(reply)
+      when err(e) => return ok(http.text(404, "asset missing"))
+    endmatch
+  endif
+  return ok(http.text(404, "route miss"))
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    started := server
+  when err(e) =>
+    startup_error := e
+endmatch`, dir)
+
+	_, server := startHTTPServer(t, source)
+	defer stopHTTPServer(t, server)
+
+	resp, err := http.Get("http://" + server.Addr + "/assets/app.css")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status: got %d want %d", resp.StatusCode, http.StatusOK)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.HasPrefix(got, "text/css") {
+		t.Fatalf("unexpected content-type: %q", got)
+	}
+	if string(body) != "body { color: teal; }\n" {
+		t.Fatalf("unexpected body: %q", string(body))
+	}
+
+	resp, err = http.Get("http://" + server.Addr + "/other")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unexpected route-miss status: got %d want %d", resp.StatusCode, http.StatusNotFound)
+	}
+	if string(body) != "route miss" {
+		t.Fatalf("unexpected route-miss body: %q", string(body))
+	}
+
+	resp, err = http.Get("http://" + server.Addr + "/assets/missing.css")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unexpected asset-miss status: got %d want %d", resp.StatusCode, http.StatusNotFound)
+	}
+	if string(body) != "asset missing" {
+		t.Fatalf("unexpected asset-miss body: %q", string(body))
+	}
+}
+
+func TestHTTPServerHandlerRuntimeErrorBecomes500(t *testing.T) {
+	source := `use http
+
+func handle(req: HttpRequest) -> HttpReply
+  return missing()
+endfunc
+
+match http.listen("127.0.0.1:0", handle)
+  when ok(server) =>
+    started := server
+  when err(e) =>
+    startup_error := e
+endmatch`
+
+	_, server := startHTTPServer(t, source)
+	defer stopHTTPServer(t, server)
+
+	resp, err := http.Get("http://" + server.Addr + "/")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("unexpected status: got %d want %d", resp.StatusCode, http.StatusInternalServerError)
+	}
+	if !strings.Contains(string(body), "Undefined variable: missing") {
+		t.Fatalf("unexpected body: %q", string(body))
 	}
 }
 
@@ -791,7 +1863,7 @@ func main()
   endmatch
 endfunc`)
 
-	if out != "{\"active\":true,\"deleted_at\":null,\"name\":\"Ada\",\"roles\":[\"admin\",\"ops\"]}\nAda\n2\nTrue\nTrue" {
+	if out != "{\"active\":true,\"deleted_at\":null,\"name\":\"Ada\",\"roles\":[\"admin\",\"ops\"]}\nAda\n2\ntrue\ntrue" {
 		t.Fatalf("output mismatch: got %q", out)
 	}
 }
@@ -810,8 +1882,8 @@ func main()
   endmatch
 endfunc`)
 
-	if out != "4\n3\nTrue\n1" {
-		t.Fatalf("output mismatch: got %q want %q", out, "4\n3\nTrue\n1")
+	if out != "4\n3\ntrue\n1" {
+		t.Fatalf("output mismatch: got %q want %q", out, "4\n3\ntrue\n1")
 	}
 }
 
@@ -854,12 +1926,95 @@ func main()
 endfunc`, "json.objectof() key 1 must be string, got int")
 }
 
+func TestSqliteModuleCRUD(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "notes.db")
+	out := runSource(t, fmt.Sprintf(`use sqlite
+use json
+
+func main()
+  match sqlite.open(%q)
+    when ok(db) =>
+      match sqlite.exec(db, "create table notes(id integer primary key, body text, visits integer, deleted_at text)", [])
+        when ok(created) => write(created)
+        when err(e) => write("create failed", e)
+      endmatch
+
+      match sqlite.exec(db, "insert into notes(body, visits, deleted_at) values(?, ?, ?)", ["ship it", 3, json.null()])
+        when ok(inserted) => write(inserted)
+        when err(e) => write("insert failed", e)
+      endmatch
+
+      match sqlite.query(db, "select body, visits, deleted_at from notes order by id", [])
+        when ok(rows) =>
+          first := rows[0]
+          write(first["body"])
+          write(first["visits"])
+          write(typeof(first["deleted_at"]))
+          write(json.isnull(first["deleted_at"]))
+        when err(e) =>
+          write("query failed", e)
+      endmatch
+
+      match sqlite.close(db)
+        when ok(code) => write(code)
+        when err(e) => write("close failed", e)
+      endmatch
+    when err(e) =>
+      write("open failed", e)
+  endmatch
+endfunc`, dbPath))
+
+	if out != "0\n1\nship it\n3\nJsonNull\ntrue\n0" {
+		t.Fatalf("output mismatch: got %q", out)
+	}
+}
+
+func TestSqliteOpenReturnsErrOnMissingParentDir(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "missing", "notes.db")
+	out := runSource(t, fmt.Sprintf(`use sqlite
+
+func main()
+  match sqlite.open(%q)
+    when ok(db) =>
+      write("opened", db)
+    when err(e) =>
+      write("err")
+  endmatch
+endfunc`, dbPath))
+
+	if out != "err" {
+		t.Fatalf("output mismatch: got %q want %q", out, "err")
+	}
+}
+
+func TestSqliteExecRejectsUnsupportedParamTypeAtRuntime(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "notes.db")
+	requireRuntimeErrorContains(t, fmt.Sprintf(`use sqlite
+
+func main()
+  match sqlite.open(%q)
+    when ok(db) =>
+      sqlite.exec(db, "select ?", [dict[string, int]{"x": 1}])
+    when err(e) =>
+      write(e)
+  endmatch
+endfunc`, dbPath), "sqlite.exec() param 1 only supports int/float/string/bool/json.null(), got dict")
+}
+
 func TestHTTPModuleGetRejectsNegativeTimeout(t *testing.T) {
 	requireRuntimeErrorContains(t, `use http
 
 func main()
   http.get("https://example.com", -1)
 endfunc`, "http.get() timeoutms must be >= 0")
+}
+
+func TestHTTPRedirectRejectsNonRedirectStatus(t *testing.T) {
+	requireRuntimeErrorContains(t, `use http
+
+func main()
+  http.redirect(200, "/home")
+endfunc`, "http.redirect() status must be between 300 and 399")
 }
 
 func TestSleepRejectsNegativeDuration(t *testing.T) {
@@ -988,6 +2143,69 @@ endfunc`)
 	}
 }
 
+func TestStateCellGetSetAndUpdate(t *testing.T) {
+	out := runSource(t, `use state
+
+func main()
+  counter: cell[int] := state.cell(1)
+  write(state.get(counter))
+  write(state.set(counter, 2))
+  write(state.get(counter))
+  write(state.update(counter, (n: int) => n + 3))
+  write(state.get(counter))
+endfunc`)
+	if out != "1\n2\n2\n5\n5" {
+		t.Fatalf("output mismatch: got %q want %q", out, "1\n2\n2\n5\n5")
+	}
+}
+
+func TestStateCellReturnsSnapshots(t *testing.T) {
+	out := runSource(t, `use state
+
+func main()
+  items := [1]
+  saved: cell[list[int]] := state.cell(items)
+  append(items, 2)
+
+  snapshot := state.get(saved)
+  append(snapshot, 3)
+  write(state.get(saved))
+
+  next := [7]
+  state.set(saved, next)
+  append(next, 8)
+  write(state.get(saved))
+endfunc`)
+	if out != "[1]\n[7]" {
+		t.Fatalf("output mismatch: got %q want %q", out, "[1]\n[7]")
+	}
+}
+
+func TestParallelCanShareStateCellExplicitly(t *testing.T) {
+	out := runSource(t, `use state
+
+func main()
+  counter: cell[int] := state.cell(0)
+  parallel do
+    state.update(counter, (n: int) => n + 1)
+    state.update(counter, (n: int) => n + 1)
+  endparallel
+  write(state.get(counter))
+endfunc`)
+	if out != "2" {
+		t.Fatalf("output mismatch: got %q want %q", out, "2")
+	}
+}
+
+func TestStateCellRejectsCallablePayloads(t *testing.T) {
+	requireRuntimeErrorContains(t, `use state
+
+func main()
+  bad := state.cell((x: int) => x + 1)
+  write(bad)
+endfunc`, "state.cell() only supports data values, got func")
+}
+
 func TestParallelRunsTasksConcurrently(t *testing.T) {
 	program, err := parser.Parse(`parallel do
   block(1)
@@ -1047,10 +2265,7 @@ endparallel`)
 	if err != nil {
 		t.Fatalf("missing results: %v", err)
 	}
-	results, ok := value.([]any)
-	if !ok {
-		t.Fatalf("results type mismatch: got %T", value)
-	}
+	results := requireListItems(t, value)
 	if len(results) != 2 {
 		t.Fatalf("results length mismatch: got %d want 2", len(results))
 	}
@@ -1100,7 +2315,7 @@ endparallel`)
 	if err != nil {
 		t.Fatalf("missing results: %v", err)
 	}
-	results := value.([]any)
+	results := requireListItems(t, value)
 	if len(results) != 3 {
 		t.Fatalf("results length mismatch: got %d want 3", len(results))
 	}

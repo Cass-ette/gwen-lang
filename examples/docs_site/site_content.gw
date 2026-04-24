@@ -1,0 +1,369 @@
+module site_content
+
+use json
+use append, sort, concat from list
+use split, trim, replace, substring, startswith, endswith from string
+use readfile, readdir from io
+use basename, dirname, joinpath from path
+
+export func site(lang: string) -> dict
+  current := normalized_lang(lang)
+  if current = "zh" then
+    return json.objectof("lang", "zh", "brand", "Gwen 学习指南", "tagline", "仓库文档直出", "hero_title", "从仓库文档自动生成", "hero_deck", "页面和示例直接来自 README、docs、examples，站点会随着语言与仓库一起演进。", "nav_title", "文档与指南", "examples_title", "示例源码", "search_title", "全文搜索", "search_placeholder", "输入关键词，例如 http / result / 模块", "empty_search", "还没有匹配项", "footer_note", "这不是第二套手写文档系统，内容直接来自仓库。", "page_meta", "仓库文档", "example_meta", "示例源码", "source_meta", "源码", "path_meta", "仓库路径", "rendered_note", "内容由仓库文件实时渲染。", "pages", page_index(current), "examples", example_index())
+  endif
+  return json.objectof("lang", "en", "brand", "Gwen Field Guide", "tagline", "Repo-Driven Docs", "hero_title", "Generated From The Repository", "hero_deck", "Pages and examples come directly from README, docs, and examples, so the site tracks the language as it evolves.", "nav_title", "Docs And Guides", "examples_title", "Example Sources", "search_title", "Full-Text Search", "search_placeholder", "Search for http, result, modules, backend...", "empty_search", "No matches yet", "footer_note", "This is not a second hand-written doc stack. The site renders repo files directly.", "page_meta", "Repo Doc", "example_meta", "Example Source", "source_meta", "Source", "path_meta", "Repo Path", "rendered_note", "Rendered directly from repository files.", "pages", page_index(current), "examples", example_index())
+endfunc
+
+export func page(lang: string, slug: string) -> result[dict]
+  current := normalized_lang(lang)
+  for item in page_index(current) do
+    if item["slug"] = slug then
+      match readfile(item["path"])
+        when ok(content) =>
+          return ok(json.objectof("lang", current, "kind", "page", "slug", item["slug"], "title", item["title"], "summary", item["summary"], "path", item["path"], "format", "markdown", "content", content))
+        when err(e) =>
+          return err("failed to read page: " + e)
+      endmatch
+    endif
+  endfor
+  return err("page not found: " + slug)
+endfunc
+
+export func example(lang: string, name: string) -> result[dict]
+  current := normalized_lang(lang)
+  for item in example_index() do
+    if item["name"] = name then
+      match readfile(item["path"])
+        when ok(source) =>
+          return ok(json.objectof("lang", current, "kind", "example", "name", item["name"], "title", item["title"], "summary", item["summary"], "path", item["path"], "format", "gwen", "source", source))
+        when err(e) =>
+          return err("failed to read example: " + e)
+      endmatch
+    endif
+  endfor
+  return err("example not found: " + name)
+endfunc
+
+export func search_index(lang: string) -> list
+  current := normalized_lang(lang)
+  hits := []
+
+  for item in page_index(current) do
+    match readfile(item["path"])
+      when ok(content) =>
+        append(hits, json.objectof("lang", current, "kind", "page", "slug", item["slug"], "title", item["title"], "summary", item["summary"], "path", item["path"], "content", content))
+      when err(page_read_error) =>
+        pass
+    endmatch
+  endfor
+
+  for item in example_index() do
+    match readfile(item["path"])
+      when ok(content) =>
+        append(hits, json.objectof("lang", current, "kind", "example", "name", item["name"], "title", item["title"], "summary", item["summary"], "path", item["path"], "content", content))
+      when err(example_read_error) =>
+        pass
+    endmatch
+  endfor
+
+  return hits
+endfunc
+
+func page_index(lang: string) -> list
+  current := normalized_lang(lang)
+  paths := []
+  canonical_paths := []
+  items := []
+  append(paths, "README.md")
+  append(paths, "README.zh.md")
+  append(paths, "TRY_GWEN.md")
+  paths := concat(paths, collect_markdown_files("docs"))
+  paths := concat(paths, collect_markdown_files("examples"))
+
+  for path in paths do
+    canonical := canonical_markdown_path(path)
+    if not contains_text(canonical_paths, canonical) then
+      append(canonical_paths, canonical)
+      selected := select_markdown_variant(paths, canonical, current)
+      if selected != "" then
+        match build_page_entry(canonical, selected)
+          when ok(item) => append(items, item)
+          when err(page_entry_error) =>
+            pass
+        endmatch
+      endif
+    endif
+  endfor
+  return items
+endfunc
+
+func example_index() -> list
+  paths := collect_gwen_files("examples")
+  items := []
+
+  for path in paths do
+    match build_example_entry(path)
+      when ok(item) => append(items, item)
+      when err(example_entry_error) =>
+        pass
+    endmatch
+  endfor
+  return items
+endfunc
+
+func collect_markdown_files(dir: string) -> list
+  hits := []
+  match readdir(dir)
+    when ok(entries) =>
+      for name in sort(entries, asc) do
+        if not startswith(name, ".") then
+          path := joinpath(dir, name)
+          match readdir(path)
+            when ok(child_entries) =>
+              if not should_skip_dir(path) then
+                hits := concat(hits, collect_markdown_files(path))
+              endif
+            when err(file_error) =>
+              if endswith(name, ".md") then
+                append(hits, path)
+              endif
+          endmatch
+        endif
+      endfor
+    when err(dir_error) =>
+      pass
+  endmatch
+  return hits
+endfunc
+
+func collect_gwen_files(dir: string) -> list
+  hits := []
+  match readdir(dir)
+    when ok(entries) =>
+      for name in sort(entries, asc) do
+        if not startswith(name, ".") then
+          path := joinpath(dir, name)
+          match readdir(path)
+            when ok(child_entries) =>
+              if not should_skip_dir(path) then
+                hits := concat(hits, collect_gwen_files(path))
+              endif
+            when err(file_error) =>
+              if endswith(name, ".gw") then
+                append(hits, path)
+              endif
+          endmatch
+        endif
+      endfor
+    when err(dir_error) =>
+      pass
+  endmatch
+  return hits
+endfunc
+
+func should_skip_dir(path: string) -> bool
+  name := basename(path)
+  return name = "public" or name = "__pycache__"
+endfunc
+
+func build_page_entry(slug_path: string, path: string) -> result[dict]
+  match readfile(path)
+    when ok(content) =>
+      title := markdown_title(content, title_from_path(slug_path))
+      summary := markdown_summary(content, "Repository document at " + path)
+      return ok(json.objectof("slug", file_slug(slug_path), "title", title, "summary", summary, "path", path))
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func build_example_entry(path: string) -> result[dict]
+  match readfile(path)
+    when ok(content) =>
+      title := source_title(content, title_from_path(path))
+      summary := source_summary(content, "Runnable Gwen source at " + path)
+      return ok(json.objectof("name", file_slug(path), "title", title, "summary", summary, "path", path))
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func normalized_lang(lang: string) -> string
+  if lang = "zh" then
+    return "zh"
+  endif
+  return "en"
+endfunc
+
+func markdown_title(content: string, fallback: string) -> string
+  for line in split(normalize_newlines(content), "\n") do
+    text := trim(line)
+    if startswith(text, "# ") then
+      return trim(substring(text, 2, len(text) - 1))
+    endif
+  endfor
+  return fallback
+endfunc
+
+func markdown_summary(content: string, fallback: string) -> string
+  in_code := false
+  for line in split(normalize_newlines(content), "\n") do
+    text := trim(line)
+    if text != "" then
+      if startswith(text, "```") then
+        if in_code then
+          in_code := false
+        else
+          in_code := true
+        endif
+      elif not in_code then
+        if not startswith(text, "#") and not startswith(text, "|") and not startswith(text, ">") and text != "---" then
+          if startswith(text, "- ") or startswith(text, "* ") then
+            return trim(substring(text, 2, len(text) - 1))
+          endif
+          return text
+        endif
+      endif
+    endif
+  endfor
+  return fallback
+endfunc
+
+func source_title(content: string, fallback: string) -> string
+  for line in split(normalize_newlines(content), "\n") do
+    text := trim(line)
+    if text != "" then
+      if startswith(text, "//") then
+        if len(text) > 2 then
+          comment := trim(substring(text, 2, len(text) - 1))
+          if comment != "" then
+            return comment
+          endif
+        endif
+      else
+        return fallback
+      endif
+    endif
+  endfor
+  return fallback
+endfunc
+
+func source_summary(content: string, fallback: string) -> string
+  title_seen := false
+  for line in split(normalize_newlines(content), "\n") do
+    text := trim(line)
+    if text != "" then
+      if startswith(text, "//") then
+        if len(text) > 2 then
+          comment := trim(substring(text, 2, len(text) - 1))
+          if comment != "" then
+            if title_seen then
+              return comment
+            endif
+            title_seen := true
+          endif
+        endif
+      else
+        return fallback
+      endif
+    endif
+  endfor
+  return fallback
+endfunc
+
+func normalize_newlines(content: string) -> string
+  text := replace(content, "\r\n", "\n")
+  return replace(text, "\r", "\n")
+endfunc
+
+func contains_text(items: list, target: string) -> bool
+  for item in items do
+    if item = target then
+      return true
+    endif
+  endfor
+  return false
+endfunc
+
+func select_markdown_variant(paths: list, canonical: string, lang: string) -> string
+  preferred := markdown_variant_path(canonical, lang)
+  if contains_text(paths, preferred) then
+    return preferred
+  endif
+  if contains_text(paths, canonical) then
+    return canonical
+  endif
+  fallback_lang := other_lang(lang)
+  fallback := markdown_variant_path(canonical, fallback_lang)
+  if contains_text(paths, fallback) then
+    return fallback
+  endif
+  return ""
+endfunc
+
+func canonical_markdown_path(path: string) -> string
+  if endswith(path, ".en.md") then
+    return replace(path, ".en.md", ".md")
+  endif
+  if endswith(path, ".zh.md") then
+    return replace(path, ".zh.md", ".md")
+  endif
+  return path
+endfunc
+
+func markdown_variant_path(canonical: string, lang: string) -> string
+  if lang = "zh" then
+    return replace(canonical, ".md", ".zh.md")
+  endif
+  return replace(canonical, ".md", ".en.md")
+endfunc
+
+func other_lang(lang: string) -> string
+  if lang = "zh" then
+    return "en"
+  endif
+  return "zh"
+endfunc
+
+func file_slug(path: string) -> string
+  slug := strip_extension(canonical_markdown_path(path))
+  slug := replace(slug, "/", "--")
+  slug := replace(slug, "_", "-")
+  return replace(slug, " ", "-")
+endfunc
+
+func strip_extension(path: string) -> string
+  text := replace(path, ".en.md", "")
+  text := replace(text, ".zh.md", "")
+  text := replace(text, ".md", "")
+  return replace(text, ".gw", "")
+endfunc
+
+func title_from_path(path: string) -> string
+  name := basename(path)
+  if name = "README.md" then
+    return clean_name(title_parent(path)) + " readme"
+  endif
+  if name = "TUTORIAL.md" then
+    return clean_name(title_parent(path)) + " tutorial"
+  endif
+  if name = "main.gw" then
+    return clean_name(title_parent(path)) + " main"
+  endif
+  return clean_name(strip_extension(name))
+endfunc
+
+func clean_name(text: string) -> string
+  value := replace(text, "_", " ")
+  return replace(value, "-", " ")
+endfunc
+
+func title_parent(path: string) -> string
+  parent := basename(dirname(path))
+  if parent = "." or parent = "" then
+    return strip_extension(basename(path))
+  endif
+  return parent
+endfunc
+
+endmodule

@@ -2,6 +2,7 @@ package parser_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Cass-ette/gwen-lang/internal/ast"
@@ -121,6 +122,17 @@ func TestWhile(t *testing.T) {
 	}
 }
 
+func TestWhileNamed(t *testing.T) {
+	prog := mustParse(t, "while b != 0 do scan\n  next scan\nendwhile scan")
+	stmt, ok := prog.Statements[0].(*ast.WhileStmt)
+	if !ok {
+		t.Fatalf("expected *ast.WhileStmt, got %T", prog.Statements[0])
+	}
+	if stmt.Name != "scan" {
+		t.Fatalf("name mismatch: got %q want %q", stmt.Name, "scan")
+	}
+}
+
 func TestForRange(t *testing.T) {
 	prog := mustParse(t, "for i in 1 to 10 do\n  print(i)\nendfor")
 	stmt, ok := prog.Statements[0].(*ast.ForRangeStmt)
@@ -129,6 +141,17 @@ func TestForRange(t *testing.T) {
 	}
 	if stmt.Var != "i" {
 		t.Fatalf("var mismatch: got %q want %q", stmt.Var, "i")
+	}
+}
+
+func TestForRangeNamed(t *testing.T) {
+	prog := mustParse(t, "for i in 1 to 3 do build\n  leave build\nendfor build")
+	stmt, ok := prog.Statements[0].(*ast.ForRangeStmt)
+	if !ok {
+		t.Fatalf("expected *ast.ForRangeStmt, got %T", prog.Statements[0])
+	}
+	if stmt.Name != "build" {
+		t.Fatalf("name mismatch: got %q want %q", stmt.Name, "build")
 	}
 }
 
@@ -151,6 +174,51 @@ func TestForEach(t *testing.T) {
 	}
 	if stmt.Var != "item" {
 		t.Fatalf("var mismatch: got %q want %q", stmt.Var, "item")
+	}
+}
+
+func TestForEachNamed(t *testing.T) {
+	prog := mustParse(t, "for item in list with index idx do render\n  pass\nendfor render")
+	stmt, ok := prog.Statements[0].(*ast.ForEachStmt)
+	if !ok {
+		t.Fatalf("expected *ast.ForEachStmt, got %T", prog.Statements[0])
+	}
+	if stmt.Name != "render" {
+		t.Fatalf("name mismatch: got %q want %q", stmt.Name, "render")
+	}
+	if stmt.IndexVar != "idx" {
+		t.Fatalf("index var mismatch: got %q want %q", stmt.IndexVar, "idx")
+	}
+}
+
+func TestPassLeaveNext(t *testing.T) {
+	prog := mustParse(t, "pass\nleave outer\nnext outer")
+	if _, ok := prog.Statements[0].(*ast.PassStmt); !ok {
+		t.Fatalf("expected *ast.PassStmt, got %T", prog.Statements[0])
+	}
+	leaveStmt, ok := prog.Statements[1].(*ast.LeaveStmt)
+	if !ok {
+		t.Fatalf("expected *ast.LeaveStmt, got %T", prog.Statements[1])
+	}
+	if leaveStmt.Name != "outer" {
+		t.Fatalf("leave name mismatch: got %q want %q", leaveStmt.Name, "outer")
+	}
+	nextStmt, ok := prog.Statements[2].(*ast.NextStmt)
+	if !ok {
+		t.Fatalf("expected *ast.NextStmt, got %T", prog.Statements[2])
+	}
+	if nextStmt.Name != "outer" {
+		t.Fatalf("next name mismatch: got %q want %q", nextStmt.Name, "outer")
+	}
+}
+
+func TestLoopNameMismatchRejected(t *testing.T) {
+	_, err := parser.Parse("while true do outer\n  pass\nendwhile inner")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	if !strings.Contains(err.Error(), "loop name mismatch") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -395,6 +463,36 @@ func TestFuncTypeParam(t *testing.T) {
 	}
 	if _, ok := fn.ReturnType.(*ast.GenericType); !ok {
 		t.Fatalf("expected *ast.GenericType, got %T", fn.ReturnType)
+	}
+}
+
+func TestFuncTypeParamWithMultiReturn(t *testing.T) {
+	prog := mustParse(t, "func apply(f: (int) -> int, string, x: int) -> int\n  return x\nendfunc")
+	fn, ok := prog.Statements[0].(*ast.FuncDef)
+	if !ok {
+		t.Fatalf("expected *ast.FuncDef, got %T", prog.Statements[0])
+	}
+	typeName, ok := fn.Params[0].TypeName.(*ast.FuncType)
+	if !ok {
+		t.Fatalf("expected *ast.FuncType, got %T", fn.Params[0].TypeName)
+	}
+	returnTypes, ok := typeName.ReturnType.([]any)
+	if !ok {
+		t.Fatalf("expected []any return types, got %T", typeName.ReturnType)
+	}
+	if len(returnTypes) != 2 {
+		t.Fatalf("return type count mismatch: got %d want 2", len(returnTypes))
+	}
+	first, ok := returnTypes[0].(*ast.TypeName)
+	if !ok {
+		t.Fatalf("expected first return *ast.TypeName, got %T", returnTypes[0])
+	}
+	second, ok := returnTypes[1].(*ast.TypeName)
+	if !ok {
+		t.Fatalf("expected second return *ast.TypeName, got %T", returnTypes[1])
+	}
+	if first.Name != "int" || second.Name != "string" {
+		t.Fatalf("return type mismatch: got %q, %q want int, string", first.Name, second.Name)
 	}
 }
 

@@ -165,6 +165,20 @@ class ReturnStmt:
     line: int = 0
 
 @dataclass
+class PassStmt:
+    line: int = 0
+
+@dataclass
+class LeaveStmt:
+    name: str = ""
+    line: int = 0
+
+@dataclass
+class NextStmt:
+    name: str = ""
+    line: int = 0
+
+@dataclass
 class IfStmt:
     condition: Any = None
     body: List[Any] = field(default_factory=list)
@@ -175,6 +189,7 @@ class IfStmt:
 @dataclass
 class WhileStmt:
     condition: Any = None
+    name: str = ""
     body: List[Any] = field(default_factory=list)
     line: int = 0
 
@@ -185,6 +200,7 @@ class ForRangeStmt:
     end: Any = None
     step: Any = None
     direction: str = "auto"  # "auto", "asc", "desc"
+    name: str = ""
     body: List[Any] = field(default_factory=list)
     line: int = 0
 
@@ -193,6 +209,7 @@ class ForEachStmt:
     var: str = ""
     iterable: Any = None
     index_var: Optional[str] = None
+    name: str = ""
     body: List[Any] = field(default_factory=list)
     line: int = 0
 

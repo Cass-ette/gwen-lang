@@ -51,6 +51,12 @@ type Scope struct {
 	objects             map[string]*ObjectInfo
 	expectedReturnTypes []string
 	methodSelfType      string
+	loopNames           []string
+}
+
+type controlSignal struct {
+	Kind string
+	Name string
 }
 
 type ValueInfo struct {
@@ -96,8 +102,13 @@ var baseTypeNames = map[string]struct{}{
 	"dict":         {},
 	"func":         {},
 	"result":       {},
+	"HttpRequest":  {},
+	"HttpReply":    {},
 	"HttpResponse": {},
+	"HttpServer":   {},
 	"JsonNull":     {},
+	"SqliteDB":     {},
+	"cell":         {},
 }
 
 type arity struct {
@@ -110,6 +121,7 @@ var genericBaseArity = map[string]arity{
 	"dict":   {min: 2, max: 2},
 	"money":  {min: 1, max: 1},
 	"result": {min: 1, max: -1},
+	"cell":   {min: 1, max: 1},
 }
 
 const (
@@ -146,6 +158,8 @@ var stdlibModules = map[string][]string{
 		"split",
 		"join",
 		"substring",
+		"startswith",
+		"endswith",
 		"contains",
 		"trim",
 		"replace",
@@ -167,9 +181,11 @@ var stdlibModules = map[string][]string{
 	},
 	"io": {
 		"readfile",
+		"readdir",
 		"writefile",
 		"appendfile",
 	},
+	"path": {},
 	"os": {
 		"args",
 		"cwd",
@@ -181,8 +197,10 @@ var stdlibModules = map[string][]string{
 		"nowunixms",
 		"nowrfc3339",
 	},
-	"json": {},
-	"http": {},
+	"json":   {},
+	"http":   {},
+	"state":  {},
+	"sqlite": {},
 }
 
 var moduleOnlyBuiltins = map[string]struct{}{
@@ -215,7 +233,7 @@ func (c *Checker) CheckProgram(program *ast.Program, sourcePath string) error {
 	}
 
 	deferred := []func() error{}
-	if err := c.checkBlock(program.Statements, c.globalScope, &deferred); err != nil {
+	if _, err := c.checkBlock(program.Statements, c.globalScope, &deferred); err != nil {
 		return err
 	}
 	return c.runDeferred(&deferred)
@@ -267,6 +285,85 @@ func (c *Checker) setupStdlibModules() {
 		},
 		ReturnTypeNames: []string{"result[HttpResponse]"},
 	})
+	c.addStdlibModuleCallable("http", "request", &CallableInfo{
+		Label: "request",
+		Params: []ParamInfo{
+			{Name: "method", TypeName: "string"},
+			{Name: "url", TypeName: "string"},
+			{Name: "body", TypeName: "string"},
+			{Name: "headers", TypeName: "dict[string, string]"},
+			{Name: "timeoutms", TypeName: "int", HasDefault: true},
+		},
+		ReturnTypeNames: []string{"result[HttpResponse]"},
+	})
+	c.addStdlibModuleCallable("http", "listen", &CallableInfo{
+		Label: "listen",
+		Params: []ParamInfo{
+			{Name: "addr", TypeName: "string"},
+			{Name: "handler"},
+		},
+		ReturnTypeNames: []string{"result[HttpServer]"},
+	})
+	c.addStdlibModuleCallable("http", "addr", &CallableInfo{
+		Label: "addr",
+		Params: []ParamInfo{
+			{Name: "server", TypeName: "HttpServer"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("http", "wait", &CallableInfo{
+		Label: "wait",
+		Params: []ParamInfo{
+			{Name: "server", TypeName: "HttpServer"},
+		},
+		ReturnTypeNames: []string{"result[int]"},
+	})
+	c.addStdlibModuleCallable("http", "close", &CallableInfo{
+		Label: "close",
+		Params: []ParamInfo{
+			{Name: "server", TypeName: "HttpServer"},
+		},
+		ReturnTypeNames: []string{"result[int]"},
+	})
+	c.addStdlibModuleCallable("http", "method", &CallableInfo{
+		Label: "method",
+		Params: []ParamInfo{
+			{Name: "request", TypeName: "HttpRequest"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("http", "path", &CallableInfo{
+		Label: "path",
+		Params: []ParamInfo{
+			{Name: "request", TypeName: "HttpRequest"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("http", "requestbody", &CallableInfo{
+		Label: "requestbody",
+		Params: []ParamInfo{
+			{Name: "request", TypeName: "HttpRequest"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("http", "requestheader", &CallableInfo{
+		Label: "requestheader",
+		Params: []ParamInfo{
+			{Name: "request", TypeName: "HttpRequest"},
+			{Name: "key", TypeName: "string"},
+			{Name: "fallback", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("http", "requestcookie", &CallableInfo{
+		Label: "requestcookie",
+		Params: []ParamInfo{
+			{Name: "request", TypeName: "HttpRequest"},
+			{Name: "name", TypeName: "string"},
+			{Name: "fallback", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
 	c.addStdlibModuleCallable("http", "status", &CallableInfo{
 		Label: "status",
 		Params: []ParamInfo{
@@ -274,12 +371,97 @@ func (c *Checker) setupStdlibModules() {
 		},
 		ReturnTypeNames: []string{"int"},
 	})
-	c.addStdlibModuleCallable("http", "body", &CallableInfo{
-		Label: "body",
+	c.addStdlibModuleCallable("http", "responsebody", &CallableInfo{
+		Label: "responsebody",
 		Params: []ParamInfo{
 			{Name: "response", TypeName: "HttpResponse"},
 		},
 		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("http", "responseheader", &CallableInfo{
+		Label: "responseheader",
+		Params: []ParamInfo{
+			{Name: "response", TypeName: "HttpResponse"},
+			{Name: "key", TypeName: "string"},
+			{Name: "fallback", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("http", "query", &CallableInfo{
+		Label: "query",
+		Params: []ParamInfo{
+			{Name: "request", TypeName: "HttpRequest"},
+			{Name: "key", TypeName: "string"},
+			{Name: "fallback", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("http", "route", &CallableInfo{
+		Label: "route",
+		Params: []ParamInfo{
+			{Name: "request", TypeName: "HttpRequest"},
+			{Name: "pattern", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"bool", "dict[string, string]"},
+	})
+	c.addStdlibModuleCallable("http", "text", &CallableInfo{
+		Label: "text",
+		Params: []ParamInfo{
+			{Name: "status", TypeName: "int"},
+			{Name: "body", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"HttpReply"},
+	})
+	c.addStdlibModuleCallable("http", "html", &CallableInfo{
+		Label: "html",
+		Params: []ParamInfo{
+			{Name: "status", TypeName: "int"},
+			{Name: "body", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"HttpReply"},
+	})
+	c.addStdlibModuleCallable("http", "json", &CallableInfo{
+		Label: "json",
+		Params: []ParamInfo{
+			{Name: "status", TypeName: "int"},
+			{Name: "value"},
+		},
+		ReturnTypeNames: []string{"result[HttpReply]"},
+	})
+	c.addStdlibModuleCallable("http", "redirect", &CallableInfo{
+		Label: "redirect",
+		Params: []ParamInfo{
+			{Name: "status", TypeName: "int"},
+			{Name: "location", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"HttpReply"},
+	})
+	c.addStdlibModuleCallable("http", "withheader", &CallableInfo{
+		Label: "withheader",
+		Params: []ParamInfo{
+			{Name: "reply", TypeName: "HttpReply"},
+			{Name: "key", TypeName: "string"},
+			{Name: "value", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"HttpReply"},
+	})
+	c.addStdlibModuleCallable("http", "withcookie", &CallableInfo{
+		Label: "withcookie",
+		Params: []ParamInfo{
+			{Name: "reply", TypeName: "HttpReply"},
+			{Name: "name", TypeName: "string"},
+			{Name: "value", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"HttpReply"},
+	})
+	c.addStdlibModuleCallable("http", "static", &CallableInfo{
+		Label: "static",
+		Params: []ParamInfo{
+			{Name: "request", TypeName: "HttpRequest"},
+			{Name: "prefix", TypeName: "string"},
+			{Name: "root", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"bool", "result[HttpReply]"},
 	})
 	c.addStdlibModuleCallable("json", "parseobject", &CallableInfo{
 		Label: "parseobject",
@@ -325,6 +507,87 @@ func (c *Checker) setupStdlibModules() {
 		},
 		ReturnTypeNames: []string{"bool"},
 	})
+	c.addStdlibModuleCallable("state", "cell", &CallableInfo{
+		Label: "cell",
+		Params: []ParamInfo{
+			{Name: "value"},
+		},
+		ReturnTypeNames: []string{"cell"},
+	})
+	c.addStdlibModuleCallable("state", "get", &CallableInfo{
+		Label: "get",
+		Params: []ParamInfo{
+			{Name: "cell", TypeName: "cell"},
+		},
+	})
+	c.addStdlibModuleCallable("state", "set", &CallableInfo{
+		Label: "set",
+		Params: []ParamInfo{
+			{Name: "cell", TypeName: "cell"},
+			{Name: "value"},
+		},
+	})
+	c.addStdlibModuleCallable("state", "update", &CallableInfo{
+		Label: "update",
+		Params: []ParamInfo{
+			{Name: "cell", TypeName: "cell"},
+			{Name: "f"},
+		},
+	})
+	c.addStdlibModuleCallable("sqlite", "open", &CallableInfo{
+		Label: "open",
+		Params: []ParamInfo{
+			{Name: "path", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"result[SqliteDB]"},
+	})
+	c.addStdlibModuleCallable("sqlite", "close", &CallableInfo{
+		Label: "close",
+		Params: []ParamInfo{
+			{Name: "db", TypeName: "SqliteDB"},
+		},
+		ReturnTypeNames: []string{"result[int]"},
+	})
+	c.addStdlibModuleCallable("sqlite", "exec", &CallableInfo{
+		Label: "exec",
+		Params: []ParamInfo{
+			{Name: "db", TypeName: "SqliteDB"},
+			{Name: "sql", TypeName: "string"},
+			{Name: "params", TypeName: "list", HasDefault: true},
+		},
+		ReturnTypeNames: []string{"result[int]"},
+	})
+	c.addStdlibModuleCallable("sqlite", "query", &CallableInfo{
+		Label: "query",
+		Params: []ParamInfo{
+			{Name: "db", TypeName: "SqliteDB"},
+			{Name: "sql", TypeName: "string"},
+			{Name: "params", TypeName: "list", HasDefault: true},
+		},
+		ReturnTypeNames: []string{"result[list[dict]]"},
+	})
+	c.addStdlibModuleCallable("path", "basename", &CallableInfo{
+		Label: "basename",
+		Params: []ParamInfo{
+			{Name: "path", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("path", "dirname", &CallableInfo{
+		Label: "dirname",
+		Params: []ParamInfo{
+			{Name: "path", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
+	c.addStdlibModuleCallable("path", "joinpath", &CallableInfo{
+		Label: "joinpath",
+		Params: []ParamInfo{
+			{Name: "left", TypeName: "string"},
+			{Name: "right", TypeName: "string"},
+		},
+		ReturnTypeNames: []string{"string"},
+	})
 }
 
 func (c *Checker) hideModuleOnlyBuiltins() {
@@ -356,7 +619,7 @@ func (c *Checker) addStdlibModuleCallable(moduleName, exportName string, signatu
 func builtinSignatures() map[string]*CallableInfo {
 	return map[string]*CallableInfo{
 		"write":      {Label: "write", Variadic: true},
-		"read":       {Label: "read", Params: []ParamInfo{{Name: "prompt", HasDefault: true}}, ReturnTypeNames: []string{"string"}},
+		"read":       {Label: "read", Params: []ParamInfo{{Name: "prompt", TypeName: "string", HasDefault: true}}, ReturnTypeNames: []string{"string"}},
 		"len":        {Label: "len", Params: []ParamInfo{{Name: "obj"}}, ReturnTypeNames: []string{"int"}},
 		"str":        {Label: "str", Params: []ParamInfo{{Name: "obj"}}, ReturnTypeNames: []string{"string"}},
 		"int":        {Label: "int", Params: []ParamInfo{{Name: "obj"}}, ReturnTypeNames: []string{"int"}},
@@ -370,7 +633,7 @@ func builtinSignatures() map[string]*CallableInfo {
 		"map":        {Label: "map", Params: []ParamInfo{{Name: "lst", TypeName: "list"}, {Name: "f"}}, ReturnTypeNames: []string{"list"}},
 		"filter":     {Label: "filter", Params: []ParamInfo{{Name: "lst", TypeName: "list"}, {Name: "pred"}}, ReturnTypeNames: []string{"list"}},
 		"range":      {Label: "range", Params: []ParamInfo{{Name: "start", TypeName: "int"}, {Name: "end", TypeName: "int"}, {Name: "step", TypeName: "int", HasDefault: true}}, ReturnTypeNames: []string{"list[int]"}},
-		"enumerate":  {Label: "enumerate", Params: []ParamInfo{{Name: "lst", TypeName: "list"}}, ReturnTypeNames: []string{"list"}},
+		"enumerate":  {Label: "enumerate", Params: []ParamInfo{{Name: "lst", TypeName: "list"}}, ReturnTypeNames: []string{"list[list]"}},
 		"split":      {Label: "split", Params: []ParamInfo{{Name: "s", TypeName: "string"}, {Name: "sep", TypeName: "string"}}, ReturnTypeNames: []string{"list[string]"}},
 		"join":       {Label: "join", Params: []ParamInfo{{Name: "parts", TypeName: "list"}, {Name: "sep", TypeName: "string"}}, ReturnTypeNames: []string{"string"}},
 		"pop":        {Label: "pop", Params: []ParamInfo{{Name: "lst"}}},
@@ -378,6 +641,8 @@ func builtinSignatures() map[string]*CallableInfo {
 		"insert":     {Label: "insert", Params: []ParamInfo{{Name: "lst"}, {Name: "idx", TypeName: "int"}, {Name: "item"}}},
 		"concat":     {Label: "concat", Params: []ParamInfo{{Name: "a", TypeName: "list"}, {Name: "b", TypeName: "list"}}, ReturnTypeNames: []string{"list"}},
 		"substring":  {Label: "substring", Params: []ParamInfo{{Name: "s", TypeName: "string"}, {Name: "start", TypeName: "int"}, {Name: "end", TypeName: "int"}}, ReturnTypeNames: []string{"string"}},
+		"startswith": {Label: "startswith", Params: []ParamInfo{{Name: "s", TypeName: "string"}, {Name: "prefix", TypeName: "string"}}, ReturnTypeNames: []string{"bool"}},
+		"endswith":   {Label: "endswith", Params: []ParamInfo{{Name: "s", TypeName: "string"}, {Name: "suffix", TypeName: "string"}}, ReturnTypeNames: []string{"bool"}},
 		"contains":   {Label: "contains", Params: []ParamInfo{{Name: "s"}, {Name: "substr"}}, ReturnTypeNames: []string{"bool"}},
 		"trim":       {Label: "trim", Params: []ParamInfo{{Name: "s", TypeName: "string"}}, ReturnTypeNames: []string{"string"}},
 		"replace":    {Label: "replace", Params: []ParamInfo{{Name: "s", TypeName: "string"}, {Name: "old", TypeName: "string"}, {Name: "new", TypeName: "string"}}, ReturnTypeNames: []string{"string"}},
@@ -391,8 +656,9 @@ func builtinSignatures() map[string]*CallableInfo {
 		"get":        {Label: "get", Params: []ParamInfo{{Name: "d", TypeName: "dict"}, {Name: "key"}, {Name: "default"}}},
 		"keys":       {Label: "keys", Params: []ParamInfo{{Name: "d", TypeName: "dict"}}, ReturnTypeNames: []string{"list"}},
 		"values":     {Label: "values", Params: []ParamInfo{{Name: "d", TypeName: "dict"}}, ReturnTypeNames: []string{"list"}},
-		"items":      {Label: "items", Params: []ParamInfo{{Name: "d", TypeName: "dict"}}, ReturnTypeNames: []string{"list"}},
+		"items":      {Label: "items", Params: []ParamInfo{{Name: "d", TypeName: "dict"}}, ReturnTypeNames: []string{"list[list]"}},
 		"readfile":   {Label: "readfile", Params: []ParamInfo{{Name: "path", TypeName: "string"}}, ReturnTypeNames: []string{"result[string]"}},
+		"readdir":    {Label: "readdir", Params: []ParamInfo{{Name: "path", TypeName: "string"}}, ReturnTypeNames: []string{"result[list[string]]"}},
 		"writefile":  {Label: "writefile", Params: []ParamInfo{{Name: "path", TypeName: "string"}, {Name: "content", TypeName: "string"}}, ReturnTypeNames: []string{"result[int]"}},
 		"appendfile": {Label: "appendfile", Params: []ParamInfo{{Name: "path", TypeName: "string"}, {Name: "content", TypeName: "string"}}, ReturnTypeNames: []string{"result[int]"}},
 		"args":       {Label: "args", ReturnTypeNames: []string{"list[string]"}},
@@ -408,9 +674,11 @@ func builtinSignatures() map[string]*CallableInfo {
 func newScope(parent *Scope) *Scope {
 	var expectedReturnTypes []string
 	methodSelfType := ""
+	var loopNames []string
 	if parent != nil {
 		expectedReturnTypes = parent.expectedReturnTypes
 		methodSelfType = parent.methodSelfType
+		loopNames = append(loopNames, parent.loopNames...)
 	}
 	return &Scope{
 		parent:              parent,
@@ -419,6 +687,7 @@ func newScope(parent *Scope) *Scope {
 		objects:             map[string]*ObjectInfo{},
 		expectedReturnTypes: expectedReturnTypes,
 		methodSelfType:      methodSelfType,
+		loopNames:           loopNames,
 	}
 }
 
@@ -434,6 +703,7 @@ func newReturnScope(parent *Scope, expectedReturnTypes []string) *Scope {
 		objects:             map[string]*ObjectInfo{},
 		expectedReturnTypes: expectedReturnTypes,
 		methodSelfType:      methodSelfType,
+		loopNames:           nil,
 	}
 }
 
@@ -445,6 +715,7 @@ func newMethodScope(parent *Scope, expectedReturnTypes []string, methodSelfType 
 		objects:             map[string]*ObjectInfo{},
 		expectedReturnTypes: expectedReturnTypes,
 		methodSelfType:      methodSelfType,
+		loopNames:           nil,
 	}
 }
 
@@ -456,6 +727,7 @@ func cloneScope(base *Scope) *Scope {
 		objects:             map[string]*ObjectInfo{},
 		expectedReturnTypes: base.expectedReturnTypes,
 		methodSelfType:      base.methodSelfType,
+		loopNames:           append([]string{}, base.loopNames...),
 	}
 	for name, value := range base.values {
 		cloned.values[name] = value
@@ -514,6 +786,23 @@ func (s *Scope) resolveAliasRaw(name string) (string, bool) {
 func (s *Scope) resolveLocalAlias(name string) (string, bool) {
 	target, ok := s.aliases[name]
 	return target, ok
+}
+
+func (s *Scope) withLoopName(name string) *Scope {
+	cloned := cloneScope(s)
+	if name != "" {
+		cloned.loopNames = append(cloned.loopNames, name)
+	}
+	return cloned
+}
+
+func (s *Scope) hasLoopName(name string) bool {
+	for idx := len(s.loopNames) - 1; idx >= 0; idx-- {
+		if s.loopNames[idx] == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scope) defineObject(info *ObjectInfo) {
@@ -820,7 +1109,7 @@ func (c *Checker) mergeTypeNames(leftType string, rightType string) (string, boo
 
 	leftBase := typeBase(leftType)
 	rightBase := typeBase(rightType)
-	if leftBase == rightBase && (leftBase == "list" || leftBase == "dict" || leftBase == "result") {
+	if leftBase == rightBase && (leftBase == "list" || leftBase == "dict" || leftBase == "result" || leftBase == "cell") {
 		if leftType == leftBase || rightType == rightBase {
 			return leftBase, true
 		}
@@ -1036,7 +1325,13 @@ func callableFromTypeName(typeName string, label string, scope *Scope) *Callable
 		}
 	}
 	if strings.TrimSpace(returnText) != "" && strings.TrimSpace(returnText) != "void" {
-		callable.ReturnTypeNames = []string{strings.TrimSpace(returnText)}
+		for _, part := range splitTopLevel(returnText, ',') {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			callable.ReturnTypeNames = append(callable.ReturnTypeNames, part)
+		}
 	}
 	return callable
 }
@@ -1123,21 +1418,25 @@ func renderReturnTypes(returnType any) []string {
 	}
 }
 
-func (c *Checker) checkBlock(stmts []any, scope *Scope, deferred *[]func() error) error {
+func (c *Checker) checkBlock(stmts []any, scope *Scope, deferred *[]func() error) (*controlSignal, error) {
 	for _, stmt := range stmts {
-		if err := c.checkStmt(stmt, scope, deferred); err != nil {
-			return err
+		signal, err := c.checkStmt(stmt, scope, deferred)
+		if err != nil {
+			return nil, err
+		}
+		if signal != nil {
+			return signal, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
-func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) error {
+func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) (*controlSignal, error) {
 	switch node := stmt.(type) {
 	case *ast.FuncDef:
 		signature, err := c.callableFromParams(node.Name, node.Params, node.ReturnType, scope)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		scope.defineValue(node.Name, &ValueInfo{
 			Kind:         "function",
@@ -1148,14 +1447,14 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		*deferred = append(*deferred, func() error {
 			return c.checkFuncBody(node, deferredScope)
 		})
-		return nil
+		return nil, nil
 
 	case *ast.Assignment:
 		values := make([]*ValueInfo, 0, len(node.Values))
 		for _, valueExpr := range node.Values {
 			value, err := c.checkExpr(valueExpr, scope, deferred)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			values = append(values, value)
 		}
@@ -1167,7 +1466,7 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 			}
 		}
 		if len(node.Targets) != len(assignedValues) {
-			return semanticErrorf(node.Line, "Assignment count mismatch: %d targets, %d values", len(node.Targets), len(assignedValues))
+			return nil, semanticErrorf(node.Line, "Assignment count mismatch: %d targets, %d values", len(node.Targets), len(assignedValues))
 		}
 		for idx, target := range node.Targets {
 			actualValue := assignedValues[idx]
@@ -1178,7 +1477,7 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 						continue
 					}
 					if err := c.validateValueAssignment(name, existing, actualValue, scope, node.Line); err != nil {
-						return err
+						return nil, err
 					}
 					continue
 				}
@@ -1186,17 +1485,17 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 				continue
 			}
 			if err := c.checkAssignmentTarget(target, scope, deferred, node.Line); err != nil {
-				return err
+				return nil, err
 			}
 		}
-		return nil
+		return nil, nil
 
 	case *ast.VarDecl:
 		declaredType := ""
 		if node.TypeName != nil {
 			resolved, err := c.resolveTypeNode(node.TypeName, scope, node.Line)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			declaredType = resolved
 		}
@@ -1205,33 +1504,37 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 			var err error
 			inferred, err = c.checkExpr(node.Value, scope, deferred)
 			if err != nil {
-				return err
+				return nil, err
 			}
 		}
 		value, err := c.bindDeclaredValue(node.Name, declaredType, inferred, scope, node.Line)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		scope.defineValue(node.Name, value)
-		return nil
+		return nil, nil
 
 	case *ast.VarBlock:
 		if node.DefaultValue != nil {
 			if _, err := c.checkExpr(node.DefaultValue, scope, deferred); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		for _, decl := range node.Decls {
-			if err := c.checkStmt(decl, scope, deferred); err != nil {
-				return err
+			signal, err := c.checkStmt(decl, scope, deferred)
+			if err != nil {
+				return nil, err
+			}
+			if signal != nil {
+				return signal, nil
 			}
 		}
-		return nil
+		return nil, nil
 
 	case *ast.TypeAlias:
 		target, ok := renderType(node.Target)
 		if !ok {
-			return semanticErrorf(node.Line, "Invalid type alias target for '%s'", node.Name)
+			return nil, semanticErrorf(node.Line, "Invalid type alias target for '%s'", node.Name)
 		}
 		scope.defineAlias(node.Name, target)
 		deferredScope := scope
@@ -1239,23 +1542,41 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 			_, err := c.resolveTypeNode(node.Target, deferredScope, node.Line)
 			return err
 		})
-		return nil
+		return nil, nil
 
 	case *ast.ReturnStmt:
 		return c.checkReturnValue(node.Value, scope, deferred, node.Line)
 
+	case *ast.PassStmt:
+		return nil, nil
+
+	case *ast.LeaveStmt:
+		if !scope.hasLoopName(node.Name) {
+			return nil, semanticErrorf(node.Line, "leave targets unknown loop '%s'", node.Name)
+		}
+		return &controlSignal{Kind: "leave", Name: node.Name}, nil
+
+	case *ast.NextStmt:
+		if !scope.hasLoopName(node.Name) {
+			return nil, semanticErrorf(node.Line, "next targets unknown loop '%s'", node.Name)
+		}
+		return &controlSignal{Kind: "next", Name: node.Name}, nil
+
 	case *ast.IfStmt:
 		if _, err := c.checkExpr(node.Condition, scope, deferred); err != nil {
-			return err
+			return nil, err
 		}
 		branches := make([]*Scope, 0, len(node.Elifs)+2)
+		branchSignals := make([]*controlSignal, 0, len(node.Elifs)+2)
 		remainderReachable := true
 		if value, known := staticBool(node.Condition); !known || value {
 			thenScope := cloneScope(scope)
-			if err := c.checkBlock(node.Body, thenScope, deferred); err != nil {
-				return err
+			signal, err := c.checkBlock(node.Body, thenScope, deferred)
+			if err != nil {
+				return nil, err
 			}
 			branches = append(branches, thenScope)
+			branchSignals = append(branchSignals, signal)
 			if known && value {
 				remainderReachable = false
 			}
@@ -1265,78 +1586,96 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 				break
 			}
 			if _, err := c.checkExpr(branch.Condition, scope, deferred); err != nil {
-				return err
+				return nil, err
 			}
 			if value, known := staticBool(branch.Condition); known && !value {
 				continue
 			}
 			elifScope := cloneScope(scope)
-			if err := c.checkBlock(branch.Body, elifScope, deferred); err != nil {
-				return err
+			signal, err := c.checkBlock(branch.Body, elifScope, deferred)
+			if err != nil {
+				return nil, err
 			}
 			branches = append(branches, elifScope)
+			branchSignals = append(branchSignals, signal)
 			if value, known := staticBool(branch.Condition); known && value {
 				remainderReachable = false
 			}
 		}
 		if remainderReachable && len(node.ElseBody) > 0 {
 			elseScope := cloneScope(scope)
-			if err := c.checkBlock(node.ElseBody, elseScope, deferred); err != nil {
-				return err
+			signal, err := c.checkBlock(node.ElseBody, elseScope, deferred)
+			if err != nil {
+				return nil, err
 			}
 			branches = append(branches, elseScope)
+			branchSignals = append(branchSignals, signal)
 			remainderReachable = false
 		}
 		if remainderReachable {
 			branches = append(branches, cloneScope(scope))
+			branchSignals = append(branchSignals, nil)
 		}
-		return c.mergeAlternativeScopes(scope, scope, branches, "if", node.Line)
+		if err := c.mergeAlternativeScopes(scope, scope, branches, "if", node.Line); err != nil {
+			return nil, err
+		}
+		return commonControlSignal(branchSignals), nil
 
 	case *ast.WhileStmt:
 		if _, err := c.checkExpr(node.Condition, scope, deferred); err != nil {
-			return err
+			return nil, err
 		}
-		loopScope := cloneScope(scope)
-		if err := c.checkBlock(node.Body, loopScope, deferred); err != nil {
-			return err
+		loopScope := scope.withLoopName(node.Name)
+		bodySignal, err := c.checkBlock(node.Body, loopScope, deferred)
+		if err != nil {
+			return nil, err
 		}
+		bodySignal = consumeLoopSignal(bodySignal, node.Name)
 		if value, known := staticBool(node.Condition); known {
 			if value {
 				c.applyClonedScope(scope, loopScope)
 			}
-			return nil
+			return bodySignal, nil
 		}
-		return c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "while", node.Line)
+		if err := c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "while", node.Line); err != nil {
+			return nil, err
+		}
+		return bodySignal, nil
 
 	case *ast.ForRangeStmt:
 		if _, err := c.checkExpr(node.Start, scope, deferred); err != nil {
-			return err
+			return nil, err
 		}
 		if _, err := c.checkExpr(node.End, scope, deferred); err != nil {
-			return err
+			return nil, err
 		}
 		if node.Step != nil {
 			if _, err := c.checkExpr(node.Step, scope, deferred); err != nil {
-				return err
+				return nil, err
 			}
 		}
-		loopScope := cloneScope(scope)
+		loopScope := scope.withLoopName(node.Name)
 		loopScope.defineValue(node.Var, c.valueFromDeclaredType("int", loopScope, node.Var))
-		if err := c.checkBlock(node.Body, loopScope, deferred); err != nil {
-			return err
+		bodySignal, err := c.checkBlock(node.Body, loopScope, deferred)
+		if err != nil {
+			return nil, err
 		}
+		bodySignal = consumeLoopSignal(bodySignal, node.Name)
 		if rangeRunsAtLeastOnce(node) {
 			c.applyClonedScope(scope, loopScope)
-			return nil
+			return bodySignal, nil
 		}
-		return c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "for", node.Line)
+		if err := c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "for", node.Line); err != nil {
+			return nil, err
+		}
+		return bodySignal, nil
 
 	case *ast.ForEachStmt:
 		iterable, err := c.checkExpr(node.Iterable, scope, deferred)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		loopScope := cloneScope(scope)
+		loopScope := scope.withLoopName(node.Name)
 		itemType := ""
 		if params := genericTypeParams(c.valueTypeName(iterable, scope), "list"); len(params) == 1 {
 			itemType = params[0]
@@ -1345,136 +1684,182 @@ func (c *Checker) checkStmt(stmt any, scope *Scope, deferred *[]func() error) er
 		if node.IndexVar != "" {
 			loopScope.defineValue(node.IndexVar, c.valueFromDeclaredType("int", loopScope, node.IndexVar))
 		}
-		if err := c.checkBlock(node.Body, loopScope, deferred); err != nil {
-			return err
+		bodySignal, err := c.checkBlock(node.Body, loopScope, deferred)
+		if err != nil {
+			return nil, err
 		}
+		bodySignal = consumeLoopSignal(bodySignal, node.Name)
 		if forEachRunsAtLeastOnce(node) {
 			c.applyClonedScope(scope, loopScope)
-			return nil
+			return bodySignal, nil
 		}
-		return c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "for", node.Line)
+		if err := c.mergeAlternativeScopes(scope, scope, []*Scope{loopScope, cloneScope(scope)}, "for", node.Line); err != nil {
+			return nil, err
+		}
+		return bodySignal, nil
 
 	case *ast.MatchStmt:
 		subject, err := c.checkExpr(node.Subject, scope, deferred)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if subjectType := c.valueTypeName(subject, scope); subjectType != "" {
 			if _, ok := parseResultTypeInfo(subjectType); ok {
 				if err := c.validateResultMatchPatterns(node); err != nil {
-					return err
+					return nil, err
 				}
 			}
 		}
 		branches := make([]*Scope, 0, len(node.Cases)+1)
+		branchSignals := make([]*controlSignal, 0, len(node.Cases)+1)
 		for _, clause := range node.Cases {
 			caseScope := cloneScope(scope)
 			for _, pattern := range clause.Patterns {
 				if err := c.checkPattern(pattern, subject, caseScope, deferred); err != nil {
-					return err
+					return nil, err
 				}
 			}
-			if err := c.checkBlock(clause.Body, caseScope, deferred); err != nil {
-				return err
+			signal, err := c.checkBlock(clause.Body, caseScope, deferred)
+			if err != nil {
+				return nil, err
 			}
 			branches = append(branches, caseScope)
+			branchSignals = append(branchSignals, signal)
 		}
 		if len(node.ElseBody) > 0 {
 			elseScope := cloneScope(scope)
-			if err := c.checkBlock(node.ElseBody, elseScope, deferred); err != nil {
-				return err
+			signal, err := c.checkBlock(node.ElseBody, elseScope, deferred)
+			if err != nil {
+				return nil, err
 			}
 			branches = append(branches, elseScope)
+			branchSignals = append(branchSignals, signal)
+		} else {
+			branchSignals = append(branchSignals, nil)
 		}
-		return c.mergeAlternativeScopes(scope, scope, branches, "match", node.Line)
+		if err := c.mergeAlternativeScopes(scope, scope, branches, "match", node.Line); err != nil {
+			return nil, err
+		}
+		return commonControlSignal(branchSignals), nil
 
 	case *ast.ModuleDef:
 		if err := c.validateModuleBody(node); err != nil {
-			return err
+			return nil, err
 		}
 		moduleScope := newScope(scope)
-		if err := c.checkBlock(node.Body, moduleScope, deferred); err != nil {
-			return err
+		if _, err := c.checkBlock(node.Body, moduleScope, deferred); err != nil {
+			return nil, err
 		}
 		module, err := c.collectModuleExports(node, moduleScope)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		c.modules[node.Name] = module
 		scope.defineValue(node.Name, &ValueInfo{Kind: "module", ModuleInfo: module})
-		return nil
+		return nil, nil
 
 	case *ast.UseStmt:
-		return c.checkUse(node, scope, deferred)
+		return nil, c.checkUse(node, scope, deferred)
 
 	case *ast.ParallelStmt:
-		if err := c.checkBlock(node.Body, newScope(scope), deferred); err != nil {
-			return err
+		if _, err := c.checkBlock(node.Body, newScope(scope), deferred); err != nil {
+			return nil, err
 		}
 		if node.ResultVar != "" {
 			scope.defineValue(node.ResultVar, c.valueFromDeclaredType("list", scope, node.ResultVar))
 		}
-		return nil
+		return nil, nil
 
 	case *ast.GlobalStmt:
 		value, err := c.checkExpr(node.Value, scope, deferred)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		target, ok := scope.resolveOuterValue(node.Name)
 		if !ok {
-			return semanticErrorf(node.Line, "global variable '%s' not found in any outer scope", node.Name)
+			return nil, semanticErrorf(node.Line, "global variable '%s' not found in any outer scope", node.Name)
 		}
 		if target.Kind == "builtin" {
-			return semanticErrorf(node.Line, "Cannot assign to builtin '%s' with global", node.Name)
+			return nil, semanticErrorf(node.Line, "Cannot assign to builtin '%s' with global", node.Name)
 		}
-		return c.validateValueAssignment(node.Name, target, value, scope, node.Line)
+		return nil, c.validateValueAssignment(node.Name, target, value, scope, node.Line)
 
 	case *ast.ArenaStmt:
 		arenaScope := cloneScope(scope)
-		if err := c.checkBlock(node.Body, arenaScope, deferred); err != nil {
-			return err
+		signal, err := c.checkBlock(node.Body, arenaScope, deferred)
+		if err != nil {
+			return nil, err
 		}
 		c.applyClonedScope(scope, arenaScope)
-		return nil
+		return signal, nil
 
 	case *ast.TagStmt:
-		return nil
+		return nil, nil
 
 	case *ast.ObjectDef:
-		return c.checkObjectDef(node, scope, deferred)
+		return nil, c.checkObjectDef(node, scope, deferred)
 
 	case *ast.ExprStmt:
 		_, err := c.checkExpr(node.Expr, scope, deferred)
-		return err
+		return nil, err
 
 	default:
-		return semanticErrorf(lineOf(stmt), "Unknown statement type: %T", stmt)
+		return nil, semanticErrorf(lineOf(stmt), "Unknown statement type: %T", stmt)
 	}
 }
 
-func (c *Checker) checkReturnValue(value any, scope *Scope, deferred *[]func() error, line int) error {
+func (c *Checker) checkReturnValue(value any, scope *Scope, deferred *[]func() error, line int) (*controlSignal, error) {
 	var infos []*ValueInfo
 	switch exprs := value.(type) {
 	case nil:
-		return c.validateReturnValues(nil, scope, line)
+		if err := c.validateReturnValues(nil, scope, line); err != nil {
+			return nil, err
+		}
 	case []any:
 		for _, expr := range exprs {
 			info, err := c.checkExpr(expr, scope, deferred)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			infos = append(infos, info)
 		}
-		return c.validateReturnValues(infos, scope, line)
+		if err := c.validateReturnValues(infos, scope, line); err != nil {
+			return nil, err
+		}
 	default:
 		info, err := c.checkExpr(value, scope, deferred)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		infos = append(infos, info)
-		return c.validateReturnValues(infos, scope, line)
+		if err := c.validateReturnValues(infos, scope, line); err != nil {
+			return nil, err
+		}
 	}
+	return &controlSignal{Kind: "return"}, nil
+}
+
+func commonControlSignal(signals []*controlSignal) *controlSignal {
+	if len(signals) == 0 || signals[0] == nil {
+		return nil
+	}
+	first := signals[0]
+	for _, signal := range signals[1:] {
+		if signal == nil || signal.Kind != first.Kind || signal.Name != first.Name {
+			return nil
+		}
+	}
+	return &controlSignal{Kind: first.Kind, Name: first.Name}
+}
+
+func consumeLoopSignal(signal *controlSignal, loopName string) *controlSignal {
+	if signal == nil || loopName == "" {
+		return signal
+	}
+	if (signal.Kind == "leave" || signal.Kind == "next") && signal.Name == loopName {
+		return nil
+	}
+	return signal
 }
 
 func (c *Checker) checkAssignmentTarget(target any, scope *Scope, deferred *[]func() error, line int) error {
@@ -1512,8 +1897,12 @@ func (c *Checker) checkFuncBody(fn *ast.FuncDef, closureScope *Scope) error {
 	}
 
 	deferred := []func() error{}
-	if err := c.checkBlock(fn.Body, bodyScope, &deferred); err != nil {
+	signal, err := c.checkBlock(fn.Body, bodyScope, &deferred)
+	if err != nil {
 		return err
+	}
+	if signal != nil && signal.Kind != "return" {
+		return semanticErrorf(fn.Line, "%s '%s' cannot leave its enclosing loop from inside function '%s'", signal.Kind, signal.Name, fn.Name)
 	}
 	return c.runDeferred(&deferred)
 }
@@ -1533,8 +1922,12 @@ func (c *Checker) checkConstructorBody(ctor *ast.ConstructorDef, obj *ObjectInfo
 	}
 
 	deferred := []func() error{}
-	if err := c.checkBlock(ctor.Body, bodyScope, &deferred); err != nil {
+	signal, err := c.checkBlock(ctor.Body, bodyScope, &deferred)
+	if err != nil {
 		return err
+	}
+	if signal != nil && signal.Kind != "return" {
+		return semanticErrorf(ctor.Line, "%s '%s' cannot leave its enclosing loop from inside constructor '%s.new'", signal.Kind, signal.Name, obj.Name)
 	}
 	return c.runDeferred(&deferred)
 }
@@ -1555,8 +1948,12 @@ func (c *Checker) checkMethodBody(method *ast.MethodDef, obj *ObjectInfo, closur
 	}
 
 	deferred := []func() error{}
-	if err := c.checkBlock(method.Body, bodyScope, &deferred); err != nil {
+	signal, err := c.checkBlock(method.Body, bodyScope, &deferred)
+	if err != nil {
 		return err
+	}
+	if signal != nil && signal.Kind != "return" {
+		return semanticErrorf(method.Line, "%s '%s' cannot leave its enclosing loop from inside method '%s.%s'", signal.Kind, signal.Name, obj.Name, method.Name)
 	}
 	return c.runDeferred(&deferred)
 }
@@ -1691,7 +2088,7 @@ func (c *Checker) typesCompatible(expected string, actual string) bool {
 	if _, ok := parseResultTypeInfo(actual); ok {
 		return false
 	}
-	if expectedBase == actualBase && (expectedBase == "list" || expectedBase == "dict" || expectedBase == "result") {
+	if expectedBase == actualBase && (expectedBase == "list" || expectedBase == "dict" || expectedBase == "result" || expectedBase == "cell") {
 		if expected == expectedBase || actual == actualBase {
 			return true
 		}
@@ -1778,6 +2175,28 @@ func isFloatType(typeName string) bool {
 	default:
 		return false
 	}
+}
+
+func isExplicitPrecisionType(typeName string) bool {
+	switch typeName {
+	case "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32", "float64":
+		return true
+	default:
+		return false
+	}
+}
+
+func isArithmeticOp(op string) bool {
+	switch op {
+	case "+", "-", "*", "/", "mod", "^":
+		return true
+	default:
+		return false
+	}
+}
+
+func isMixedExplicitPrecision(leftType, rightType string) bool {
+	return leftType != rightType && isExplicitPrecisionType(leftType) && isExplicitPrecisionType(rightType) && (isIntType(leftType) || isFloatType(leftType)) && (isIntType(rightType) || isFloatType(rightType))
 }
 
 func typeBase(typeName string) string {
@@ -1915,8 +2334,11 @@ func (c *Checker) checkObjectDef(objDef *ast.ObjectDef, scope *Scope, deferred *
 	}
 
 	if objDef.Constructor != nil {
-		ctorReturn, ok := renderType(objDef.Constructor.ReturnType)
-		if ok && ctorReturn != objDef.Name {
+		ctorReturns := renderReturnTypes(objDef.Constructor.ReturnType)
+		if len(ctorReturns) > 1 {
+			return semanticErrorf(objDef.Constructor.Line, "Constructor '%s.new' must return a single '%s' value", objDef.Name, objDef.Name)
+		}
+		if len(ctorReturns) == 1 && ctorReturns[0] != objDef.Name {
 			return semanticErrorf(objDef.Constructor.Line, "Constructor '%s.new' must return '%s'", objDef.Name, objDef.Name)
 		}
 		for _, param := range objDef.Constructor.Params {
@@ -2023,6 +2445,9 @@ func (c *Checker) checkExpr(expr any, scope *Scope, deferred *[]func() error) (*
 		if err != nil {
 			return nil, err
 		}
+		if err := c.validateBinaryOp(node, left, right, scope); err != nil {
+			return nil, err
+		}
 		return c.inferBinaryOp(node, left, right, scope), nil
 	case *ast.UnaryOp:
 		if _, err := c.checkExpr(node.Operand, scope, deferred); err != nil {
@@ -2087,7 +2512,7 @@ func (c *Checker) checkExpr(expr any, scope *Scope, deferred *[]func() error) (*
 		}
 		return unknownValue(), nil
 	case *ast.Lambda:
-		lambdaScope := newScope(scope)
+		lambdaScope := newReturnScope(scope, nil)
 		for _, param := range node.Params {
 			if err := c.checkParam(param, scope); err != nil {
 				return nil, err
@@ -2099,8 +2524,12 @@ func (c *Checker) checkExpr(expr any, scope *Scope, deferred *[]func() error) (*
 		if err != nil {
 			return nil, err
 		}
-		if err := c.checkBlock(node.Body, lambdaScope, deferred); err != nil {
+		signal, err := c.checkBlock(node.Body, lambdaScope, deferred)
+		if err != nil {
 			return nil, err
+		}
+		if signal != nil && signal.Kind != "return" {
+			return nil, semanticErrorf(node.Line, "%s '%s' cannot leave its enclosing loop from inside lambda", signal.Kind, signal.Name)
 		}
 		return &ValueInfo{Kind: "lambda", TypeName: callable.typeName(), CallableInfo: callable}, nil
 	case *ast.OkExpr:
@@ -2207,8 +2636,14 @@ func (c *Checker) inferBinaryOp(node *ast.BinaryOp, left *ValueInfo, right *Valu
 	if strings.HasPrefix(leftType, "money[") && strings.HasPrefix(rightType, "money[") && (node.Op == "+" || node.Op == "-") {
 		return literalValue(leftType)
 	}
-	if strings.HasPrefix(leftType, "money[") && (isIntType(rightType) || isFloatType(rightType)) {
+	if strings.HasPrefix(leftType, "money[") && strings.HasPrefix(rightType, "money[") && node.Op == "/" {
+		return literalValue("float")
+	}
+	if strings.HasPrefix(leftType, "money[") && (isIntType(rightType) || isFloatType(rightType)) && (node.Op == "*" || node.Op == "/") {
 		return literalValue(leftType)
+	}
+	if strings.HasPrefix(rightType, "money[") && (isIntType(leftType) || isFloatType(leftType)) && node.Op == "*" {
+		return literalValue(rightType)
 	}
 	if isIntType(leftType) && isIntType(rightType) {
 		return literalValue("int")
@@ -2217,6 +2652,21 @@ func (c *Checker) inferBinaryOp(node *ast.BinaryOp, left *ValueInfo, right *Valu
 		return literalValue("float")
 	}
 	return unknownValue()
+}
+
+func (c *Checker) validateBinaryOp(node *ast.BinaryOp, left *ValueInfo, right *ValueInfo, scope *Scope) error {
+	if !isArithmeticOp(node.Op) {
+		return nil
+	}
+	leftType := c.valueTypeName(left, scope)
+	rightType := c.valueTypeName(right, scope)
+	if leftType == "" || rightType == "" {
+		return nil
+	}
+	if isMixedExplicitPrecision(leftType, rightType) {
+		return semanticErrorf(node.Line, "mixed precision operation '%s' requires explicit conversion: %s and %s", node.Op, displayTypeName(leftType), displayTypeName(rightType))
+	}
+	return nil
 }
 
 func (c *Checker) checkPattern(pattern any, subject *ValueInfo, scope *Scope, deferred *[]func() error) error {
@@ -2464,6 +2914,64 @@ func (c *Checker) validateBuiltinContainerTypes(signature *CallableInfo, args []
 				}
 			}
 		}
+	case "listen":
+		if len(args) >= 2 {
+			handler := args[1]
+			if handler == nil || handler.CallableInfo == nil {
+				return semanticErrorf(line, "Argument 'handler' to 'listen' must be callable")
+			}
+			if len(handler.CallableInfo.Params) != 1 {
+				return semanticErrorf(line, "Argument 'handler' to 'listen' must accept exactly 1 HttpRequest parameter")
+			}
+			paramType := c.resolveCallableTypeName(handler.CallableInfo.Params[0].TypeName, handler.CallableInfo, scope)
+			if paramType != "" && !c.typesCompatible("HttpRequest", paramType) {
+				return semanticErrorf(line, "Argument 'handler' to 'listen' expects (HttpRequest) -> ..., got %s", displayTypeName(c.valueTypeName(handler, scope)))
+			}
+			switch len(handler.CallableInfo.ReturnTypeNames) {
+			case 1:
+				returnType := c.resolveCallableTypeName(handler.CallableInfo.ReturnTypeNames[0], handler.CallableInfo, scope)
+				if returnType != "" && returnType != "HttpReply" && returnType != "result[HttpReply]" {
+					return semanticErrorf(line, "Argument 'handler' to 'listen' must return HttpReply or result[HttpReply], got %s", displayTypeName(returnType))
+				}
+			case 0:
+				return semanticErrorf(line, "Argument 'handler' to 'listen' must return HttpReply or result[HttpReply]")
+			default:
+				return semanticErrorf(line, "Argument 'handler' to 'listen' must return a single HttpReply or result[HttpReply]")
+			}
+		}
+	case "set":
+		if len(args) >= 2 {
+			return c.validateCellValueArg(signature, args[0], args[1], "value", scope, line)
+		}
+	case "update":
+		if len(args) >= 2 {
+			params := genericTypeParams(c.valueTypeName(args[0], scope), "cell")
+			callback := args[1]
+			if len(params) != 1 {
+				return nil
+			}
+			if callback == nil || callback.CallableInfo == nil {
+				return semanticErrorf(line, "Argument 'f' to 'update' must be callable")
+			}
+			if len(callback.CallableInfo.Params) != 1 {
+				return semanticErrorf(line, "Argument 'f' to 'update' must accept exactly 1 %s parameter", displayTypeName(params[0]))
+			}
+			callbackParam := c.resolveCallableTypeName(callback.CallableInfo.Params[0].TypeName, callback.CallableInfo, scope)
+			if callbackParam != "" && !c.typesCompatible(callbackParam, params[0]) {
+				return semanticErrorf(line, "Argument 'f' to 'update' expects (%s) -> %s, got %s", displayTypeName(params[0]), displayTypeName(params[0]), displayTypeName(c.valueTypeName(callback, scope)))
+			}
+			switch len(callback.CallableInfo.ReturnTypeNames) {
+			case 1:
+				callbackReturn := c.resolveCallableTypeName(callback.CallableInfo.ReturnTypeNames[0], callback.CallableInfo, scope)
+				if callbackReturn != "" && !c.typesCompatible(params[0], callbackReturn) {
+					return semanticErrorf(line, "Argument 'f' to 'update' must return %s, got %s", displayTypeName(params[0]), displayTypeName(callbackReturn))
+				}
+			case 0:
+				return semanticErrorf(line, "Argument 'f' to 'update' must return %s", displayTypeName(params[0]))
+			default:
+				return semanticErrorf(line, "Argument 'f' to 'update' must return a single %s value", displayTypeName(params[0]))
+			}
+		}
 	}
 	return nil
 }
@@ -2476,6 +2984,18 @@ func (c *Checker) validateListItemArg(signature *CallableInfo, listArg *ValueInf
 	itemType := c.valueTypeName(itemArg, scope)
 	if itemType != "" && !c.typesCompatible(params[0], itemType) {
 		return semanticErrorf(line, "Argument '%s' to '%s' expects %s, got %s", paramName, signature.Label, displayTypeName(params[0]), displayTypeName(itemType))
+	}
+	return nil
+}
+
+func (c *Checker) validateCellValueArg(signature *CallableInfo, cellArg *ValueInfo, valueArg *ValueInfo, paramName string, scope *Scope, line int) error {
+	params := genericTypeParams(c.valueTypeName(cellArg, scope), "cell")
+	if len(params) != 1 {
+		return nil
+	}
+	valueType := c.valueTypeName(valueArg, scope)
+	if valueType != "" && !c.typesCompatible(params[0], valueType) {
+		return semanticErrorf(line, "Argument '%s' to '%s' expects %s, got %s", paramName, signature.Label, displayTypeName(params[0]), displayTypeName(valueType))
 	}
 	return nil
 }
@@ -2498,6 +3018,30 @@ func (c *Checker) inferBuiltinReturn(callee *ValueInfo, args []*ValueInfo, scope
 			}
 		}
 		return literalValue("list")
+	case "pop":
+		if len(args) >= 1 {
+			listType := c.valueTypeName(args[0], scope)
+			if params := genericTypeParams(listType, "list"); len(params) == 1 {
+				return c.valueFromDeclaredType(params[0], scope, "pop")
+			}
+			if listType == "list" {
+				return literalValue("dynamic")
+			}
+		}
+	case "removeat":
+		if len(args) >= 1 {
+			listType := c.valueTypeName(args[0], scope)
+			if params := genericTypeParams(listType, "list"); len(params) == 1 {
+				return c.valueFromDeclaredType(params[0], scope, "removeat")
+			}
+			if listType == "list" {
+				return literalValue("dynamic")
+			}
+		}
+	case "enumerate":
+		return literalValue("list[list]")
+	case "items":
+		return literalValue("list[list]")
 	case "concat":
 		if len(args) >= 1 {
 			listType := c.valueTypeName(args[0], scope)
@@ -2507,9 +3051,33 @@ func (c *Checker) inferBuiltinReturn(callee *ValueInfo, args []*ValueInfo, scope
 		}
 	case "get":
 		if len(args) >= 1 {
-			params := genericTypeParams(c.valueTypeName(args[0], scope), "dict")
-			if len(params) == 2 {
+			if params := genericTypeParams(c.valueTypeName(args[0], scope), "dict"); len(params) == 2 {
 				return c.valueFromDeclaredType(params[1], scope, "get")
+			}
+			if params := genericTypeParams(c.valueTypeName(args[0], scope), "cell"); len(params) == 1 {
+				return c.valueFromDeclaredType(params[0], scope, "get")
+			}
+		}
+	case "cell":
+		if len(args) >= 1 {
+			valueType := c.valueTypeName(args[0], scope)
+			if valueType != "" {
+				return literalValue(fmt.Sprintf("cell[%s]", valueType))
+			}
+		}
+		return literalValue("cell")
+	case "set":
+		if len(args) >= 1 {
+			params := genericTypeParams(c.valueTypeName(args[0], scope), "cell")
+			if len(params) == 1 {
+				return c.valueFromDeclaredType(params[0], scope, "set")
+			}
+		}
+	case "update":
+		if len(args) >= 1 {
+			params := genericTypeParams(c.valueTypeName(args[0], scope), "cell")
+			if len(params) == 1 {
+				return c.valueFromDeclaredType(params[0], scope, "update")
 			}
 		}
 	}
@@ -2775,7 +3343,8 @@ func (c *Checker) loadModuleFromFile(moduleName string, line int, deferred *[]fu
 		c.loadingModules[moduleName] = struct{}{}
 		defer delete(c.loadingModules, moduleName)
 		c.AddModuleSearchPath(filepath.Dir(candidate))
-		return c.checkStmt(moduleDef, c.globalScope, deferred)
+		_, err = c.checkStmt(moduleDef, c.globalScope, deferred)
+		return err
 	}
 
 	return semanticErrorf(line, "Module not found: %s", moduleName)
@@ -2863,8 +3432,16 @@ func (c *Checker) resolveTypeNode(typeNode any, scope *Scope, line int) (string,
 				return "", err
 			}
 		}
-		if node.ReturnType != nil {
-			if _, err := c.resolveTypeNode(node.ReturnType, scope, node.Line); err != nil {
+		switch returns := node.ReturnType.(type) {
+		case nil:
+		case []any:
+			for _, item := range returns {
+				if _, err := c.resolveTypeNode(item, scope, node.Line); err != nil {
+					return "", err
+				}
+			}
+		default:
+			if _, err := c.resolveTypeNode(returns, scope, node.Line); err != nil {
 				return "", err
 			}
 		}
@@ -2952,9 +3529,27 @@ func renderType(typeNode any) (string, bool) {
 			}
 			params = append(params, rendered)
 		}
-		returnType, ok := renderType(node.ReturnType)
-		if !ok {
-			returnType = "void"
+		returnParts := make([]string, 0)
+		switch returns := node.ReturnType.(type) {
+		case nil:
+		case []any:
+			for _, item := range returns {
+				rendered, ok := renderType(item)
+				if !ok {
+					rendered = "?"
+				}
+				returnParts = append(returnParts, rendered)
+			}
+		default:
+			rendered, ok := renderType(returns)
+			if !ok {
+				rendered = "?"
+			}
+			returnParts = append(returnParts, rendered)
+		}
+		returnType := "void"
+		if len(returnParts) > 0 {
+			returnType = strings.Join(returnParts, ", ")
 		}
 		return fmt.Sprintf("(%s) -> %s", strings.Join(params, ", "), returnType), true
 	default:
@@ -2984,6 +3579,12 @@ func moduleStmtLabel(stmt any) string {
 		return "var block"
 	case *ast.IfStmt:
 		return "if"
+	case *ast.PassStmt:
+		return "pass"
+	case *ast.LeaveStmt:
+		return "leave"
+	case *ast.NextStmt:
+		return "next"
 	case *ast.WhileStmt:
 		return "while"
 	case *ast.ForRangeStmt, *ast.ForEachStmt:
@@ -3056,6 +3657,12 @@ func lineOf(node any) int {
 	case *ast.VarBlock:
 		return n.Line
 	case *ast.ReturnStmt:
+		return n.Line
+	case *ast.PassStmt:
+		return n.Line
+	case *ast.LeaveStmt:
+		return n.Line
+	case *ast.NextStmt:
 		return n.Line
 	case *ast.IfStmt:
 		return n.Line
