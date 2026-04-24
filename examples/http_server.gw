@@ -1,0 +1,54 @@
+use http
+use json
+use args from os
+
+func handle(req: HttpRequest) -> result[HttpReply]
+  if http.path(req) = "/" then
+    session := http.requestcookie(req, "session", "guest")
+    return ok(http.html(200, "<h1>Gwen HTTP</h1><p>session: " + session + "</p><p>Try /login, /api/hello/Ada?lang=zh or /assets/app.css</p>"))
+  endif
+
+  if http.path(req) = "/login" then
+    reply := http.redirect(303, "/")
+    reply := http.withcookie(reply, "session", "demo")
+    return ok(reply)
+  endif
+
+  matched, params := http.route(req, "/api/hello/:name")
+  if matched then
+    payload := json.objectof("name", params["name"], "lang", http.query(req, "lang", "en"), "method", http.method(req))
+    return http.json(200, payload)
+  endif
+
+  matched, served := http.static(req, "/assets/", "examples/http_server_public")
+  if matched then
+    match served
+      when ok(reply) => return ok(reply)
+      when err(e) => return ok(http.text(404, "not found"))
+    endmatch
+  endif
+
+  return ok(http.text(404, "not found"))
+endfunc
+
+func listen_addr() -> string
+  argv := args()
+  if len(argv) >= 1 then
+    return argv[0]
+  endif
+  return "127.0.0.1:8080"
+endfunc
+
+func main()
+  addr := listen_addr()
+  match http.listen(addr, handle)
+    when ok(server) =>
+      write("serving on", http.addr(server))
+      match http.wait(server)
+        when ok(code) => write("server stopped:", code)
+        when err(e) => write("server failed:", e)
+      endmatch
+    when err(e) =>
+      write("listen failed:", e)
+  endmatch
+endfunc

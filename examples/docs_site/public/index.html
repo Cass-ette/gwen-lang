@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gwen Field Guide · Repo-Driven Docs</title>
+    <link rel="icon" href="/brand/gwen-logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="shell">
+      <aside class="rail">
+        <div class="brand-card">
+          <div class="brand-lockup">
+            <img class="brand-logo" src="/brand/gwen-logo.svg" alt="Gwen logo" />
+            <div class="brand-copy">
+              <p class="eyebrow" id="tagline">Repo-Driven Docs</p>
+              <h1 id="brand">Gwen Field Guide</h1>
+            </div>
+          </div>
+          <p class="lede" id="heroDeck"></p>
+        </div>
+
+        <div class="switcher" role="tablist" aria-label="Language">
+          <button class="lang-chip" data-lang="zh" type="button">中文</button>
+          <button class="lang-chip" data-lang="en" type="button">English</button>
+        </div>
+
+        <section class="panel search-panel">
+          <p class="panel-kicker" id="searchTitle">Search</p>
+          <input id="searchInput" type="search" autocomplete="off" />
+          <div id="searchResults" class="results"></div>
+        </section>
+
+        <section class="panel">
+          <p class="panel-kicker" id="navTitle">Learning Path</p>
+          <nav id="navList" class="nav-list"></nav>
+        </section>
+
+        <section class="panel">
+          <p class="panel-kicker" id="examplesTitle">Example Sources</p>
+          <div id="exampleList" class="nav-list"></div>
+        </section>
+      </aside>
+
+      <main class="stage">
+        <section class="hero panel">
+          <p class="eyebrow" id="heroTitle"></p>
+          <p class="stage-note" id="footerNote"></p>
+        </section>
+
+        <article class="panel article-panel" id="articlePanel">
+          <header class="article-head">
+            <p class="article-meta" id="articleMeta"></p>
+            <h2 id="articleTitle"></h2>
+            <p class="article-summary" id="articleSummary"></p>
+          </header>
+          <div id="articleBody" class="article-body"></div>
+        </article>
+
+        <section class="panel article-panel hidden" id="sourcePanel">
+          <header class="article-head">
+            <p class="article-meta" id="sourceMeta">Source</p>
+            <h2 id="sourceTitle"></h2>
+            <p class="article-summary" id="sourceSummary"></p>
+          </header>
+          <div class="source-path" id="sourcePath"></div>
+          <pre class="code-block source-block"><code id="sourceCode"></code></pre>
+        </section>
+      </main>
+    </div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

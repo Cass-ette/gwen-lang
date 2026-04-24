@@ -1,0 +1,10 @@
+use json
+
+func main()
+  payload := json.objectof("name", "Ada", "roles", json.arrayof("admin", "ops"), "deleted_at", json.null())
+
+  match json.stringify(payload)
+    when ok(text) => write(text)
+    when err(e) => write("json failed:", e)
+  endmatch
+endfunc

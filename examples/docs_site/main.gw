@@ -1,0 +1,112 @@
+use http
+use json
+use site_content
+use args from os
+
+func api_site(lang: string) -> result[HttpReply]
+  return http.json(200, site_content.site(lang))
+endfunc
+
+func api_page(lang: string, slug: string) -> result[HttpReply]
+  match site_content.page(lang, slug)
+    when ok(doc) => return http.json(200, doc)
+    when err(e) => return ok(http.text(404, e))
+  endmatch
+endfunc
+
+func api_example(lang: string, name: string) -> result[HttpReply]
+  match site_content.example(lang, name)
+    when ok(doc) => return http.json(200, doc)
+    when err(e) => return ok(http.text(404, e))
+  endmatch
+endfunc
+
+func api_search(lang: string) -> result[HttpReply]
+  return http.json(200, json.objectof("lang", lang, "items", site_content.search_index(lang)))
+endfunc
+
+func handle(req: HttpRequest) -> result[HttpReply]
+  if http.path(req) = "/api/health" then
+    return ok(http.text(200, "ok"))
+  endif
+
+  if http.path(req) = "/favicon.ico" then
+    return ok(http.text(204, ""))
+  endif
+
+  matched, params := http.route(req, "/api/site/:lang")
+  if matched then
+    return api_site(params["lang"])
+  endif
+
+  matched, params := http.route(req, "/api/page/:lang/:slug")
+  if matched then
+    return api_page(params["lang"], params["slug"])
+  endif
+
+  matched, params := http.route(req, "/api/example/:lang/:name")
+  if matched then
+    return api_example(params["lang"], params["name"])
+  endif
+
+  matched, params := http.route(req, "/api/search/:lang")
+  if matched then
+    return api_search(params["lang"])
+  endif
+
+  matched, served := http.static(req, "/repo/docs/", "docs")
+  if matched then
+    match served
+      when ok(reply) => return ok(reply)
+      when err(repo_docs_static_error) => return ok(http.text(404, "not found"))
+    endmatch
+  endif
+
+  matched, served := http.static(req, "/repo/examples/", "examples")
+  if matched then
+    match served
+      when ok(reply) => return ok(reply)
+      when err(repo_examples_static_error) => return ok(http.text(404, "not found"))
+    endmatch
+  endif
+
+  matched, served := http.static(req, "/brand/", "assets/brand")
+  if matched then
+    match served
+      when ok(reply) => return ok(reply)
+      when err(brand_static_error) => return ok(http.text(404, "not found"))
+    endmatch
+  endif
+
+  matched, served := http.static(req, "/", "examples/docs_site/public")
+  if matched then
+    match served
+      when ok(reply) => return ok(reply)
+      when err(e) => return ok(http.text(404, "not found"))
+    endmatch
+  endif
+
+  return ok(http.text(404, "not found"))
+endfunc
+
+func listen_addr() -> string
+  argv := args()
+  if len(argv) >= 1 then
+    return argv[0]
+  endif
+  return "127.0.0.1:8090"
+endfunc
+
+func main()
+  addr := listen_addr()
+  match http.listen(addr, handle)
+    when ok(server) =>
+      write("docs site serving on", http.addr(server))
+      match http.wait(server)
+        when ok(code) => write("docs site stopped:", code)
+        when err(e) => write("docs site failed:", e)
+      endmatch
+    when err(e) =>
+      write("listen failed:", e)
+  endmatch
+endfunc

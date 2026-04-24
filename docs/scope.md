@@ -97,6 +97,38 @@ func example()
 endfunc
 ```
 
+这里要区分两件事：
+
+- **共享作用域**：块内绑定不会被额外包一层局部作用域
+- **确定赋值**：Go checker 仍会要求名字在“继续执行到块外”的所有可达路径上都已经出现
+
+例如下面这种写法虽然语法上仍是同一个函数作用域，但静态检查会拒绝：
+
+```
+func partial(cond: bool)
+  if cond then
+    x := 1
+  endif
+  write(x)   // checker: Undefined variable: x
+endfunc
+```
+
+因为 `cond = false` 时会直接落到 `endif` 后面，而 `x` 从未绑定。
+相对地，`if true then ... endif` 这种静态可证明恒真的分支，checker 会允许块内新名字继续在外部使用。
+
+`while` / `for` 也一样：虽然它们不创建新作用域，但循环体可能 **零次执行**，所以循环里第一次出现的新名字默认不能在块外直接使用。
+
+```
+func partial_loop(xs: list[int])
+  for item in xs do
+    last := item
+  endfor
+  write(last)  // checker: Undefined variable: last
+endfunc
+```
+
+因为 `xs` 可能为空。只有在 checker 能静态证明“至少执行一次”时，这类新绑定才会继续带到块外，例如 `for item in [1] do ... endfor`，或 `for i in 1 to 5 do ... endfor` 这种无显式冲突步长的范围循环。
+
 ### 作用域边界总结
 
 | 结构 | 创建新作用域？ | 说明 |

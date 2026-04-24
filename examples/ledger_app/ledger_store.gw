@@ -1,4 +1,6 @@
 module ledger_store
+use Ledger from ledger_model
+
 export func save(ledger: Ledger) -> result[int]
   lines := ledger.export_lines()
   body := join(lines, "\n")

@@ -1,6 +1,7 @@
 """Gwen interpreter - tree-walk execution of AST."""
 
 import os
+import posixpath
 import struct
 from typing import Any, Dict, List, Optional
 from . import ast_nodes as ast
@@ -198,6 +199,13 @@ class ReturnSignal(Exception):
     """Used to unwind the call stack on return."""
     def __init__(self, value: Any):
         self.value = value
+
+
+class LoopControlSignal(Exception):
+    def __init__(self, kind: str, name: str, line: int):
+        self.kind = kind
+        self.name = name
+        self.line = line
 
 
 class _UninitType:
@@ -451,6 +459,8 @@ class Interpreter:
         self.global_env.set("insert", self._builtin_insert)
         self.global_env.set("concat", self._builtin_concat)
         self.global_env.set("substring", self._builtin_substring)
+        self.global_env.set("startswith", self._builtin_startswith)
+        self.global_env.set("endswith", self._builtin_endswith)
         self.global_env.set("contains", self._builtin_contains)
         self.global_env.set("trim", self._builtin_trim)
         self.global_env.set("replace", self._builtin_replace)
@@ -466,6 +476,7 @@ class Interpreter:
         self.global_env.set("values", self._builtin_values)
         self.global_env.set("items", self._builtin_items)
         self.global_env.set("readfile", self._builtin_readfile)
+        self.global_env.set("readdir", self._builtin_readdir)
         self.global_env.set("writefile", self._builtin_writefile)
         self.global_env.set("appendfile", self._builtin_appendfile)
 
@@ -475,6 +486,16 @@ class Interpreter:
             for export_name in exports:
                 module_env.set(export_name, self.global_env.get(export_name))
             self.modules[module_name] = module_env
+        self._add_stdlib_module_builtin("path", "basename", self._builtin_path_basename)
+        self._add_stdlib_module_builtin("path", "dirname", self._builtin_path_dirname)
+        self._add_stdlib_module_builtin("path", "joinpath", self._builtin_path_join)
+
+    def _add_stdlib_module_builtin(self, module_name: str, export_name: str, builtin):
+        module_env = self.modules.get(module_name)
+        if module_env is None:
+            module_env = Environment()
+            self.modules[module_name] = module_env
+        module_env.set(export_name, builtin)
 
     def add_module_search_path(self, path: Optional[str]):
         """Register a directory for `use module_name` file lookup."""
@@ -889,6 +910,22 @@ class Interpreter:
         # Closed-closed interval: include end, so slice to end+1
         return s[start:end+1]
 
+    def _builtin_startswith(self, s, prefix):
+        """Check whether string starts with prefix."""
+        if not isinstance(s, str):
+            raise GwenError(f"startswith() requires a string, got {type(s).__name__}")
+        if not isinstance(prefix, str):
+            raise GwenError(f"startswith() prefix must be a string, got {type(prefix).__name__}")
+        return s.startswith(prefix)
+
+    def _builtin_endswith(self, s, suffix):
+        """Check whether string ends with suffix."""
+        if not isinstance(s, str):
+            raise GwenError(f"endswith() requires a string, got {type(s).__name__}")
+        if not isinstance(suffix, str):
+            raise GwenError(f"endswith() suffix must be a string, got {type(suffix).__name__}")
+        return s.endswith(suffix)
+
     def _builtin_contains(self, s, substr):
         """Check if substring exists in string."""
         if not isinstance(s, str):
@@ -1023,6 +1060,39 @@ class Interpreter:
         except UnicodeDecodeError as e:
             return ErrValue(f"decode error: {e}")
 
+    def _builtin_readdir(self, path):
+        """List directory entries. Returns result[list[string]]."""
+        if not isinstance(path, str):
+            raise GwenError(f"readdir() requires a string path, got {type(path).__name__}")
+        try:
+            return OkValue(sorted(os.listdir(path)))
+        except OSError as e:
+            return ErrValue(str(e))
+
+    def _builtin_path_basename(self, path):
+        """Return the final slash-separated path segment."""
+        if not isinstance(path, str):
+            raise GwenError(f"path.basename() requires a string path, got {type(path).__name__}")
+        if path == "":
+            return ""
+        return posixpath.basename(path)
+
+    def _builtin_path_dirname(self, path):
+        """Return the parent slash-separated path."""
+        if not isinstance(path, str):
+            raise GwenError(f"path.dirname() requires a string path, got {type(path).__name__}")
+        if path == "":
+            return ""
+        return posixpath.dirname(path)
+
+    def _builtin_path_join(self, left, right):
+        """Join two slash-separated path segments."""
+        if not isinstance(left, str):
+            raise GwenError(f"path.joinpath() requires a string left path, got {type(left).__name__}")
+        if not isinstance(right, str):
+            raise GwenError(f"path.joinpath() requires a string right path, got {type(right).__name__}")
+        return posixpath.join(left, right)
+
     def _builtin_writefile(self, path, content):
         """Overwrite file with content. Returns result[int] (bytes written)."""
         if not isinstance(path, str):
@@ -1065,7 +1135,10 @@ class Interpreter:
                 raise GwenError(e.raw_message, e.line)
         if source_path:
             self.add_module_search_path(os.path.dirname(os.path.abspath(source_path)))
-        self.exec_block(program.statements, self.global_env)
+        try:
+            self.exec_block(program.statements, self.global_env)
+        except LoopControlSignal as signal:
+            raise GwenError(f"{signal.kind} '{signal.name}' used outside matching loop", signal.line)
         # Auto-call main() if it exists
         try:
             main_fn = self.global_env.get("main")
@@ -1206,6 +1279,15 @@ class Interpreter:
                 value = self.eval_expr(stmt.value, env)
                 raise ReturnSignal(value)
 
+        elif isinstance(stmt, ast.PassStmt):
+            return
+
+        elif isinstance(stmt, ast.LeaveStmt):
+            raise LoopControlSignal("leave", stmt.name, stmt.line)
+
+        elif isinstance(stmt, ast.NextStmt):
+            raise LoopControlSignal("next", stmt.name, stmt.line)
+
         elif isinstance(stmt, ast.IfStmt):
             cond_val = self.eval_expr(stmt.condition, env)
             self.require_bool(cond_val, "'if' condition", stmt.line)
@@ -1229,7 +1311,15 @@ class Interpreter:
                 self.require_bool(cond_val, "'while' condition", stmt.line)
                 if not cond_val:
                     break
-                self.exec_block(stmt.body, env)
+                try:
+                    self.exec_block(stmt.body, env)
+                except LoopControlSignal as signal:
+                    if stmt.name and signal.name == stmt.name:
+                        if signal.kind == "leave":
+                            break
+                        if signal.kind == "next":
+                            continue
+                    raise
 
         elif isinstance(stmt, ast.ForRangeStmt):
             start = self.eval_expr(stmt.start, env)
@@ -1284,14 +1374,32 @@ class Interpreter:
                 i_ord = start_ord
                 while compare(i_ord, end_ord):
                     env.update_local(stmt.var, chr(i_ord))
-                    self.exec_block(stmt.body, env)
+                    try:
+                        self.exec_block(stmt.body, env)
+                    except LoopControlSignal as signal:
+                        if stmt.name and signal.name == stmt.name:
+                            if signal.kind == "leave":
+                                break
+                            if signal.kind == "next":
+                                i_ord += step
+                                continue
+                        raise
                     i_ord += step
             else:
                 # Integer range (original behavior)
                 i = start
                 while compare(i, end):
                     env.update_local(stmt.var, i)
-                    self.exec_block(stmt.body, env)
+                    try:
+                        self.exec_block(stmt.body, env)
+                    except LoopControlSignal as signal:
+                        if stmt.name and signal.name == stmt.name:
+                            if signal.kind == "leave":
+                                break
+                            if signal.kind == "next":
+                                i += step
+                                continue
+                        raise
                     i += step
 
         elif isinstance(stmt, ast.ForEachStmt):
@@ -1308,7 +1416,15 @@ class Interpreter:
                 env.update_local(stmt.var, item)
                 if stmt.index_var:
                     env.update_local(stmt.index_var, idx)
-                self.exec_block(stmt.body, env)
+                try:
+                    self.exec_block(stmt.body, env)
+                except LoopControlSignal as signal:
+                    if stmt.name and signal.name == stmt.name:
+                        if signal.kind == "leave":
+                            break
+                        if signal.kind == "next":
+                            continue
+                    raise
 
         elif isinstance(stmt, ast.MatchStmt):
             subject = self.eval_expr(stmt.subject, env)
@@ -1951,6 +2067,8 @@ class Interpreter:
             self.exec_block(method_def.body, call_env)
         except ReturnSignal as r:
             return r.value
+        except LoopControlSignal as signal:
+            raise GwenError(f"{signal.kind} '{signal.name}' used outside matching loop", signal.line)
         return None
 
     def _call_constructor(self, obj_type, args, line):
@@ -1979,6 +2097,8 @@ class Interpreter:
                     line,
                 )
             return r.value
+        except LoopControlSignal as signal:
+            raise GwenError(f"{signal.kind} '{signal.name}' used outside matching loop", signal.line)
         raise GwenError(f"Constructor '{obj_type.name}.new' did not return a value", line)
 
     def call_function(self, fn: GwenFunction, args: List[Any]) -> Any:
@@ -2000,6 +2120,8 @@ class Interpreter:
             self.exec_block(fn.node.body, call_env)
         except ReturnSignal as r:
             return r.value
+        except LoopControlSignal as signal:
+            raise GwenError(f"{signal.kind} '{signal.name}' used outside matching loop", signal.line)
         return None
 
     def call_lambda(self, lam: GwenLambda, args: List[Any]) -> Any:
@@ -2016,6 +2138,8 @@ class Interpreter:
             self.exec_block(lam.node.body, call_env)
         except ReturnSignal as r:
             return r.value
+        except LoopControlSignal as signal:
+            raise GwenError(f"{signal.kind} '{signal.name}' used outside matching loop", signal.line)
         return None
 
     def match_patterns(self, subject: Any, patterns: List[Any], env: Environment, line: int = 0) -> bool:

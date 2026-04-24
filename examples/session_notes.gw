@@ -1,0 +1,273 @@
+use http
+use json
+use sqlite
+use args from os
+
+default_addr: string := "127.0.0.1:8082"
+default_dbpath: string := "/tmp/gwen_session_notes.db"
+notes_db: SqliteDB
+
+func listen_addr() -> string
+  argv := args()
+  if len(argv) >= 1 then
+    return argv[0]
+  endif
+  return default_addr
+endfunc
+
+func storage_path() -> string
+  argv := args()
+  if len(argv) >= 2 then
+    return argv[1]
+  endif
+  return default_dbpath
+endfunc
+
+func current_session(req: HttpRequest) -> string
+  return http.requestcookie(req, "session", "guest")
+endfunc
+
+func init_storage(path: string) -> result[int]
+  match sqlite.open(path)
+    when ok(db) =>
+      global notes_db := db
+    when err(e) =>
+      return err(e)
+  endmatch
+
+  match sqlite.exec(notes_db, "create table if not exists sessions(session_name text primary key, login_count integer not null)", [])
+    when ok(rows) =>
+      schema_sessions_rows := rows
+    when err(e) =>
+      return err(e)
+  endmatch
+
+  return sqlite.exec(notes_db, "create table if not exists notes(id integer primary key autoincrement, session_name text not null, body text not null)", [])
+endfunc
+
+func close_storage() -> result[int]
+  return sqlite.close(notes_db)
+endfunc
+
+func login_count(session: string) -> result[int]
+  if session = "guest" then
+    return ok(0)
+  endif
+
+  match sqlite.query(notes_db, "select login_count from sessions where session_name = ? limit 1", [session])
+    when ok(rows) =>
+      if len(rows) = 0 then
+        return ok(0)
+      endif
+      return ok(int(rows[0]["login_count"]))
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func note_count(session: string) -> result[int]
+  if session = "guest" then
+    return ok(0)
+  endif
+
+  match sqlite.query(notes_db, "select count(*) as total from notes where session_name = ?", [session])
+    when ok(rows) =>
+      if len(rows) = 0 then
+        return ok(0)
+      endif
+      return ok(int(rows[0]["total"]))
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func notes_for(session: string) -> result[list[string]]
+  if session = "guest" then
+    return ok([])
+  endif
+
+  match sqlite.query(notes_db, "select body from notes where session_name = ? order by id", [session])
+    when ok(rows) =>
+      notes: list[string] := []
+      for row in rows do
+        append(notes, str(row["body"]))
+      endfor
+      return ok(notes)
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func bump_login_count(name: string) -> result[int]
+  match sqlite.exec(notes_db, "insert into sessions(session_name, login_count) values(?, 1) on conflict(session_name) do update set login_count = login_count + 1", [name])
+    when ok(rows) =>
+      updated_rows := rows
+    when err(e) =>
+      return err(e)
+  endmatch
+  return login_count(name)
+endfunc
+
+func append_note(session: string, text: string) -> result[int]
+  match sqlite.exec(notes_db, "insert into notes(session_name, body) values(?, ?)", [session, text])
+    when ok(rows) =>
+      inserted_rows := rows
+    when err(e) =>
+      return err(e)
+  endmatch
+  return note_count(session)
+endfunc
+
+func api_me(session: string) -> result[HttpReply]
+  match login_count(session)
+    when ok(logins) =>
+      match note_count(session)
+        when ok(notes_total) =>
+          return http.json(200, json.objectof("session", session, "login_count", logins, "note_count", notes_total))
+        when err(e) =>
+          return err(e)
+      endmatch
+    when err(e) =>
+      return err(e)
+  endmatch
+endfunc
+
+func api_notes(req: HttpRequest, session: string) -> result[HttpReply]
+  if session = "guest" then
+    return ok(http.text(401, "login required"))
+  endif
+
+  if http.method(req) = "GET" then
+    match notes_for(session)
+      when ok(notes) =>
+        return http.json(200, json.objectof("session", session, "count", len(notes), "notes", notes))
+      when err(e) =>
+        return err(e)
+    endmatch
+  endif
+
+  if http.method(req) = "POST" then
+    match json.parseobject(http.requestbody(req))
+      when ok(payload) =>
+        if not haskey(payload, "text") then
+          return ok(http.text(400, "missing text"))
+        endif
+
+        text := trim(str(payload["text"]))
+        if text = "" then
+          return ok(http.text(400, "missing text"))
+        endif
+
+        match append_note(session, text)
+          when ok(total) =>
+            return http.json(201, json.objectof("session", session, "count", total, "last", text))
+          when err(e) =>
+            return err(e)
+        endmatch
+      when err(e) =>
+        return ok(http.text(400, "bad json"))
+    endmatch
+  endif
+
+  reply := http.withheader(http.text(405, "method not allowed"), "Allow", "GET, POST")
+  return ok(reply)
+endfunc
+
+func handle(req: HttpRequest) -> result[HttpReply]
+  session := current_session(req)
+
+  if http.path(req) = "/api/health" then
+    return ok(http.text(200, "ok"))
+  endif
+
+  matched, params := http.route(req, "/login/:name")
+  if matched then
+    name := trim(params["name"])
+    if name = "" then
+      return ok(http.text(400, "name required"))
+    endif
+
+    match bump_login_count(name)
+      when ok(total) =>
+        login_total := total
+      when err(e) =>
+        return err(e)
+    endmatch
+
+    reply := http.redirect(303, "/")
+    reply := http.withcookie(reply, "session", name)
+    return ok(reply)
+  endif
+
+  if http.path(req) = "/logout" then
+    reply := http.redirect(303, "/")
+    reply := http.withcookie(reply, "session", "guest")
+    return ok(reply)
+  endif
+
+  if http.path(req) = "/api/me" then
+    return api_me(session)
+  endif
+
+  if http.path(req) = "/api/notes" then
+    return api_notes(req, session)
+  endif
+
+  matched, served := http.static(req, "/brand/", "assets/brand")
+  if matched then
+    match served
+      when ok(reply) => return ok(reply)
+      when err(e) => return ok(http.text(404, "not found"))
+    endmatch
+  endif
+
+  matched, served := http.static(req, "/", "examples/session_notes_public")
+  if matched then
+    match served
+      when ok(reply) => return ok(reply)
+      when err(e) => return ok(http.text(404, "not found"))
+    endmatch
+  endif
+
+  return ok(http.text(404, "not found"))
+endfunc
+
+func main()
+  match init_storage(storage_path())
+    when ok(ready) =>
+      storage_ready := ready
+    when err(e) =>
+      write("storage failed:", e)
+      return
+  endmatch
+
+  addr := listen_addr()
+  match http.listen(addr, handle)
+    when ok(server) =>
+      write("session notes serving on", http.addr(server))
+      match http.wait(server)
+        when ok(code) =>
+          wait_code := code
+          match close_storage()
+            when ok(closed) =>
+              write("session notes stopped:", wait_code)
+            when err(close_error) =>
+              write("session notes close failed:", close_error)
+          endmatch
+        when err(e) =>
+          match close_storage()
+            when ok(closed) =>
+              write("session notes failed:", e)
+            when err(close_error) =>
+              write("session notes close failed:", close_error)
+          endmatch
+      endmatch
+    when err(e) =>
+      match close_storage()
+        when ok(closed) =>
+          write("listen failed:", e)
+        when err(close_error) =>
+          write("storage close failed:", close_error)
+      endmatch
+  endmatch
+endfunc

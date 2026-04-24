@@ -443,7 +443,7 @@ endfunc handle_request
 
 ### Result 类型
 
-可能失败的函数返回 `result[T]`，通过 `ok(value)` / `err(message)` 构造，调用方用 `match` 强制处理两边。
+可能失败的函数返回 `result[T]`，通过 `ok(value)` / `err(message)` 构造，调用方用 `match` 强制处理两边。单参数形式 `result[T]` 等价于 `result[T, string]`；如果想显式约束错误载荷，可写 `result[T, E]`，也可继续扩成 `result[T, E1, E2...]`。
 
 ```
 func parse_int(s: string) -> result[int]

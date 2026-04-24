@@ -51,6 +51,40 @@ precise: float64 := 3.14159265358979  // ~15 位精度
 
 **精度陷阱**：`float32` 在 2²⁴（16,777,216）处开始丢失整数精度，`float32(16777216) = float32(16777217)` 为 `true`。
 
+### 混合精度（已实现）
+
+Gwen 现在拒绝把两个**不同的显式精度类型**直接混算。
+
+允许：
+
+```
+a: int8 := 1
+b: int8 := 2
+c := a + b
+
+x: float32 := 0.1
+y := x + 0.2
+```
+
+拒绝：
+
+```
+a: int8 := 1
+b: int16 := 2
+// c := a + b   // 报错：mixed precision operation requires explicit conversion
+
+x: float32 := 0.1
+y: float64 := 0.2
+// z := x + y   // 报错：mixed precision operation requires explicit conversion
+```
+
+需要混算时，先显式统一目标类型：
+
+```
+sum := (a as int16) + b
+z := (x as float64) + y
+```
+
 ---
 
 ## 溢出处理（已实现）
@@ -110,7 +144,11 @@ c: int64 := 10 ^ 15   // 大整数，int64 范围内
 list[int]              // 整数列表
 list[list[int]]        // 整数矩阵
 list[string]           // 字符串列表
+cell[int]              // 显式共享状态单元
 ```
+
+`cell[T]` 用在需要**显式共享状态**的地方，通常配合 `use state` 和 `state.get/set/update` 使用。
+它不是默认变量模型的替代品，而是并发/服务端代码里的少数例外通道。
 
 ---
 
@@ -181,4 +219,4 @@ f := price as float64       // 允许：丢掉币种，拿原始数值
 | 函数类型 `(T) -> T` | ✅ 已实现 | 匿名函数支持 |
 | 类型别名 `type` | ✅ 已实现 | 透明别名，继承精度约束 |
 | 货币类型 `money[Tag]` | ✅ 已实现 | int64×10_000，带币种 tag |
-| 混合精度运算检查 | 📋 设计阶段 | 目前允许混用 |
+| 混合精度运算检查 | ✅ 已实现 | 不同显式精度类型混算前需显式转换 |

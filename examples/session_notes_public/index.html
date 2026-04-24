@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Gwen Session Notes</title>
+    <link rel="icon" type="image/svg+xml" href="/brand/gwen-logo.svg">
+    <link rel="stylesheet" href="/app.css?v=2">
+    <script src="/app.js?v=2" defer></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero reveal">
+        <img class="hero-logo" src="/brand/gwen-logo.svg" alt="Gwen logo">
+        <p class="eyebrow">Gwen Self-Hosted Demo</p>
+        <h1>Session Notes</h1>
+        <p class="lede">
+          A Gwen backend serving its own front end, with cookie login, JSON APIs, and SQLite-backed note state bound to the current session.
+        </p>
+      </header>
+
+      <main class="layout">
+        <section class="panel identity reveal stagger-1">
+          <div class="panel-head">
+            <div>
+              <p class="label">Current Session</p>
+              <h2 id="session-name">guest</h2>
+            </div>
+            <span id="session-chip" class="chip guest">Guest</span>
+          </div>
+
+          <div class="stats">
+            <article class="stat-card">
+              <span class="stat-label">Logins</span>
+              <strong id="login-count">0</strong>
+            </article>
+            <article class="stat-card">
+              <span class="stat-label">Notes</span>
+              <strong id="note-count">0</strong>
+            </article>
+          </div>
+
+          <div id="session-banner" class="session-banner guest">
+            <strong>Guest Mode</strong>
+            <span>Login to bind notes to a real session cookie.</span>
+          </div>
+
+          <div class="actions">
+            <button class="ghost-button quick-login" data-name="Ada">Login as Ada</button>
+            <button class="ghost-button quick-login" data-name="Lin">Login as Lin</button>
+            <button class="ghost-button" id="logout-button">Logout</button>
+          </div>
+
+          <form id="login-form" class="inline-form">
+            <label class="field">
+              <span class="label">Custom Session</span>
+              <input id="login-name" name="name" type="text" maxlength="32" placeholder="type a name">
+            </label>
+            <button class="primary-button" type="submit">Switch Session</button>
+          </form>
+        </section>
+
+        <section class="panel compose reveal stagger-2">
+          <div class="panel-head">
+            <div>
+              <p class="label">Write Note</p>
+              <h2>One Request Away</h2>
+            </div>
+            <span id="compose-state" class="status-pill">Login required</span>
+          </div>
+
+          <form id="note-form" class="note-form">
+            <label class="field">
+              <span class="label">Text</span>
+              <textarea id="note-input" name="text" rows="5" maxlength="240" placeholder="Ship the API, tighten the semantics, keep the surface small."></textarea>
+            </label>
+            <div class="form-row">
+              <p id="form-hint" class="hint">
+                Login first. The note list is keyed by the current session cookie.
+              </p>
+              <button id="note-submit" class="primary-button" type="submit">Add Note</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel notes reveal stagger-3">
+          <div class="panel-head">
+            <div>
+              <p class="label">Stored Notes</p>
+              <h2>Session Feed</h2>
+            </div>
+            <a class="ghost-link" href="/api/notes" target="_blank" rel="noreferrer">Open JSON</a>
+          </div>
+
+          <div id="notes-list" class="notes-list"></div>
+        </section>
+
+        <section class="panel api reveal stagger-4">
+          <div class="panel-head">
+            <div>
+              <p class="label">API Sketch</p>
+              <h2>What The UI Calls</h2>
+            </div>
+          </div>
+
+          <pre id="api-snippet" class="snippet"></pre>
+          <p id="flash" class="flash" aria-live="polite"></p>
+        </section>
+      </main>
+    </div>
+  </body>
+</html>

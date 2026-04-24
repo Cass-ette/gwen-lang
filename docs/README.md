@@ -1,83 +1,51 @@
-# Gwen 语言设计文档
+[English Version](./README.en.md)
 
-> 审查优先、数学直觉、显式优于隐式
+# Gwen 文档入口
 
-## 设计理念
+这组文档不是一篇总宣言。它分成三类读者：
 
-- **审查优先** — AI 写代码的时代，可读性和可审计性是第一优先级
-- **数学直觉** — 语法贴近数学表达，有数学和英语基础即可入手
-- **显式优于隐式** — 错误必须处理，接口必须标记，并行必须声明
-- **自然但不冗余** — 比 Pascal 简洁，比 C 自然
+- 想写 Gwen 的人
+- 想理解 Gwen 设计取舍的人
+- 想继续实现 Gwen 的人
 
-## 目标场景
+如果你只是想开始写 Gwen，先看下面四篇：
 
-- 后端开发
-- 运维自动化
-- Vibe coding 审查友好
+- [syntax.md](./syntax.md)
+- [types.md](./types.md)
+- [scope.md](./scope.md)
+- [stdlib.md](./stdlib.md)
 
-## 目标用户
+如果你想理解这门语言为什么这样设计，再看：
 
-- 有数学基础和英语基础的开发者
+- [philosophy.md](./philosophy.md)
+- [modules.md](./modules.md)
+- [concurrency.md](./concurrency.md)
+- [oop.md](./oop.md)
 
----
+如果你关心当前实现和编译路线，再看：
 
-## 文档导航
+- [compiler.md](./compiler.md)
+- [tracking.md](./tracking.md)
 
-| 文档 | 内容 |
+## 文档列表
+
+| 文档 | 作用 |
 |------|------|
-| [syntax.md](./syntax.md) | 基础语法：赋值、控制流、函数、错误处理 |
-| [types.md](./types.md) | 类型系统：**显式精度数值**、泛型、类型转换 |
-| [scope.md](./scope.md) | 变量作用域：本地 vs 全局、嵌套函数 |
-| [modules.md](./modules.md) | 模块系统：定义、导入、可见性 |
-| [concurrency.md](./concurrency.md) | 并发：并行块、失败策略 |
-| [memory.md](./memory.md) | 内存管理：GC + 显式区域 |
-| [appendix.md](./appendix.md) | 附录：关键字、运算符、内置函数、完整示例 |
-| [tracking.md](./tracking.md) | **实现跟踪表**：文档与代码对齐状态 |
-| [stdlib.md](./stdlib.md) | 标准库设计：模块化扩展方案 |
-| [oop.md](./oop.md) | 受限对象系统：审计友好的 OOP |
+| [syntax.md](./syntax.md) | 基础语法与控制流 |
+| [types.md](./types.md) | 类型系统、显式精度数值、`money[...]` |
+| [scope.md](./scope.md) | 作用域、`global`、嵌套函数 |
+| [modules.md](./modules.md) | 模块定义、导入、可见性 |
+| [stdlib.md](./stdlib.md) | 当前标准库表面与边界 |
+| [concurrency.md](./concurrency.md) | `parallel`、共享状态、当前并发语义 |
+| [memory.md](./memory.md) | 当前内存模型与 arena 方向 |
+| [oop.md](./oop.md) | 受限对象系统 |
+| [appendix.md](./appendix.md) | 关键字、运算符、附录材料 |
+| [philosophy.md](./philosophy.md) | Gwen 接受新设计时用的判断尺 |
+| [compiler.md](./compiler.md) | 前端、HIR、MIR、C emitter、编译路线 |
+| [tracking.md](./tracking.md) | 文档与实现的对齐记录 |
 
----
+## 读的时候注意
 
-## 快速示例
-
-```
-// Hello World
-func main()
-  write("Hello, Gwen!")
-endfunc
-```
-
-```
-// 快速排序
-func sort(arr: list[int]) -> list[int]
-  if len(arr) <= 1 then
-    return arr
-  endif
-  // ...
-endfunc
-```
-
-```
-// 显式作用域
-func counter()
-  count: int := 0
-  func increment()
-    global count := count + 1  // 显式修改外层
-  endfunc
-  increment()
-  return count
-endfunc
-```
-
----
-
-## 缩进与格式
-
-- 缩进**不是语法要求**，块结构由 `end*` 关键字界定
-- 编译器可出风格警告，但不报错
-
-## 注释
-
-```
-// 单行注释
-```
+- `tracking.md` 是实现记录，不是语言手册。
+- `compiler.md` 是实现文档，不是给第一次写 Gwen 的人看的教程。
+- 某个能力如果只出现在 `tracking.md`，但没进入 `syntax/types/stdlib` 主文档，默认不要把它当成已经稳定的公开表面。

@@ -1,0 +1,5356 @@
+package interpreter
+
+import (
+	"bufio"
+	"database/sql"
+	stdjson "encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math"
+	"mime"
+	"net"
+	"net/http"
+	"net/textproto"
+	"os"
+	"path"
+	"path/filepath"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/Cass-ette/gwen-lang/internal/ast"
+	"github.com/Cass-ette/gwen-lang/internal/parser"
+	_ "modernc.org/sqlite"
+)
+
+var (
+	errUnknownStatement  = errors.New("unknown statement type")
+	errUnknownExpression = errors.New("unknown expression type")
+)
+
+var intRanges = map[string]struct {
+	min int64
+	max uint64
+}{
+	"int8":   {min: -1 << 7, max: 1<<7 - 1},
+	"int16":  {min: -1 << 15, max: 1<<15 - 1},
+	"int32":  {min: -1 << 31, max: 1<<31 - 1},
+	"int64":  {min: -1 << 63, max: 1<<63 - 1},
+	"uint8":  {min: 0, max: 1<<8 - 1},
+	"uint16": {min: 0, max: 1<<16 - 1},
+	"uint32": {min: 0, max: 1<<32 - 1},
+}
+
+const moneyScale int64 = 10_000
+
+var officialStdlibModules = map[string][]string{
+	"list": {
+		"append",
+		"pop",
+		"concat",
+		"removeat",
+		"insert",
+		"sort",
+		"asc",
+		"desc",
+		"reversed",
+		"map",
+		"filter",
+		"range",
+		"enumerate",
+	},
+	"string": {
+		"split",
+		"join",
+		"substring",
+		"startswith",
+		"endswith",
+		"contains",
+		"trim",
+		"replace",
+	},
+	"math": {
+		"abs",
+		"min",
+		"max",
+		"sqrt",
+		"floor",
+		"ceil",
+	},
+	"dict": {
+		"haskey",
+		"get",
+		"keys",
+		"values",
+		"items",
+	},
+	"io": {
+		"readfile",
+		"readdir",
+		"writefile",
+		"appendfile",
+	},
+	"path": {},
+	"os": {
+		"args",
+		"cwd",
+		"getenv",
+	},
+	"time": {
+		"sleep",
+		"nowunix",
+		"nowunixms",
+		"nowrfc3339",
+	},
+	"json":   {},
+	"http":   {},
+	"state":  {},
+	"sqlite": {},
+}
+
+var moduleOnlyBuiltins = map[string]struct{}{
+	"args":       {},
+	"cwd":        {},
+	"getenv":     {},
+	"sleep":      {},
+	"nowunix":    {},
+	"nowunixms":  {},
+	"nowrfc3339": {},
+}
+
+type RuntimeError struct {
+	Message string
+	Line    int
+}
+
+func (e *RuntimeError) Error() string {
+	if e.Line > 0 {
+		return fmt.Sprintf("runtime error at L%d: %s", e.Line, e.Message)
+	}
+	return e.Message
+}
+
+type Builtin func(args []any) (any, error)
+
+type OkValue struct {
+	Value any
+}
+
+func (v *OkValue) String() string {
+	return fmt.Sprintf("ok(%s)", formatValue(v.Value))
+}
+
+type ErrValue struct {
+	Value any
+}
+
+func (v *ErrValue) String() string {
+	return fmt.Sprintf("err(%s)", formatValue(v.Value))
+}
+
+type MoneyValue struct {
+	Raw      int64
+	Currency string
+}
+
+type HTTPResponseValue struct {
+	Status  int64
+	Body    string
+	Headers map[string][]string
+}
+
+type HTTPRequestValue struct {
+	Method  string
+	Path    string
+	Body    string
+	Query   map[string]string
+	Headers map[string][]string
+	Cookies map[string]string
+}
+
+type HTTPReplyValue struct {
+	Status      int64
+	ContentType string
+	Body        string
+	Headers     map[string][]string
+}
+
+type HTTPServerValue struct {
+	Server *http.Server
+	Addr   string
+	ErrCh  chan error
+}
+
+type SqliteDBValue struct {
+	DB   *sql.DB
+	Path string
+}
+
+type CellValue struct {
+	mu    sync.Mutex
+	Value any
+}
+
+type ListValue struct {
+	Items []any
+}
+
+type JSONNullValue struct{}
+
+var jsonNullValue = &JSONNullValue{}
+
+type Function struct {
+	Node    *ast.FuncDef
+	Closure *Environment
+}
+
+type Lambda struct {
+	Node    *ast.Lambda
+	Closure *Environment
+}
+
+type ObjectType struct {
+	Name        string
+	FieldOrder  []string
+	FieldTypes  map[string]string
+	Constructor *ast.ConstructorDef
+	Methods     map[string]*ast.MethodDef
+	Closure     *Environment
+}
+
+type ObjectValue struct {
+	TypeName string
+	Fields   map[string]any
+	Object   *ObjectType
+}
+
+type BoundMethod struct {
+	Instance *ObjectValue
+	Object   *ObjectType
+	Method   *ast.MethodDef
+}
+
+type StaticMethodRef struct {
+	Object *ObjectType
+	Method *ast.MethodDef
+}
+
+type ConstructorRef struct {
+	Object *ObjectType
+}
+
+type Environment struct {
+	vars    map[string]any
+	types   map[string]string
+	aliases map[string]string
+	consts  map[string]struct{}
+	parent  *Environment
+	self    *ObjectValue
+}
+
+func NewEnvironment(parent *Environment) *Environment {
+	return &Environment{
+		vars:    map[string]any{},
+		types:   map[string]string{},
+		aliases: map[string]string{},
+		consts:  map[string]struct{}{},
+		parent:  parent,
+	}
+}
+
+func (e *Environment) Get(name string) (any, error) {
+	if value, ok := e.vars[name]; ok {
+		return value, nil
+	}
+	if e.parent != nil {
+		return e.parent.Get(name)
+	}
+	return nil, &RuntimeError{Message: fmt.Sprintf("Undefined variable: %s", name)}
+}
+
+func (e *Environment) GetLocal(name string) (any, bool) {
+	value, ok := e.vars[name]
+	return value, ok
+}
+
+func (e *Environment) ResolveOuter(name string) (*Environment, any, bool) {
+	for current := e.parent; current != nil; current = current.parent {
+		if value, ok := current.vars[name]; ok {
+			return current, value, true
+		}
+	}
+	return nil, nil, false
+}
+
+func (e *Environment) Set(name string, value any) {
+	e.vars[name] = value
+}
+
+func (e *Environment) Update(name string, value any) {
+	e.vars[name] = value
+}
+
+func (e *Environment) SetType(name, typeName string) {
+	if typeName != "" {
+		e.types[name] = typeName
+	}
+}
+
+func (e *Environment) GetLocalType(name string) string {
+	return e.types[name]
+}
+
+func (e *Environment) SetAlias(name, target string) {
+	e.aliases[name] = target
+}
+
+func (e *Environment) GetAlias(name string) (string, bool) {
+	if target, ok := e.aliases[name]; ok {
+		return target, true
+	}
+	if e.parent != nil {
+		return e.parent.GetAlias(name)
+	}
+	return "", false
+}
+
+func (e *Environment) GetLocalAlias(name string) (string, bool) {
+	target, ok := e.aliases[name]
+	return target, ok
+}
+
+func (e *Environment) MarkConst(name string) {
+	e.consts[name] = struct{}{}
+}
+
+func (e *Environment) IsConst(name string) bool {
+	if _, ok := e.consts[name]; ok {
+		return true
+	}
+	if e.parent != nil {
+		return e.parent.IsConst(name)
+	}
+	return false
+}
+
+func (e *Environment) IsLocalConst(name string) bool {
+	_, ok := e.consts[name]
+	return ok
+}
+
+type execSignal struct {
+	Kind  string
+	Name  string
+	Value any
+	Line  int
+}
+
+type uninitialized struct{}
+
+var uninitializedValue = uninitialized{}
+
+type Interpreter struct {
+	GlobalEnv         *Environment
+	Modules           map[string]*Environment
+	ProgramArgs       []string
+	Stdout            io.Writer
+	moduleSearchPaths []string
+	loadingModules    map[string]struct{}
+	stdioMu           *sync.Mutex
+}
+
+func New() *Interpreter {
+	env := NewEnvironment(nil)
+	interp := &Interpreter{
+		GlobalEnv:         env,
+		Modules:           map[string]*Environment{},
+		Stdout:            os.Stdout,
+		moduleSearchPaths: []string{},
+		loadingModules:    map[string]struct{}{},
+		stdioMu:           &sync.Mutex{},
+	}
+	interp.setupBuiltins()
+	interp.setupStdlibModules()
+	interp.hideModuleOnlyBuiltins()
+	return interp
+}
+
+func (i *Interpreter) Run(program *ast.Program) error {
+	return i.RunWithSource(program, "")
+}
+
+func (i *Interpreter) Execute(program *ast.Program) error {
+	signal, err := i.execBlock(program.Statements, i.GlobalEnv)
+	if err != nil {
+		return err
+	}
+	if signal != nil && signal.Kind != "return" {
+		return runtimeErrorf(signal.Line, "%s '%s' used outside matching loop", signal.Kind, signal.Name)
+	}
+	return nil
+}
+
+func (i *Interpreter) RunWithSource(program *ast.Program, sourcePath string) error {
+	if sourcePath != "" {
+		i.AddModuleSearchPath(filepath.Dir(sourcePath))
+	}
+	if err := i.Execute(program); err != nil {
+		return err
+	}
+
+	mainValue, err := i.GlobalEnv.Get("main")
+	if err != nil {
+		var runtimeErr *RuntimeError
+		if errors.As(err, &runtimeErr) && strings.Contains(runtimeErr.Message, "Undefined variable: main") {
+			return nil
+		}
+		return err
+	}
+
+	fn, ok := mainValue.(*Function)
+	if !ok {
+		return nil
+	}
+	_, err = i.callFunction(fn, nil, fn.Node.Line)
+	return err
+}
+
+func (i *Interpreter) AddModuleSearchPath(path string) {
+	if path == "" {
+		return
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return
+	}
+	for _, existing := range i.moduleSearchPaths {
+		if existing == absPath {
+			return
+		}
+	}
+	i.moduleSearchPaths = append([]string{absPath}, i.moduleSearchPaths...)
+}
+
+func (i *Interpreter) execBlock(statements []any, env *Environment) (*execSignal, error) {
+	for _, stmt := range statements {
+		result, err := i.execStmt(stmt, env)
+		if err != nil {
+			return nil, err
+		}
+		if result != nil {
+			return result, nil
+		}
+	}
+	return nil, nil
+}
+
+func (i *Interpreter) execStmt(stmt any, env *Environment) (*execSignal, error) {
+	switch node := stmt.(type) {
+	case *ast.FuncDef:
+		env.Set(node.Name, &Function{Node: node, Closure: env})
+		return nil, nil
+
+	case *ast.Assignment:
+		values := make([]any, 0, len(node.Values))
+		for _, valueExpr := range node.Values {
+			value, err := i.evalExpr(valueExpr, env)
+			if err != nil {
+				return nil, err
+			}
+			values = append(values, value)
+		}
+
+		targets := node.Targets
+		if len(targets) > 1 && len(values) == 1 {
+			if unpacked, ok := values[0].([]any); ok {
+				values = unpacked
+			}
+		}
+		if len(targets) != len(values) {
+			return nil, runtimeErrorf(node.Line, "assignment count mismatch: %d targets, %d values", len(targets), len(values))
+		}
+
+		for idx, target := range targets {
+			if err := i.assignTarget(target, values[idx], env, node.Line); err != nil {
+				return nil, err
+			}
+		}
+		return nil, nil
+
+	case *ast.VarDecl:
+		if env.IsConst(node.Name) {
+			return nil, runtimeErrorf(node.Line, "Cannot redeclare const variable: %s", node.Name)
+		}
+		typeName, err := resolveRuntimeType(node.TypeName, env, node.Line)
+		if err != nil {
+			return nil, err
+		}
+		if node.IsUninit {
+			if node.IsConst {
+				return nil, runtimeErrorf(node.Line, "Const variable '%s' must be initialized", node.Name)
+			}
+			env.Set(node.Name, uninitializedValue)
+			env.SetType(node.Name, typeName)
+			return nil, nil
+		}
+
+		var value any
+		if node.Value != nil {
+			value, err = i.evalExpr(node.Value, env)
+			if err != nil {
+				return nil, err
+			}
+		}
+		value, err = coerceIfTyped(value, typeName, node.Line)
+		if err != nil {
+			return nil, err
+		}
+		env.Set(node.Name, value)
+		env.SetType(node.Name, typeName)
+		if node.IsConst {
+			env.MarkConst(node.Name)
+		}
+		return nil, nil
+
+	case *ast.VarBlock:
+		var sharedDefault any
+		var err error
+		if node.DefaultMode == "value" && node.DefaultValue != nil {
+			sharedDefault, err = i.evalExpr(node.DefaultValue, env)
+			if err != nil {
+				return nil, err
+			}
+		}
+		for _, decl := range node.Decls {
+			var value any
+			typeName, err := resolveRuntimeType(decl.TypeName, env, decl.Line)
+			if err != nil {
+				return nil, err
+			}
+			switch {
+			case decl.Value != nil:
+				value, err = i.evalExpr(decl.Value, env)
+				if err != nil {
+					return nil, err
+				}
+			case node.DefaultMode == "value":
+				value = sharedDefault
+			case node.DefaultMode == "zero":
+				value, err = zeroValue(typeName, decl.Line)
+				if err != nil {
+					return nil, err
+				}
+			default:
+				value = uninitializedValue
+			}
+			value, err = coerceIfTyped(value, typeName, decl.Line)
+			if err != nil {
+				return nil, err
+			}
+			env.Set(decl.Name, value)
+			env.SetType(decl.Name, typeName)
+		}
+		return nil, nil
+
+	case *ast.TypeAlias:
+		target, err := resolveRuntimeType(node.Target, env, node.Line)
+		if err != nil {
+			return nil, err
+		}
+		env.SetAlias(node.Name, target)
+		return nil, nil
+
+	case *ast.ReturnStmt:
+		if node.Value == nil {
+			return &execSignal{Kind: "return", Value: nil, Line: node.Line}, nil
+		}
+		if values, ok := node.Value.([]any); ok {
+			result := make([]any, 0, len(values))
+			for _, valueExpr := range values {
+				value, err := i.evalExpr(valueExpr, env)
+				if err != nil {
+					return nil, err
+				}
+				result = append(result, value)
+			}
+			return &execSignal{Kind: "return", Value: result, Line: node.Line}, nil
+		}
+		value, err := i.evalExpr(node.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		return &execSignal{Kind: "return", Value: value, Line: node.Line}, nil
+
+	case *ast.PassStmt:
+		return nil, nil
+
+	case *ast.LeaveStmt:
+		return &execSignal{Kind: "leave", Name: node.Name, Line: node.Line}, nil
+
+	case *ast.NextStmt:
+		return &execSignal{Kind: "next", Name: node.Name, Line: node.Line}, nil
+
+	case *ast.IfStmt:
+		condition, err := i.evalExpr(node.Condition, env)
+		if err != nil {
+			return nil, err
+		}
+		if err := requireBool(condition, "'if' condition", node.Line); err != nil {
+			return nil, err
+		}
+		if condition.(bool) {
+			return i.execBlock(node.Body, env)
+		}
+		for _, branch := range node.Elifs {
+			condition, err := i.evalExpr(branch.Condition, env)
+			if err != nil {
+				return nil, err
+			}
+			if err := requireBool(condition, "'elif' condition", node.Line); err != nil {
+				return nil, err
+			}
+			if condition.(bool) {
+				return i.execBlock(branch.Body, env)
+			}
+		}
+		if len(node.ElseBody) > 0 {
+			return i.execBlock(node.ElseBody, env)
+		}
+		return nil, nil
+
+	case *ast.WhileStmt:
+		for {
+			condition, err := i.evalExpr(node.Condition, env)
+			if err != nil {
+				return nil, err
+			}
+			if err := requireBool(condition, "'while' condition", node.Line); err != nil {
+				return nil, err
+			}
+			if !condition.(bool) {
+				return nil, nil
+			}
+			result, err := i.execBlock(node.Body, env)
+			if err != nil {
+				return nil, err
+			}
+			if result != nil {
+				if consumed, exitLoop := consumeLoopSignal(result, node.Name); consumed {
+					if exitLoop {
+						return nil, nil
+					}
+					continue
+				}
+				return result, nil
+			}
+		}
+
+	case *ast.ForRangeStmt:
+		start, err := i.evalExpr(node.Start, env)
+		if err != nil {
+			return nil, err
+		}
+		end, err := i.evalExpr(node.End, env)
+		if err != nil {
+			return nil, err
+		}
+		startInt, ok := start.(int64)
+		if !ok {
+			return nil, runtimeErrorf(node.Line, "for-range start must be int, got %s", typeNameOf(start))
+		}
+		endInt, ok := end.(int64)
+		if !ok {
+			return nil, runtimeErrorf(node.Line, "for-range end must be int, got %s", typeNameOf(end))
+		}
+
+		var step int64
+		if node.Step != nil {
+			stepValue, err := i.evalExpr(node.Step, env)
+			if err != nil {
+				return nil, err
+			}
+			var ok bool
+			step, ok = stepValue.(int64)
+			if !ok {
+				return nil, runtimeErrorf(node.Line, "for-range step must be int, got %s", typeNameOf(stepValue))
+			}
+			if step == 0 {
+				return nil, runtimeErrorf(node.Line, "for-range step cannot be 0")
+			}
+		} else if startInt <= endInt {
+			step = 1
+		} else {
+			step = -1
+		}
+
+		switch node.Direction {
+		case "asc":
+			if startInt > endInt {
+				startInt, endInt = endInt, startInt
+			}
+			if step < 0 {
+				step = -step
+			}
+			if step == 0 {
+				step = 1
+			}
+		case "desc":
+			if startInt < endInt {
+				startInt, endInt = endInt, startInt
+			}
+			if step > 0 {
+				step = -step
+			}
+			if step == 0 {
+				step = -1
+			}
+		}
+
+		for current := startInt; compareRange(current, endInt, step); current += step {
+			env.Update(node.Var, current)
+			result, err := i.execBlock(node.Body, env)
+			if err != nil {
+				return nil, err
+			}
+			if result != nil {
+				if consumed, exitLoop := consumeLoopSignal(result, node.Name); consumed {
+					if exitLoop {
+						return nil, nil
+					}
+					continue
+				}
+				return result, nil
+			}
+		}
+		return nil, nil
+
+	case *ast.ForEachStmt:
+		iterable, err := i.evalExpr(node.Iterable, env)
+		if err != nil {
+			return nil, err
+		}
+		items, err := toSlice(iterable, node.Line)
+		if err != nil {
+			return nil, err
+		}
+		for idx, item := range items {
+			env.Update(node.Var, item)
+			if node.IndexVar != "" {
+				env.Update(node.IndexVar, int64(idx))
+			}
+			result, err := i.execBlock(node.Body, env)
+			if err != nil {
+				return nil, err
+			}
+			if result != nil {
+				if consumed, exitLoop := consumeLoopSignal(result, node.Name); consumed {
+					if exitLoop {
+						return nil, nil
+					}
+					continue
+				}
+				return result, nil
+			}
+		}
+		return nil, nil
+
+	case *ast.MatchStmt:
+		subject, err := i.evalExpr(node.Subject, env)
+		if err != nil {
+			return nil, err
+		}
+		if isResultMatchSubject(subject) {
+			if err := validateResultMatchPatterns(node); err != nil {
+				return nil, err
+			}
+		}
+		for _, clause := range node.Cases {
+			matched, bindings, err := i.matchPatterns(subject, clause.Patterns, env)
+			if err != nil {
+				return nil, err
+			}
+			if !matched {
+				continue
+			}
+			for name, value := range bindings {
+				env.Set(name, value)
+			}
+			return i.execBlock(clause.Body, env)
+		}
+		if len(node.ElseBody) > 0 {
+			return i.execBlock(node.ElseBody, env)
+		}
+		return nil, runtimeErrorf(node.Line, "match statement has no matching case and no 'else' branch (exhaustive match required)")
+
+	case *ast.ModuleDef:
+		moduleEnv := NewEnvironment(env)
+		signal, err := i.execBlock(node.Body, moduleEnv)
+		if err != nil {
+			return nil, err
+		}
+		if signal != nil {
+			return signal, nil
+		}
+		namespace := NewEnvironment(nil)
+		for _, inner := range node.Body {
+			switch decl := inner.(type) {
+			case *ast.FuncDef:
+				if decl.Exported {
+					value, err := moduleEnv.Get(decl.Name)
+					if err != nil {
+						return nil, err
+					}
+					namespace.Set(decl.Name, value)
+				}
+			case *ast.ObjectDef:
+				if decl.Exported {
+					value, err := moduleEnv.Get(decl.Name)
+					if err != nil {
+						return nil, err
+					}
+					namespace.Set(decl.Name, value)
+				}
+			case *ast.TypeAlias:
+				if decl.Exported {
+					target, ok := moduleEnv.GetLocalAlias(decl.Name)
+					if !ok {
+						return nil, runtimeErrorf(decl.Line, "Exported type alias '%s' was not defined", decl.Name)
+					}
+					namespace.SetAlias(decl.Name, target)
+				}
+			}
+		}
+		i.Modules[node.Name] = namespace
+		env.Set(node.Name, namespace)
+		return nil, nil
+
+	case *ast.UseStmt:
+		namespace, ok := i.Modules[node.Module]
+		if !ok {
+			if err := i.loadModuleFromFile(node.Module, node.Line); err != nil {
+				return nil, err
+			}
+			namespace, ok = i.Modules[node.Module]
+			if !ok {
+				return nil, runtimeErrorf(node.Line, "Module not found: %s", node.Module)
+			}
+		}
+		if len(node.Names) == 0 {
+			env.Set(node.Module, namespace)
+			return nil, nil
+		}
+		for _, name := range node.Names {
+			imported := false
+			if value, ok := namespace.GetLocal(name); ok {
+				env.Set(name, value)
+				imported = true
+			}
+			if alias, ok := namespace.GetLocalAlias(name); ok {
+				env.SetAlias(name, alias)
+				imported = true
+			}
+			if !imported {
+				return nil, runtimeErrorf(node.Line, "Module '%s' does not export '%s'", node.Module, name)
+			}
+		}
+		return nil, nil
+
+	case *ast.TagStmt:
+		return nil, nil
+
+	case *ast.ObjectDef:
+		fieldOrder := make([]string, 0, len(node.Fields))
+		fieldTypes := make(map[string]string, len(node.Fields))
+		for _, field := range node.Fields {
+			typeName, err := resolveRuntimeType(field.TypeAnnotation, env, field.Line)
+			if err != nil {
+				return nil, err
+			}
+			fieldOrder = append(fieldOrder, field.Name)
+			fieldTypes[field.Name] = typeName
+		}
+		methods := make(map[string]*ast.MethodDef, len(node.Methods))
+		for _, method := range node.Methods {
+			methods[method.Name] = method
+		}
+		env.Set(node.Name, &ObjectType{
+			Name:        node.Name,
+			FieldOrder:  fieldOrder,
+			FieldTypes:  fieldTypes,
+			Constructor: node.Constructor,
+			Methods:     methods,
+			Closure:     env,
+		})
+		return nil, nil
+
+	case *ast.ArenaStmt:
+		return i.execBlock(node.Body, env)
+
+	case *ast.GlobalStmt:
+		value, err := i.evalExpr(node.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		targetEnv, existing, ok := env.ResolveOuter(node.Name)
+		if !ok {
+			return nil, runtimeErrorf(node.Line, "global variable '%s' not found in any outer scope", node.Name)
+		}
+		if _, isBuiltin := existing.(Builtin); isBuiltin {
+			return nil, runtimeErrorf(node.Line, "Cannot assign to builtin '%s' with global", node.Name)
+		}
+		if targetEnv.IsLocalConst(node.Name) {
+			return nil, runtimeErrorf(node.Line, "Cannot assign to const variable: %s", node.Name)
+		}
+		coerced, err := coerceIfTyped(value, targetEnv.GetLocalType(node.Name), node.Line)
+		if err != nil {
+			return nil, err
+		}
+		targetEnv.Update(node.Name, coerced)
+		return nil, nil
+
+	case *ast.ParallelStmt:
+		return i.execParallel(node, env)
+
+	case *ast.ExprStmt:
+		_, err := i.evalExpr(node.Expr, env)
+		return nil, err
+
+	default:
+		return nil, fmt.Errorf("%w: %T", errUnknownStatement, stmt)
+	}
+}
+
+type parallelTaskResult struct {
+	value any
+	err   error
+}
+
+func (i *Interpreter) execParallel(node *ast.ParallelStmt, env *Environment) (*execSignal, error) {
+	results := make([]parallelTaskResult, len(node.Body))
+	var wg sync.WaitGroup
+
+	for idx, inner := range node.Body {
+		taskInterp, taskEnv := i.forkForParallel(env)
+		wg.Add(1)
+		go func(idx int, stmt any, interp *Interpreter, scope *Environment) {
+			defer wg.Done()
+			value, err := interp.execParallelTask(stmt, scope)
+			results[idx] = parallelTaskResult{value: value, err: err}
+		}(idx, inner, taskInterp, taskEnv)
+	}
+
+	wg.Wait()
+
+	if !node.AllowFail {
+		for _, result := range results {
+			if result.err != nil {
+				return nil, result.err
+			}
+		}
+	}
+
+	if node.ResultVar != "" {
+		parallelValues := make([]any, 0, len(results))
+		for _, result := range results {
+			if result.err != nil {
+				parallelValues = append(parallelValues, &ErrValue{Value: result.err.Error()})
+				continue
+			}
+			parallelValues = append(parallelValues, &OkValue{Value: result.value})
+		}
+		env.Set(node.ResultVar, newListValue(parallelValues))
+	}
+
+	return nil, nil
+}
+
+func (i *Interpreter) execParallelTask(stmt any, env *Environment) (any, error) {
+	if exprStmt, ok := stmt.(*ast.ExprStmt); ok {
+		return i.evalExpr(exprStmt.Expr, env)
+	}
+	result, err := i.execStmt(stmt, env)
+	if err != nil {
+		return nil, err
+	}
+	if result != nil {
+		if result.Kind == "return" {
+			return result.Value, nil
+		}
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
+	}
+	return nil, nil
+}
+
+func (i *Interpreter) forkForParallel(env *Environment) (*Interpreter, *Environment) {
+	child, clonedEnv, _ := i.forkValueForParallel(env, nil)
+	return child, clonedEnv
+}
+
+func (i *Interpreter) forkValueForParallel(env *Environment, value any) (*Interpreter, *Environment, any) {
+	child := New()
+	child.Stdout = i.Stdout
+	child.stdioMu = i.stdioMu
+	child.moduleSearchPaths = append([]string{}, i.moduleSearchPaths...)
+
+	cloner := newCloneContext(i, child)
+	cloner.cloneEnv(i.GlobalEnv)
+
+	for name, moduleEnv := range i.Modules {
+		child.Modules[name] = cloner.cloneEnv(moduleEnv)
+	}
+
+	var clonedValue any
+	if value != nil {
+		clonedValue = cloner.cloneValue(value)
+	}
+	return child, cloner.cloneEnv(env), clonedValue
+}
+
+type cloneContext struct {
+	parentBuiltinPtrs map[uintptr]string
+	childBuiltins     map[string]Builtin
+	envs              map[*Environment]*Environment
+	envPopulating     map[*Environment]struct{}
+	envPopulated      map[*Environment]struct{}
+	functions         map[*Function]*Function
+	lambdas           map[*Lambda]*Lambda
+	objectTypes       map[*ObjectType]*ObjectType
+	objectValues      map[*ObjectValue]*ObjectValue
+	boundMethods      map[*BoundMethod]*BoundMethod
+	staticMethods     map[*StaticMethodRef]*StaticMethodRef
+	constructors      map[*ConstructorRef]*ConstructorRef
+	okValues          map[*OkValue]*OkValue
+	errValues         map[*ErrValue]*ErrValue
+	moneyValues       map[*MoneyValue]*MoneyValue
+	lists             map[*ListValue]*ListValue
+	slices            map[uintptr][]any
+	dicts             map[uintptr]map[any]any
+}
+
+func newCloneContext(parent *Interpreter, child *Interpreter) *cloneContext {
+	return &cloneContext{
+		parentBuiltinPtrs: builtinPointerNames(parent),
+		childBuiltins:     builtinValues(child),
+		envs:              map[*Environment]*Environment{parent.GlobalEnv: child.GlobalEnv},
+		envPopulating:     map[*Environment]struct{}{},
+		envPopulated:      map[*Environment]struct{}{},
+		functions:         map[*Function]*Function{},
+		lambdas:           map[*Lambda]*Lambda{},
+		objectTypes:       map[*ObjectType]*ObjectType{},
+		objectValues:      map[*ObjectValue]*ObjectValue{},
+		boundMethods:      map[*BoundMethod]*BoundMethod{},
+		staticMethods:     map[*StaticMethodRef]*StaticMethodRef{},
+		constructors:      map[*ConstructorRef]*ConstructorRef{},
+		okValues:          map[*OkValue]*OkValue{},
+		errValues:         map[*ErrValue]*ErrValue{},
+		moneyValues:       map[*MoneyValue]*MoneyValue{},
+		lists:             map[*ListValue]*ListValue{},
+		slices:            map[uintptr][]any{},
+		dicts:             map[uintptr]map[any]any{},
+	}
+}
+
+func builtinPointerNames(interp *Interpreter) map[uintptr]string {
+	names := map[uintptr]string{}
+	collectBuiltinPointers(names, "global", interp.GlobalEnv)
+	for moduleName, moduleEnv := range interp.Modules {
+		collectBuiltinPointers(names, "module:"+moduleName, moduleEnv)
+	}
+	return names
+}
+
+func builtinValues(interp *Interpreter) map[string]Builtin {
+	values := map[string]Builtin{}
+	collectBuiltinValues(values, "global", interp.GlobalEnv)
+	for moduleName, moduleEnv := range interp.Modules {
+		collectBuiltinValues(values, "module:"+moduleName, moduleEnv)
+	}
+	return values
+}
+
+func collectBuiltinPointers(dst map[uintptr]string, prefix string, env *Environment) {
+	for name, value := range env.vars {
+		builtin, ok := value.(Builtin)
+		if !ok {
+			continue
+		}
+		dst[reflect.ValueOf(builtin).Pointer()] = prefix + ":" + name
+	}
+}
+
+func collectBuiltinValues(dst map[string]Builtin, prefix string, env *Environment) {
+	for name, value := range env.vars {
+		builtin, ok := value.(Builtin)
+		if !ok {
+			continue
+		}
+		dst[prefix+":"+name] = builtin
+	}
+}
+
+func (c *cloneContext) cloneEnv(src *Environment) *Environment {
+	if src == nil {
+		return nil
+	}
+	dst, ok := c.envs[src]
+	if !ok {
+		dst = NewEnvironment(nil)
+		c.envs[src] = dst
+	}
+	if _, done := c.envPopulated[src]; done {
+		return dst
+	}
+	if _, inProgress := c.envPopulating[src]; inProgress {
+		return dst
+	}
+
+	c.envPopulating[src] = struct{}{}
+	dst.vars = map[string]any{}
+	dst.types = map[string]string{}
+	dst.aliases = map[string]string{}
+	dst.consts = map[string]struct{}{}
+	dst.parent = c.cloneEnv(src.parent)
+	dst.self = nil
+
+	for name, value := range src.vars {
+		dst.vars[name] = c.cloneNamedValue(name, value)
+	}
+	for name, typeName := range src.types {
+		dst.types[name] = typeName
+	}
+	for name, target := range src.aliases {
+		dst.aliases[name] = target
+	}
+	for name := range src.consts {
+		dst.consts[name] = struct{}{}
+	}
+	if src.self != nil {
+		dst.self = c.cloneObjectValue(src.self)
+	}
+
+	delete(c.envPopulating, src)
+	c.envPopulated[src] = struct{}{}
+	return dst
+}
+
+func (c *cloneContext) cloneNamedValue(name string, value any) any {
+	if builtin, ok := value.(Builtin); ok {
+		if childBuiltin, ok := c.remapBuiltin(builtin); ok {
+			return childBuiltin
+		}
+	}
+	return c.cloneValue(value)
+}
+
+func (c *cloneContext) remapBuiltin(builtin Builtin) (Builtin, bool) {
+	builtinName, ok := c.parentBuiltinPtrs[reflect.ValueOf(builtin).Pointer()]
+	if !ok {
+		return nil, false
+	}
+	childBuiltin, ok := c.childBuiltins[builtinName]
+	return childBuiltin, ok
+}
+
+func (c *cloneContext) cloneValue(value any) any {
+	switch value := value.(type) {
+	case nil, int64, float64, string, bool, uninitialized:
+		return value
+	case Builtin:
+		if childBuiltin, ok := c.remapBuiltin(value); ok {
+			return childBuiltin
+		}
+		return value
+	case *ListValue:
+		if cloned, ok := c.lists[value]; ok {
+			return cloned
+		}
+		cloned := &ListValue{Items: make([]any, len(value.Items))}
+		c.lists[value] = cloned
+		for idx, item := range value.Items {
+			cloned.Items[idx] = c.cloneValue(item)
+		}
+		return cloned
+	case []any:
+		ptr := reflect.ValueOf(value).Pointer()
+		if ptr != 0 {
+			if cloned, ok := c.slices[ptr]; ok {
+				return cloned
+			}
+		}
+		cloned := make([]any, len(value))
+		if ptr != 0 {
+			c.slices[ptr] = cloned
+		}
+		for idx, item := range value {
+			cloned[idx] = c.cloneValue(item)
+		}
+		return cloned
+	case map[any]any:
+		ptr := reflect.ValueOf(value).Pointer()
+		if ptr != 0 {
+			if cloned, ok := c.dicts[ptr]; ok {
+				return cloned
+			}
+		}
+		cloned := make(map[any]any, len(value))
+		if ptr != 0 {
+			c.dicts[ptr] = cloned
+		}
+		for key, item := range value {
+			cloned[c.cloneValue(key)] = c.cloneValue(item)
+		}
+		return cloned
+	case *Environment:
+		return c.cloneEnv(value)
+	case *Function:
+		if cloned, ok := c.functions[value]; ok {
+			return cloned
+		}
+		cloned := &Function{Node: value.Node}
+		c.functions[value] = cloned
+		cloned.Closure = c.cloneEnv(value.Closure)
+		return cloned
+	case *Lambda:
+		if cloned, ok := c.lambdas[value]; ok {
+			return cloned
+		}
+		cloned := &Lambda{Node: value.Node}
+		c.lambdas[value] = cloned
+		cloned.Closure = c.cloneEnv(value.Closure)
+		return cloned
+	case *ObjectType:
+		if cloned, ok := c.objectTypes[value]; ok {
+			return cloned
+		}
+		cloned := &ObjectType{
+			Name:        value.Name,
+			FieldOrder:  append([]string{}, value.FieldOrder...),
+			FieldTypes:  map[string]string{},
+			Constructor: value.Constructor,
+			Methods:     map[string]*ast.MethodDef{},
+		}
+		c.objectTypes[value] = cloned
+		for name, typeName := range value.FieldTypes {
+			cloned.FieldTypes[name] = typeName
+		}
+		for name, method := range value.Methods {
+			cloned.Methods[name] = method
+		}
+		cloned.Closure = c.cloneEnv(value.Closure)
+		return cloned
+	case *ObjectValue:
+		return c.cloneObjectValue(value)
+	case *BoundMethod:
+		if cloned, ok := c.boundMethods[value]; ok {
+			return cloned
+		}
+		cloned := &BoundMethod{
+			Method: value.Method,
+		}
+		c.boundMethods[value] = cloned
+		cloned.Instance = c.cloneObjectValue(value.Instance)
+		cloned.Object = c.cloneValue(value.Object).(*ObjectType)
+		return cloned
+	case *StaticMethodRef:
+		if cloned, ok := c.staticMethods[value]; ok {
+			return cloned
+		}
+		cloned := &StaticMethodRef{Method: value.Method}
+		c.staticMethods[value] = cloned
+		cloned.Object = c.cloneValue(value.Object).(*ObjectType)
+		return cloned
+	case *ConstructorRef:
+		if cloned, ok := c.constructors[value]; ok {
+			return cloned
+		}
+		cloned := &ConstructorRef{}
+		c.constructors[value] = cloned
+		cloned.Object = c.cloneValue(value.Object).(*ObjectType)
+		return cloned
+	case *OkValue:
+		if cloned, ok := c.okValues[value]; ok {
+			return cloned
+		}
+		cloned := &OkValue{}
+		c.okValues[value] = cloned
+		cloned.Value = c.cloneValue(value.Value)
+		return cloned
+	case *ErrValue:
+		if cloned, ok := c.errValues[value]; ok {
+			return cloned
+		}
+		cloned := &ErrValue{}
+		c.errValues[value] = cloned
+		cloned.Value = c.cloneValue(value.Value)
+		return cloned
+	case *MoneyValue:
+		if cloned, ok := c.moneyValues[value]; ok {
+			return cloned
+		}
+		cloned := &MoneyValue{Raw: value.Raw, Currency: value.Currency}
+		c.moneyValues[value] = cloned
+		return cloned
+	default:
+		return value
+	}
+}
+
+func (c *cloneContext) cloneObjectValue(value *ObjectValue) *ObjectValue {
+	if value == nil {
+		return nil
+	}
+	if cloned, ok := c.objectValues[value]; ok {
+		return cloned
+	}
+	cloned := &ObjectValue{
+		TypeName: value.TypeName,
+		Fields:   map[string]any{},
+	}
+	c.objectValues[value] = cloned
+	cloned.Object = c.cloneValue(value.Object).(*ObjectType)
+	for name, fieldValue := range value.Fields {
+		cloned.Fields[name] = c.cloneValue(fieldValue)
+	}
+	return cloned
+}
+
+func (i *Interpreter) evalExpr(expr any, env *Environment) (any, error) {
+	switch node := expr.(type) {
+	case *ast.IntLiteral:
+		return node.Value, nil
+	case *ast.FloatLiteral:
+		return node.Value, nil
+	case *ast.StringLiteral:
+		return node.Value, nil
+	case *ast.BoolLiteral:
+		return node.Value, nil
+	case *ast.Identifier:
+		value, err := env.Get(node.Name)
+		if err != nil {
+			var runtimeErr *RuntimeError
+			if errors.As(err, &runtimeErr) {
+				runtimeErr.Line = node.Line
+			}
+			return nil, err
+		}
+		if value == uninitializedValue {
+			return nil, runtimeErrorf(node.Line, "'%s' read before assignment", node.Name)
+		}
+		return value, nil
+	case *ast.ListLiteral:
+		items := make([]any, 0, len(node.Elements))
+		for _, element := range node.Elements {
+			value, err := i.evalExpr(element, env)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, value)
+		}
+		return newListValue(items), nil
+	case *ast.DictLiteral:
+		items := map[any]any{}
+		for _, entry := range node.Entries {
+			key, err := i.evalExpr(entry.Key, env)
+			if err != nil {
+				return nil, err
+			}
+			value, err := i.evalExpr(entry.Value, env)
+			if err != nil {
+				return nil, err
+			}
+			items[key] = value
+		}
+		return items, nil
+	case *ast.BinaryOp:
+		if node.Op == "and" || node.Op == "or" {
+			left, err := i.evalExpr(node.Left, env)
+			if err != nil {
+				return nil, err
+			}
+			if err := requireBool(left, fmt.Sprintf("left side of '%s'", node.Op), node.Line); err != nil {
+				return nil, err
+			}
+			if node.Op == "and" {
+				if !left.(bool) {
+					return false, nil
+				}
+				right, err := i.evalExpr(node.Right, env)
+				if err != nil {
+					return nil, err
+				}
+				if err := requireBool(right, "right side of 'and'", node.Line); err != nil {
+					return nil, err
+				}
+				return right, nil
+			}
+			if left.(bool) {
+				return true, nil
+			}
+			right, err := i.evalExpr(node.Right, env)
+			if err != nil {
+				return nil, err
+			}
+			if err := requireBool(right, "right side of 'or'", node.Line); err != nil {
+				return nil, err
+			}
+			return right, nil
+		}
+		left, err := i.evalExpr(node.Left, env)
+		if err != nil {
+			return nil, err
+		}
+		right, err := i.evalExpr(node.Right, env)
+		if err != nil {
+			return nil, err
+		}
+		return evalBinary(node.Op, left, right, node.Line)
+	case *ast.UnaryOp:
+		operand, err := i.evalExpr(node.Operand, env)
+		if err != nil {
+			return nil, err
+		}
+		switch node.Op {
+		case "-":
+			switch value := operand.(type) {
+			case int64:
+				return -value, nil
+			case float64:
+				return -value, nil
+			default:
+				return nil, runtimeErrorf(node.Line, "cannot negate %s", typeNameOf(operand))
+			}
+		case "not":
+			if err := requireBool(operand, "'not' operand", node.Line); err != nil {
+				return nil, err
+			}
+			return !operand.(bool), nil
+		default:
+			return nil, runtimeErrorf(node.Line, "unknown unary operator: %s", node.Op)
+		}
+	case *ast.FuncCall:
+		return i.evalCall(node, env)
+	case *ast.IndexAccess:
+		object, err := i.evalExpr(node.Object, env)
+		if err != nil {
+			return nil, err
+		}
+		index, err := i.evalExpr(node.Index, env)
+		if err != nil {
+			return nil, err
+		}
+		return indexValue(object, index, node.Line)
+	case *ast.Lambda:
+		return &Lambda{Node: node, Closure: env}, nil
+	case *ast.OkExpr:
+		value, err := i.evalExpr(node.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		return &OkValue{Value: value}, nil
+	case *ast.ErrExpr:
+		value, err := i.evalExpr(node.Value, env)
+		if err != nil {
+			return nil, err
+		}
+		return &ErrValue{Value: value}, nil
+	case *ast.AsExpr:
+		value, err := i.evalExpr(node.Expr, env)
+		if err != nil {
+			return nil, err
+		}
+		target, err := resolveAlias(node.TypeName, env, node.Line)
+		if err != nil {
+			return nil, err
+		}
+		converted, err := convertAs(value, target, node.Line)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: converted}, nil
+	case *ast.MemberAccess:
+		object, err := i.evalExpr(node.Object, env)
+		if err != nil {
+			return nil, err
+		}
+		switch value := object.(type) {
+		case *ObjectValue:
+			if method, ok := value.Object.Methods[node.Member]; ok {
+				return &BoundMethod{Instance: value, Object: value.Object, Method: method}, nil
+			}
+			if identifier, ok := node.Object.(*ast.Identifier); ok && identifier.Name == "self" {
+				if env.self == nil || env.self != value {
+					return nil, runtimeErrorf(node.Line, "Cannot access private field '%s' of '%s' from outside; use a method instead", node.Member, value.TypeName)
+				}
+				field, ok := value.Fields[node.Member]
+				if !ok {
+					return nil, runtimeErrorf(node.Line, "Object '%s' has no field '%s'", value.TypeName, node.Member)
+				}
+				return field, nil
+			}
+			return nil, runtimeErrorf(node.Line, "Cannot access private field '%s' of '%s' from outside; use a method instead", node.Member, value.TypeName)
+		case *ObjectType:
+			if node.Member == "new" {
+				if value.Constructor == nil {
+					return nil, runtimeErrorf(node.Line, "Object '%s' has no constructor", value.Name)
+				}
+				return &ConstructorRef{Object: value}, nil
+			}
+			if method, ok := value.Methods[node.Member]; ok {
+				return &StaticMethodRef{Object: value, Method: method}, nil
+			}
+			return nil, runtimeErrorf(node.Line, "Object '%s' has no member '%s'", value.Name, node.Member)
+		case *Environment:
+			member, err := value.Get(node.Member)
+			if err != nil {
+				return nil, err
+			}
+			return member, nil
+		default:
+			return nil, runtimeErrorf(node.Line, "member access is not implemented for %s", typeNameOf(object))
+		}
+	case *ast.ObjectLiteral:
+		typeValue, err := env.Get(node.Name)
+		if err != nil {
+			return nil, runtimeErrorf(node.Line, "Unknown object type: %s", node.Name)
+		}
+		objectType, ok := typeValue.(*ObjectType)
+		if !ok {
+			return nil, runtimeErrorf(node.Line, "'%s' is not an object type", node.Name)
+		}
+		fields := make(map[string]any, len(node.Fields))
+		seen := make(map[string]struct{}, len(node.Fields))
+		for _, field := range node.Fields {
+			if _, exists := seen[field.Name]; exists {
+				return nil, runtimeErrorf(node.Line, "Duplicate field '%s' in '%s' literal", field.Name, node.Name)
+			}
+			seen[field.Name] = struct{}{}
+			expectedType, ok := objectType.FieldTypes[field.Name]
+			if !ok {
+				return nil, runtimeErrorf(node.Line, "Object '%s' has no field '%s'", node.Name, field.Name)
+			}
+			value, err := i.evalExpr(field.Value, env)
+			if err != nil {
+				return nil, err
+			}
+			value, err = coerceIfTyped(value, expectedType, node.Line)
+			if err != nil {
+				return nil, err
+			}
+			fields[field.Name] = value
+		}
+		for _, fieldName := range objectType.FieldOrder {
+			if _, ok := fields[fieldName]; !ok {
+				return nil, runtimeErrorf(node.Line, "Object '%s' literal missing field '%s'", node.Name, fieldName)
+			}
+		}
+		return &ObjectValue{TypeName: node.Name, Fields: fields, Object: objectType}, nil
+	default:
+		return nil, fmt.Errorf("%w: %T", errUnknownExpression, expr)
+	}
+}
+
+func (i *Interpreter) evalCall(call *ast.FuncCall, env *Environment) (any, error) {
+	if builtinName, ok := builtinCallName(call.Name); ok {
+		switch builtinName {
+		case "append":
+			return i.evalAppendCall(call, env)
+		case "pop":
+			return i.evalPopCall(call, env)
+		case "removeat":
+			return i.evalRemoveAtCall(call, env)
+		case "insert":
+			return i.evalInsertCall(call, env)
+		}
+	}
+
+	callee, err := i.evalExpr(call.Name, env)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]any, 0, len(call.Args))
+	for _, argExpr := range call.Args {
+		value, err := i.evalExpr(argExpr, env)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, value)
+	}
+
+	switch fn := callee.(type) {
+	case Builtin:
+		return fn(args)
+	case *Function:
+		return i.callFunction(fn, args, call.Line)
+	case *Lambda:
+		return i.callLambda(fn, args, call.Line)
+	case *BoundMethod:
+		return i.callMethod(fn, args, call.Line)
+	case *StaticMethodRef:
+		if len(args) == 0 {
+			return nil, runtimeErrorf(call.Line, "Method '%s.%s' requires explicit self as first argument", fn.Object.Name, fn.Method.Name)
+		}
+		instance, ok := args[0].(*ObjectValue)
+		if !ok || instance.TypeName != fn.Object.Name {
+			return nil, runtimeErrorf(call.Line, "First argument to '%s.%s' must be a '%s' instance", fn.Object.Name, fn.Method.Name, fn.Object.Name)
+		}
+		return i.callMethod(&BoundMethod{Instance: instance, Object: fn.Object, Method: fn.Method}, args[1:], call.Line)
+	case *ConstructorRef:
+		return i.callConstructor(fn, args, call.Line)
+	default:
+		return nil, runtimeErrorf(call.Line, "'%s' is not callable", formatValue(callee))
+	}
+}
+
+func (i *Interpreter) evalAppendCall(call *ast.FuncCall, env *Environment) (any, error) {
+	if len(call.Args) != 2 {
+		return nil, runtimeErrorf(call.Line, "append() expects 2 arguments, got %d", len(call.Args))
+	}
+	if _, ok := assignmentTargetExpr(call.Args[0]); !ok {
+		return nil, runtimeErrorf(call.Line, "append() first argument must be assignable list target")
+	}
+	listValue, err := i.evalExpr(call.Args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	list, err := requireMutableList(listValue, call.Line, "append")
+	if err != nil {
+		return nil, err
+	}
+	item, err := i.evalExpr(call.Args[1], env)
+	if err != nil {
+		return nil, err
+	}
+	list.Items = append(list.Items, item)
+	return list, nil
+}
+
+func (i *Interpreter) evalPopCall(call *ast.FuncCall, env *Environment) (any, error) {
+	if len(call.Args) != 1 {
+		return nil, runtimeErrorf(call.Line, "pop() expects 1 argument, got %d", len(call.Args))
+	}
+	if _, ok := assignmentTargetExpr(call.Args[0]); !ok {
+		return nil, runtimeErrorf(call.Line, "pop() first argument must be assignable list target")
+	}
+	listValue, err := i.evalExpr(call.Args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	list, err := requireMutableList(listValue, call.Line, "pop")
+	if err != nil {
+		return nil, err
+	}
+	if len(list.Items) == 0 {
+		return nil, runtimeErrorf(call.Line, "pop() from empty list")
+	}
+	removed := list.Items[len(list.Items)-1]
+	list.Items[len(list.Items)-1] = nil
+	list.Items = list.Items[:len(list.Items)-1]
+	return removed, nil
+}
+
+func (i *Interpreter) evalRemoveAtCall(call *ast.FuncCall, env *Environment) (any, error) {
+	if len(call.Args) != 2 {
+		return nil, runtimeErrorf(call.Line, "removeat() expects 2 arguments, got %d", len(call.Args))
+	}
+	if _, ok := assignmentTargetExpr(call.Args[0]); !ok {
+		return nil, runtimeErrorf(call.Line, "removeat() first argument must be assignable list target")
+	}
+	listValue, err := i.evalExpr(call.Args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	list, err := requireMutableList(listValue, call.Line, "removeat")
+	if err != nil {
+		return nil, err
+	}
+	index, err := i.evalExpr(call.Args[1], env)
+	if err != nil {
+		return nil, err
+	}
+	intIndex, ok := index.(int64)
+	if !ok {
+		return nil, runtimeErrorf(call.Line, "removeat() index must be int, got %s", typeNameOf(index))
+	}
+	if intIndex < 0 || intIndex >= int64(len(list.Items)) {
+		return nil, runtimeErrorf(call.Line, "removeat() index out of range: %d", intIndex)
+	}
+	removed := list.Items[intIndex]
+	copy(list.Items[intIndex:], list.Items[intIndex+1:])
+	list.Items[len(list.Items)-1] = nil
+	list.Items = list.Items[:len(list.Items)-1]
+	return removed, nil
+}
+
+func (i *Interpreter) evalInsertCall(call *ast.FuncCall, env *Environment) (any, error) {
+	if len(call.Args) != 3 {
+		return nil, runtimeErrorf(call.Line, "insert() expects 3 arguments, got %d", len(call.Args))
+	}
+	if _, ok := assignmentTargetExpr(call.Args[0]); !ok {
+		return nil, runtimeErrorf(call.Line, "insert() first argument must be assignable list target")
+	}
+	listValue, err := i.evalExpr(call.Args[0], env)
+	if err != nil {
+		return nil, err
+	}
+	list, err := requireMutableList(listValue, call.Line, "insert")
+	if err != nil {
+		return nil, err
+	}
+	indexValue, err := i.evalExpr(call.Args[1], env)
+	if err != nil {
+		return nil, err
+	}
+	index, ok := indexValue.(int64)
+	if !ok {
+		return nil, runtimeErrorf(call.Line, "insert() index must be int, got %s", typeNameOf(indexValue))
+	}
+	if index < 0 || index > int64(len(list.Items)) {
+		return nil, runtimeErrorf(call.Line, "insert() index out of range: %d", index)
+	}
+	item, err := i.evalExpr(call.Args[2], env)
+	if err != nil {
+		return nil, err
+	}
+	list.Items = append(list.Items, nil)
+	copy(list.Items[index+1:], list.Items[index:])
+	list.Items[index] = item
+	return nil, nil
+}
+
+func (i *Interpreter) callFunction(fn *Function, args []any, line int) (any, error) {
+	callEnv := NewEnvironment(fn.Closure)
+	if err := bindParams(args, fn.Node.Params, callEnv, fn.Closure, line, fn.Node.Name, i); err != nil {
+		return nil, err
+	}
+	result, err := i.execBlock(fn.Node.Body, callEnv)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	if result.Kind != "return" {
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
+	}
+	return result.Value, nil
+}
+
+func (i *Interpreter) callLambda(fn *Lambda, args []any, line int) (any, error) {
+	callEnv := NewEnvironment(fn.Closure)
+	if err := bindParams(args, fn.Node.Params, callEnv, fn.Closure, line, "<lambda>", i); err != nil {
+		return nil, err
+	}
+	result, err := i.execBlock(fn.Node.Body, callEnv)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	if result.Kind != "return" {
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
+	}
+	return result.Value, nil
+}
+
+func (i *Interpreter) callMethod(method *BoundMethod, args []any, line int) (any, error) {
+	callEnv := NewEnvironment(method.Object.Closure)
+	callEnv.self = method.Instance
+	if len(method.Method.Params) == 0 {
+		return nil, runtimeErrorf(line, "Method '%s.%s' must declare 'self' as first parameter", method.Object.Name, method.Method.Name)
+	}
+	selfParam := method.Method.Params[0]
+	callEnv.Set(selfParam.Name, method.Instance)
+	callEnv.SetType(selfParam.Name, method.Object.Name)
+	if err := bindParams(args, method.Method.Params[1:], callEnv, method.Object.Closure, line, method.Method.Name, i); err != nil {
+		return nil, err
+	}
+	result, err := i.execBlock(method.Method.Body, callEnv)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+	if result.Kind != "return" {
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
+	}
+	return result.Value, nil
+}
+
+func (i *Interpreter) callConstructor(constructor *ConstructorRef, args []any, line int) (any, error) {
+	callEnv := NewEnvironment(constructor.Object.Closure)
+	if constructor.Object.Constructor == nil {
+		return nil, runtimeErrorf(line, "Object '%s' has no constructor", constructor.Object.Name)
+	}
+	if err := bindParams(args, constructor.Object.Constructor.Params, callEnv, constructor.Object.Closure, line, constructor.Object.Name+".new", i); err != nil {
+		return nil, err
+	}
+	result, err := i.execBlock(constructor.Object.Constructor.Body, callEnv)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, runtimeErrorf(line, "Constructor '%s.new' did not return a value", constructor.Object.Name)
+	}
+	if result.Kind != "return" {
+		return nil, runtimeErrorf(result.Line, "%s '%s' used outside matching loop", result.Kind, result.Name)
+	}
+	instance, ok := result.Value.(*ObjectValue)
+	if !ok || instance.TypeName != constructor.Object.Name {
+		return nil, runtimeErrorf(line, "Constructor '%s.new' must return a '%s' instance", constructor.Object.Name, constructor.Object.Name)
+	}
+	return instance, nil
+}
+
+func (i *Interpreter) assignTarget(target any, value any, env *Environment, line int) error {
+	switch target := target.(type) {
+	case string:
+		if env.IsConst(target) {
+			return runtimeErrorf(line, "Cannot assign to const variable: %s", target)
+		}
+		coerced, err := coerceIfTyped(value, env.GetLocalType(target), line)
+		if err != nil {
+			return err
+		}
+		env.Update(target, coerced)
+		return nil
+	case *ast.MemberAccess:
+		identifier, ok := target.Object.(*ast.Identifier)
+		if !ok || identifier.Name != "self" {
+			return runtimeErrorf(line, "Cannot assign to field '%s' from outside; use 'self.%s := ...' inside a method", target.Member, target.Member)
+		}
+		if env.self == nil {
+			return runtimeErrorf(line, "Cannot assign to field '%s' from outside; use 'self.%s := ...' inside a method", target.Member, target.Member)
+		}
+		expectedType, ok := env.self.Object.FieldTypes[target.Member]
+		if !ok {
+			return runtimeErrorf(line, "Object '%s' has no field '%s'", env.self.TypeName, target.Member)
+		}
+		coerced, err := coerceIfTyped(value, expectedType, line)
+		if err != nil {
+			return err
+		}
+		env.self.Fields[target.Member] = coerced
+		return nil
+	case *ast.IndexAccess:
+		object, err := i.evalExpr(target.Object, env)
+		if err != nil {
+			return err
+		}
+		index, err := i.evalExpr(target.Index, env)
+		if err != nil {
+			return err
+		}
+		return assignIndex(object, index, value, line)
+	default:
+		return runtimeErrorf(line, "invalid assignment target")
+	}
+}
+
+func assignmentTargetExpr(expr any) (any, bool) {
+	switch node := expr.(type) {
+	case *ast.Identifier:
+		return node.Name, true
+	case *ast.IndexAccess:
+		return node, true
+	case *ast.MemberAccess:
+		return node, true
+	default:
+		return nil, false
+	}
+}
+
+func builtinCallName(expr any) (string, bool) {
+	switch node := expr.(type) {
+	case *ast.Identifier:
+		return node.Name, true
+	case *ast.MemberAccess:
+		return node.Member, true
+	default:
+		return "", false
+	}
+}
+
+func isResultMatchSubject(subject any) bool {
+	switch subject.(type) {
+	case *OkValue, *ErrValue:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateResultMatchPatterns(stmt *ast.MatchStmt) error {
+	for _, clause := range stmt.Cases {
+		for _, pattern := range clause.Patterns {
+			if isResultMatchPattern(pattern) {
+				continue
+			}
+			return runtimeErrorf(matchPatternLine(pattern), "Match on Result type must use ok(x) or err(x) patterns, not %s. Use 'when ok(val) => ...' or 'when err(msg) => ...'", describeMatchPattern(pattern))
+		}
+	}
+	return nil
+}
+
+func isResultMatchPattern(pattern any) bool {
+	switch pattern.(type) {
+	case *ast.OkExpr, *ast.ErrExpr:
+		return true
+	default:
+		return false
+	}
+}
+
+func describeMatchPattern(pattern any) string {
+	switch pattern.(type) {
+	case *ast.IntLiteral:
+		return "int literal"
+	case *ast.FloatLiteral:
+		return "float literal"
+	case *ast.StringLiteral:
+		return "string literal"
+	case *ast.BoolLiteral:
+		return "bool literal"
+	case *ast.Identifier:
+		return "identifier pattern"
+	case *ast.BinaryOp:
+		return "range pattern"
+	default:
+		return "this pattern"
+	}
+}
+
+func matchPatternLine(pattern any) int {
+	switch node := pattern.(type) {
+	case *ast.IntLiteral:
+		return node.Line
+	case *ast.FloatLiteral:
+		return node.Line
+	case *ast.StringLiteral:
+		return node.Line
+	case *ast.BoolLiteral:
+		return node.Line
+	case *ast.Identifier:
+		return node.Line
+	case *ast.BinaryOp:
+		return node.Line
+	case *ast.OkExpr:
+		return node.Line
+	case *ast.ErrExpr:
+		return node.Line
+	default:
+		return 0
+	}
+}
+
+func (i *Interpreter) matchPatterns(subject any, patterns []any, env *Environment) (bool, map[string]any, error) {
+	for _, pattern := range patterns {
+		matched, bindings, err := i.matchSingle(subject, pattern, env)
+		if err != nil {
+			return false, nil, err
+		}
+		if matched {
+			return true, bindings, nil
+		}
+	}
+	return false, nil, nil
+}
+
+func (i *Interpreter) matchSingle(subject any, pattern any, env *Environment) (bool, map[string]any, error) {
+	switch pattern := pattern.(type) {
+	case *ast.OkExpr:
+		okValue, ok := subject.(*OkValue)
+		if !ok {
+			return false, nil, nil
+		}
+		if identifier, ok := pattern.Value.(*ast.Identifier); ok {
+			return true, map[string]any{identifier.Name: okValue.Value}, nil
+		}
+		value, err := i.evalExpr(pattern.Value, env)
+		if err != nil {
+			return false, nil, err
+		}
+		return valuesEqual(okValue.Value, value), nil, nil
+	case *ast.ErrExpr:
+		errValue, ok := subject.(*ErrValue)
+		if !ok {
+			return false, nil, nil
+		}
+		if identifier, ok := pattern.Value.(*ast.Identifier); ok {
+			return true, map[string]any{identifier.Name: errValue.Value}, nil
+		}
+		value, err := i.evalExpr(pattern.Value, env)
+		if err != nil {
+			return false, nil, err
+		}
+		return valuesEqual(errValue.Value, value), nil, nil
+	case *ast.BinaryOp:
+		if pattern.Op == "to" {
+			start, err := i.evalExpr(pattern.Left, env)
+			if err != nil {
+				return false, nil, err
+			}
+			end, err := i.evalExpr(pattern.Right, env)
+			if err != nil {
+				return false, nil, err
+			}
+			startInt, startOK := start.(int64)
+			endInt, endOK := end.(int64)
+			subjectInt, subjectOK := subject.(int64)
+			if !startOK || !endOK || !subjectOK {
+				return false, nil, runtimeErrorf(pattern.Line, "range pattern requires int values")
+			}
+			return startInt <= subjectInt && subjectInt <= endInt, nil, nil
+		}
+	}
+	value, err := i.evalExpr(pattern, env)
+	if err != nil {
+		return false, nil, err
+	}
+	return valuesEqual(subject, value), nil, nil
+}
+
+func (i *Interpreter) setupBuiltins() {
+	i.GlobalEnv.Set("write", Builtin(func(args []any) (any, error) {
+		parts := make([]string, 0, len(args))
+		for _, arg := range args {
+			parts = append(parts, formatDisplayValue(arg))
+		}
+		i.stdioMu.Lock()
+		defer i.stdioMu.Unlock()
+		if _, err := fmt.Fprintln(i.Stdout, strings.Join(parts, " ")); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}))
+	i.GlobalEnv.Set("read", Builtin(func(args []any) (any, error) {
+		if len(args) > 1 {
+			return nil, runtimeErrorf(0, "read() expects 0 or 1 arguments, got %d", len(args))
+		}
+		if len(args) == 1 {
+			prompt, ok := args[0].(string)
+			if !ok {
+				return nil, runtimeErrorf(0, "read() prompt must be string, got %s", typeNameOf(args[0]))
+			}
+			i.stdioMu.Lock()
+			if _, err := fmt.Fprint(i.Stdout, prompt); err != nil {
+				i.stdioMu.Unlock()
+				return nil, err
+			}
+		} else {
+			i.stdioMu.Lock()
+		}
+		reader := bufio.NewReader(os.Stdin)
+		line, err := reader.ReadString('\n')
+		i.stdioMu.Unlock()
+		if err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+		return strings.TrimRight(line, "\r\n"), nil
+	}))
+	i.GlobalEnv.Set("len", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "len() expects 1 argument, got %d", len(args))
+		}
+		switch value := args[0].(type) {
+		case *ListValue:
+			return int64(len(value.Items)), nil
+		case []any:
+			return int64(len(value)), nil
+		case string:
+			return int64(len(value)), nil
+		case map[any]any:
+			return int64(len(value)), nil
+		default:
+			return nil, runtimeErrorf(0, "len() requires list, string, or dict, got %s", typeNameOf(args[0]))
+		}
+	}))
+	i.GlobalEnv.Set("str", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "str() expects 1 argument, got %d", len(args))
+		}
+		return formatDisplayValue(args[0]), nil
+	}))
+	i.GlobalEnv.Set("int", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "int() expects 1 argument, got %d", len(args))
+		}
+		return toInt64(args[0], 0)
+	}))
+	i.GlobalEnv.Set("float", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "float() expects 1 argument, got %d", len(args))
+		}
+		switch value := args[0].(type) {
+		case int64:
+			return float64(value), nil
+		case float64:
+			return value, nil
+		case string:
+			parsed, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return nil, runtimeErrorf(0, "Cannot convert string to float: %q", value)
+			}
+			return parsed, nil
+		default:
+			return nil, runtimeErrorf(0, "Cannot convert %s to float", typeNameOf(args[0]))
+		}
+	}))
+	i.GlobalEnv.Set("typeof", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "typeof() expects 1 argument, got %d", len(args))
+		}
+		return typeNameOf(args[0]), nil
+	}))
+	i.GlobalEnv.Set("range", Builtin(func(args []any) (any, error) {
+		if len(args) < 2 || len(args) > 3 {
+			return nil, runtimeErrorf(0, "range() expects 2 or 3 arguments, got %d", len(args))
+		}
+		start, err := toInt64(args[0], 0)
+		if err != nil {
+			return nil, err
+		}
+		end, err := toInt64(args[1], 0)
+		if err != nil {
+			return nil, err
+		}
+		var step int64
+		if len(args) == 3 {
+			step, err = toInt64(args[2], 0)
+			if err != nil {
+				return nil, err
+			}
+			if step == 0 {
+				return nil, runtimeErrorf(0, "range() step cannot be 0")
+			}
+		} else if start <= end {
+			step = 1
+		} else {
+			step = -1
+		}
+
+		items := make([]any, 0)
+		for current := start; compareRange(current, end, step); current += step {
+			items = append(items, current)
+		}
+		return newListValue(items), nil
+	}))
+	i.GlobalEnv.Set("enumerate", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "enumerate() expects 1 argument, got %d", len(args))
+		}
+		items, err := toSlice(args[0], 0)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]any, 0, len(items))
+		for idx, item := range items {
+			result = append(result, newListValue([]any{int64(idx), item}))
+		}
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("map", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "map() expects 2 arguments, got %d", len(args))
+		}
+		items, err := toSlice(args[0], 0)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]any, 0, len(items))
+		for _, item := range items {
+			mapped, err := i.callCallable(args[1], []any{item}, 0)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, mapped)
+		}
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("filter", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "filter() expects 2 arguments, got %d", len(args))
+		}
+		items, err := toSlice(args[0], 0)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]any, 0, len(items))
+		for _, item := range items {
+			keep, err := i.callCallable(args[1], []any{item}, 0)
+			if err != nil {
+				return nil, err
+			}
+			if err := requireBool(keep, "filter() predicate", 0); err != nil {
+				return nil, err
+			}
+			if keep.(bool) {
+				result = append(result, item)
+			}
+		}
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("append", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "append() expects 2 arguments, got %d", len(args))
+		}
+		list, err := requireMutableList(args[0], 0, "append")
+		if err != nil {
+			return nil, err
+		}
+		list.Items = append(list.Items, args[1])
+		return list, nil
+	}))
+	i.GlobalEnv.Set("pop", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "pop() expects 1 argument, got %d", len(args))
+		}
+		list, err := requireMutableList(args[0], 0, "pop")
+		if err != nil {
+			return nil, err
+		}
+		if len(list.Items) == 0 {
+			return nil, runtimeErrorf(0, "pop() from empty list")
+		}
+		removed := list.Items[len(list.Items)-1]
+		list.Items[len(list.Items)-1] = nil
+		list.Items = list.Items[:len(list.Items)-1]
+		return removed, nil
+	}))
+	i.GlobalEnv.Set("concat", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "concat() expects 2 arguments, got %d", len(args))
+		}
+		left, ok := listLikeItems(args[0])
+		if !ok {
+			return nil, runtimeErrorf(0, "concat() requires list as first argument, got %s", typeNameOf(args[0]))
+		}
+		right, ok := listLikeItems(args[1])
+		if !ok {
+			return nil, runtimeErrorf(0, "concat() requires list as second argument, got %s", typeNameOf(args[1]))
+		}
+		result := append([]any{}, left...)
+		result = append(result, right...)
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("removeat", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "removeat() expects 2 arguments, got %d", len(args))
+		}
+		list, err := requireMutableList(args[0], 0, "removeat")
+		if err != nil {
+			return nil, err
+		}
+		index, err := toInt64(args[1], 0)
+		if err != nil {
+			return nil, err
+		}
+		if index < 0 || index >= int64(len(list.Items)) {
+			return nil, runtimeErrorf(0, "removeat() index out of range: %d", index)
+		}
+		removed := list.Items[index]
+		copy(list.Items[index:], list.Items[index+1:])
+		list.Items[len(list.Items)-1] = nil
+		list.Items = list.Items[:len(list.Items)-1]
+		return removed, nil
+	}))
+	i.GlobalEnv.Set("insert", Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "insert() expects 3 arguments, got %d", len(args))
+		}
+		list, err := requireMutableList(args[0], 0, "insert")
+		if err != nil {
+			return nil, err
+		}
+		index, err := toInt64(args[1], 0)
+		if err != nil {
+			return nil, err
+		}
+		if index < 0 || index > int64(len(list.Items)) {
+			return nil, runtimeErrorf(0, "insert() index out of range: %d", index)
+		}
+		list.Items = append(list.Items, nil)
+		copy(list.Items[index+1:], list.Items[index:])
+		list.Items[index] = args[2]
+		return list, nil
+	}))
+	i.GlobalEnv.Set("asc", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "asc() expects 2 arguments, got %d", len(args))
+		}
+		return compareValues("<", args[0], args[1], 0)
+	}))
+	i.GlobalEnv.Set("desc", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "desc() expects 2 arguments, got %d", len(args))
+		}
+		return compareValues(">", args[0], args[1], 0)
+	}))
+	i.GlobalEnv.Set("reversed", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "reversed() expects 1 argument, got %d", len(args))
+		}
+		items, ok := listLikeItems(args[0])
+		if !ok {
+			return nil, runtimeErrorf(0, "reversed() requires list, got %s", typeNameOf(args[0]))
+		}
+		result := make([]any, 0, len(items))
+		for idx := len(items) - 1; idx >= 0; idx-- {
+			result = append(result, items[idx])
+		}
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("sort", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "sort() expects 2 arguments, got %d", len(args))
+		}
+		items, ok := listLikeItems(args[0])
+		if !ok {
+			return nil, runtimeErrorf(0, "sort() requires list, got %s", typeNameOf(args[0]))
+		}
+		result := append([]any{}, items...)
+		for leftIdx := 0; leftIdx < len(result); leftIdx++ {
+			for rightIdx := leftIdx + 1; rightIdx < len(result); rightIdx++ {
+				less, err := i.callCallable(args[1], []any{result[rightIdx], result[leftIdx]}, 0)
+				if err != nil {
+					return nil, err
+				}
+				if err := requireBool(less, "sort() comparator", 0); err != nil {
+					return nil, err
+				}
+				if less.(bool) {
+					result[leftIdx], result[rightIdx] = result[rightIdx], result[leftIdx]
+				}
+			}
+		}
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("split", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "split() expects 2 arguments, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "split() requires string input, got %s", typeNameOf(args[0]))
+		}
+		sep, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "split() separator must be string, got %s", typeNameOf(args[1]))
+		}
+		parts := make([]any, 0)
+		if sep == "" {
+			for _, ch := range value {
+				parts = append(parts, string(ch))
+			}
+			return newListValue(parts), nil
+		}
+		for _, part := range strings.Split(value, sep) {
+			parts = append(parts, part)
+		}
+		return newListValue(parts), nil
+	}))
+	i.GlobalEnv.Set("join", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "join() expects 2 arguments, got %d", len(args))
+		}
+		items, err := toSlice(args[0], 0)
+		if err != nil {
+			return nil, err
+		}
+		sep, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "join() separator must be string, got %s", typeNameOf(args[1]))
+		}
+		parts := make([]string, 0, len(items))
+		for _, item := range items {
+			parts = append(parts, formatDisplayValue(item))
+		}
+		return strings.Join(parts, sep), nil
+	}))
+	i.GlobalEnv.Set("substring", Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "substring() expects 3 arguments, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "substring() requires string input, got %s", typeNameOf(args[0]))
+		}
+		start, err := toInt64(args[1], 0)
+		if err != nil {
+			return nil, err
+		}
+		end, err := toInt64(args[2], 0)
+		if err != nil {
+			return nil, err
+		}
+		if start < 0 || end < start || end >= int64(len(value)) {
+			return nil, runtimeErrorf(0, "substring() bounds out of range")
+		}
+		return value[start : end+1], nil
+	}))
+	i.GlobalEnv.Set("startswith", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "startswith() expects 2 arguments, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "startswith() requires string input, got %s", typeNameOf(args[0]))
+		}
+		prefix, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "startswith() prefix must be string, got %s", typeNameOf(args[1]))
+		}
+		return strings.HasPrefix(value, prefix), nil
+	}))
+	i.GlobalEnv.Set("endswith", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "endswith() expects 2 arguments, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "endswith() requires string input, got %s", typeNameOf(args[0]))
+		}
+		suffix, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "endswith() suffix must be string, got %s", typeNameOf(args[1]))
+		}
+		return strings.HasSuffix(value, suffix), nil
+	}))
+	i.GlobalEnv.Set("contains", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "contains() expects 2 arguments, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "contains() requires string input, got %s", typeNameOf(args[0]))
+		}
+		substr, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "contains() requires string substring, got %s", typeNameOf(args[1]))
+		}
+		return strings.Contains(value, substr), nil
+	}))
+	i.GlobalEnv.Set("trim", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "trim() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "trim() requires string input, got %s", typeNameOf(args[0]))
+		}
+		return strings.TrimSpace(value), nil
+	}))
+	i.GlobalEnv.Set("replace", Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "replace() expects 3 arguments, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "replace() requires string input, got %s", typeNameOf(args[0]))
+		}
+		oldValue, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "replace() old must be string, got %s", typeNameOf(args[1]))
+		}
+		newValue, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "replace() new must be string, got %s", typeNameOf(args[2]))
+		}
+		return strings.ReplaceAll(value, oldValue, newValue), nil
+	}))
+	i.GlobalEnv.Set("abs", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "abs() expects 1 argument, got %d", len(args))
+		}
+		switch value := args[0].(type) {
+		case int64:
+			if value < 0 {
+				return -value, nil
+			}
+			return value, nil
+		case float64:
+			return math.Abs(value), nil
+		default:
+			return nil, runtimeErrorf(0, "abs() requires int or float, got %s", typeNameOf(args[0]))
+		}
+	}))
+	i.GlobalEnv.Set("min", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "min() expects 2 arguments, got %d", len(args))
+		}
+		less, err := compareValues("<", args[0], args[1], 0)
+		if err != nil {
+			return nil, err
+		}
+		if less {
+			return args[0], nil
+		}
+		return args[1], nil
+	}))
+	i.GlobalEnv.Set("max", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "max() expects 2 arguments, got %d", len(args))
+		}
+		greater, err := compareValues(">", args[0], args[1], 0)
+		if err != nil {
+			return nil, err
+		}
+		if greater {
+			return args[0], nil
+		}
+		return args[1], nil
+	}))
+	i.GlobalEnv.Set("sqrt", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "sqrt() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(float64)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqrt() requires float, got %s", typeNameOf(args[0]))
+		}
+		return math.Sqrt(value), nil
+	}))
+	i.GlobalEnv.Set("floor", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "floor() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(float64)
+		if !ok {
+			return nil, runtimeErrorf(0, "floor() requires float, got %s", typeNameOf(args[0]))
+		}
+		return math.Floor(value), nil
+	}))
+	i.GlobalEnv.Set("ceil", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "ceil() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(float64)
+		if !ok {
+			return nil, runtimeErrorf(0, "ceil() requires float, got %s", typeNameOf(args[0]))
+		}
+		return math.Ceil(value), nil
+	}))
+	i.GlobalEnv.Set("haskey", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "haskey() expects 2 arguments, got %d", len(args))
+		}
+		dict, ok := args[0].(map[any]any)
+		if !ok {
+			return nil, runtimeErrorf(0, "haskey() requires dict, got %s", typeNameOf(args[0]))
+		}
+		_, exists := dict[args[1]]
+		return exists, nil
+	}))
+	i.GlobalEnv.Set("get", Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "get() expects 3 arguments, got %d", len(args))
+		}
+		dict, ok := args[0].(map[any]any)
+		if !ok {
+			return nil, runtimeErrorf(0, "get() requires dict, got %s", typeNameOf(args[0]))
+		}
+		if value, ok := dict[args[1]]; ok {
+			return value, nil
+		}
+		return args[2], nil
+	}))
+	i.GlobalEnv.Set("keys", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "keys() expects 1 argument, got %d", len(args))
+		}
+		dict, ok := args[0].(map[any]any)
+		if !ok {
+			return nil, runtimeErrorf(0, "keys() requires dict, got %s", typeNameOf(args[0]))
+		}
+		result := make([]any, 0, len(dict))
+		for key := range dict {
+			result = append(result, key)
+		}
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("values", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "values() expects 1 argument, got %d", len(args))
+		}
+		dict, ok := args[0].(map[any]any)
+		if !ok {
+			return nil, runtimeErrorf(0, "values() requires dict, got %s", typeNameOf(args[0]))
+		}
+		result := make([]any, 0, len(dict))
+		for _, value := range dict {
+			result = append(result, value)
+		}
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("items", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "items() expects 1 argument, got %d", len(args))
+		}
+		dict, ok := args[0].(map[any]any)
+		if !ok {
+			return nil, runtimeErrorf(0, "items() requires dict, got %s", typeNameOf(args[0]))
+		}
+		result := make([]any, 0, len(dict))
+		for key, value := range dict {
+			result = append(result, newListValue([]any{key, value}))
+		}
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("readfile", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "readfile() expects 1 argument, got %d", len(args))
+		}
+		path, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "readfile() requires string path, got %s", typeNameOf(args[0]))
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: string(data)}, nil
+	}))
+	i.GlobalEnv.Set("readdir", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "readdir() expects 1 argument, got %d", len(args))
+		}
+		path, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "readdir() requires string path, got %s", typeNameOf(args[0]))
+		}
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		result := make([]any, 0, len(entries))
+		for _, entry := range entries {
+			result = append(result, entry.Name())
+		}
+		return &OkValue{Value: newListValue(result)}, nil
+	}))
+	i.GlobalEnv.Set("writefile", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "writefile() expects 2 arguments, got %d", len(args))
+		}
+		path, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "writefile() requires string path, got %s", typeNameOf(args[0]))
+		}
+		content, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "writefile() requires string content, got %s", typeNameOf(args[1]))
+		}
+		data := []byte(content)
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: int64(len(data))}, nil
+	}))
+	i.GlobalEnv.Set("appendfile", Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "appendfile() expects 2 arguments, got %d", len(args))
+		}
+		path, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "appendfile() requires string path, got %s", typeNameOf(args[0]))
+		}
+		content, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "appendfile() requires string content, got %s", typeNameOf(args[1]))
+		}
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		defer file.Close()
+		written, err := file.WriteString(content)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: int64(written)}, nil
+	}))
+	i.GlobalEnv.Set("args", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "args() expects 0 arguments, got %d", len(args))
+		}
+		result := make([]any, 0, len(i.ProgramArgs))
+		for _, arg := range i.ProgramArgs {
+			result = append(result, arg)
+		}
+		return newListValue(result), nil
+	}))
+	i.GlobalEnv.Set("cwd", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "cwd() expects 0 arguments, got %d", len(args))
+		}
+		wd, err := os.Getwd()
+		if err != nil {
+			return nil, err
+		}
+		return wd, nil
+	}))
+	i.GlobalEnv.Set("getenv", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "getenv() expects 1 argument, got %d", len(args))
+		}
+		name, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "getenv() requires string name, got %s", typeNameOf(args[0]))
+		}
+		value, exists := os.LookupEnv(name)
+		if !exists {
+			return &ErrValue{Value: fmt.Sprintf("environment variable not found: %s", name)}, nil
+		}
+		return &OkValue{Value: value}, nil
+	}))
+	i.GlobalEnv.Set("sleep", Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "sleep() expects 1 argument, got %d", len(args))
+		}
+		ms, err := toInt64(args[0], 0)
+		if err != nil {
+			return nil, err
+		}
+		if ms < 0 {
+			return nil, runtimeErrorf(0, "sleep() duration must be >= 0")
+		}
+		time.Sleep(time.Duration(ms) * time.Millisecond)
+		return nil, nil
+	}))
+	i.GlobalEnv.Set("nowunix", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "nowunix() expects 0 arguments, got %d", len(args))
+		}
+		return time.Now().Unix(), nil
+	}))
+	i.GlobalEnv.Set("nowunixms", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "nowunixms() expects 0 arguments, got %d", len(args))
+		}
+		return time.Now().UnixMilli(), nil
+	}))
+	i.GlobalEnv.Set("nowrfc3339", Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "nowrfc3339() expects 0 arguments, got %d", len(args))
+		}
+		return time.Now().Format(time.RFC3339), nil
+	}))
+}
+
+func (i *Interpreter) setupStdlibModules() {
+	for moduleName, names := range officialStdlibModules {
+		moduleEnv := i.ensureStdlibModule(moduleName)
+		for _, name := range names {
+			value, err := i.GlobalEnv.Get(name)
+			if err != nil {
+				continue
+			}
+			moduleEnv.Set(name, value)
+		}
+	}
+	i.addStdlibModuleBuiltin("http", "get", i.httpGetBuiltin())
+	i.addStdlibModuleBuiltin("http", "request", i.httpRequestBuiltin())
+	i.addStdlibModuleBuiltin("http", "listen", i.httpListenBuiltin())
+	i.addStdlibModuleBuiltin("http", "addr", i.httpAddrBuiltin())
+	i.addStdlibModuleBuiltin("http", "wait", i.httpWaitBuiltin())
+	i.addStdlibModuleBuiltin("http", "close", i.httpCloseBuiltin())
+	i.addStdlibModuleBuiltin("http", "method", i.httpMethodBuiltin())
+	i.addStdlibModuleBuiltin("http", "path", i.httpPathBuiltin())
+	i.addStdlibModuleBuiltin("http", "requestbody", i.httpRequestBodyBuiltin())
+	i.addStdlibModuleBuiltin("http", "requestheader", i.httpRequestHeaderBuiltin())
+	i.addStdlibModuleBuiltin("http", "requestcookie", i.httpRequestCookieBuiltin())
+	i.addStdlibModuleBuiltin("http", "status", i.httpStatusBuiltin())
+	i.addStdlibModuleBuiltin("http", "responsebody", i.httpResponseBodyBuiltin())
+	i.addStdlibModuleBuiltin("http", "responseheader", i.httpResponseHeaderBuiltin())
+	i.addStdlibModuleBuiltin("http", "query", i.httpQueryBuiltin())
+	i.addStdlibModuleBuiltin("http", "route", i.httpRouteBuiltin())
+	i.addStdlibModuleBuiltin("http", "text", i.httpTextBuiltin())
+	i.addStdlibModuleBuiltin("http", "html", i.httpHTMLBuiltin())
+	i.addStdlibModuleBuiltin("http", "json", i.httpJSONBuiltin())
+	i.addStdlibModuleBuiltin("http", "redirect", i.httpRedirectBuiltin())
+	i.addStdlibModuleBuiltin("http", "withheader", i.httpWithHeaderBuiltin())
+	i.addStdlibModuleBuiltin("http", "withcookie", i.httpWithCookieBuiltin())
+	i.addStdlibModuleBuiltin("http", "static", i.httpStaticBuiltin())
+	i.addStdlibModuleBuiltin("json", "parseobject", i.jsonParseObjectBuiltin())
+	i.addStdlibModuleBuiltin("json", "parsearray", i.jsonParseArrayBuiltin())
+	i.addStdlibModuleBuiltin("json", "stringify", i.jsonStringifyBuiltin())
+	i.addStdlibModuleBuiltin("json", "objectof", i.jsonObjectBuiltin())
+	i.addStdlibModuleBuiltin("json", "arrayof", i.jsonArrayBuiltin())
+	i.addStdlibModuleBuiltin("json", "null", i.jsonNullBuiltin())
+	i.addStdlibModuleBuiltin("json", "isnull", i.jsonIsNullBuiltin())
+	i.addStdlibModuleBuiltin("state", "cell", i.stateCellBuiltin())
+	i.addStdlibModuleBuiltin("state", "get", i.stateGetBuiltin())
+	i.addStdlibModuleBuiltin("state", "set", i.stateSetBuiltin())
+	i.addStdlibModuleBuiltin("state", "update", i.stateUpdateBuiltin())
+	i.addStdlibModuleBuiltin("sqlite", "open", i.sqliteOpenBuiltin())
+	i.addStdlibModuleBuiltin("sqlite", "close", i.sqliteCloseBuiltin())
+	i.addStdlibModuleBuiltin("sqlite", "exec", i.sqliteExecBuiltin())
+	i.addStdlibModuleBuiltin("sqlite", "query", i.sqliteQueryBuiltin())
+	i.addStdlibModuleBuiltin("path", "basename", i.pathBasenameBuiltin())
+	i.addStdlibModuleBuiltin("path", "dirname", i.pathDirnameBuiltin())
+	i.addStdlibModuleBuiltin("path", "joinpath", i.pathJoinBuiltin())
+}
+
+func (i *Interpreter) hideModuleOnlyBuiltins() {
+	for name := range moduleOnlyBuiltins {
+		delete(i.GlobalEnv.vars, name)
+	}
+}
+
+func (i *Interpreter) ensureStdlibModule(name string) *Environment {
+	if moduleEnv, ok := i.Modules[name]; ok {
+		return moduleEnv
+	}
+	moduleEnv := NewEnvironment(nil)
+	i.Modules[name] = moduleEnv
+	return moduleEnv
+}
+
+func (i *Interpreter) addStdlibModuleBuiltin(moduleName, exportName string, builtin Builtin) {
+	i.ensureStdlibModule(moduleName).Set(exportName, builtin)
+}
+
+func (i *Interpreter) httpGetBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 && len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.get() expects 1 or 2 arguments, got %d", len(args))
+		}
+
+		url, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.get() requires string url, got %s", typeNameOf(args[0]))
+		}
+
+		timeoutMS := int64(5000)
+		if len(args) == 2 {
+			value, ok := args[1].(int64)
+			if !ok {
+				return nil, runtimeErrorf(0, "http.get() requires int timeoutms, got %s", typeNameOf(args[1]))
+			}
+			if value < 0 {
+				return nil, runtimeErrorf(0, "http.get() timeoutms must be >= 0")
+			}
+			timeoutMS = value
+		}
+		return performHTTPRequest("http.get()", "GET", url, "", map[string]string{}, timeoutMS)
+	})
+}
+
+func (i *Interpreter) httpRequestBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 4 && len(args) != 5 {
+			return nil, runtimeErrorf(0, "http.request() expects 4 or 5 arguments, got %d", len(args))
+		}
+		method, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.request() requires string method, got %s", typeNameOf(args[0]))
+		}
+		url, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.request() requires string url, got %s", typeNameOf(args[1]))
+		}
+		body, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.request() requires string body, got %s", typeNameOf(args[2]))
+		}
+		headers, err := convertHTTPHeaderDict("http.request()", args[3])
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		timeoutMS := int64(5000)
+		if len(args) == 5 {
+			value, ok := args[4].(int64)
+			if !ok {
+				return nil, runtimeErrorf(0, "http.request() requires int timeoutms, got %s", typeNameOf(args[4]))
+			}
+			if value < 0 {
+				return nil, runtimeErrorf(0, "http.request() timeoutms must be >= 0")
+			}
+			timeoutMS = value
+		}
+		return performHTTPRequest("http.request()", method, url, body, headers, timeoutMS)
+	})
+}
+
+func (i *Interpreter) httpStatusBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.status() expects 1 argument, got %d", len(args))
+		}
+		response, ok := args[0].(*HTTPResponseValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.status() requires HttpResponse, got %s", typeNameOf(args[0]))
+		}
+		return response.Status, nil
+	})
+}
+
+func (i *Interpreter) httpListenBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.listen() expects 2 arguments, got %d", len(args))
+		}
+
+		addr, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.listen() requires string addr, got %s", typeNameOf(args[0]))
+		}
+
+		handler := args[1]
+		switch handler.(type) {
+		case Builtin, *Function, *Lambda, *BoundMethod:
+		default:
+			return nil, runtimeErrorf(0, "http.listen() requires callable handler, got %s", typeNameOf(args[1]))
+		}
+
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+
+		serverValue := &HTTPServerValue{
+			Addr:  listener.Addr().String(),
+			ErrCh: make(chan error, 1),
+		}
+		server := &http.Server{
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				reply, err := i.invokeHTTPHandler(handler, r)
+				if err != nil {
+					reply, _ = makeHTTPReplyValue("http.listen()", 500, "text/plain; charset=utf-8", err.Error())
+				}
+				if writeErr := writeHTTPReply(w, reply); writeErr != nil {
+					http.Error(w, writeErr.Error(), http.StatusInternalServerError)
+				}
+			}),
+		}
+		serverValue.Server = server
+
+		go func() {
+			err := server.Serve(listener)
+			if errors.Is(err, http.ErrServerClosed) {
+				err = nil
+			}
+			serverValue.ErrCh <- err
+			close(serverValue.ErrCh)
+		}()
+
+		return &OkValue{Value: serverValue}, nil
+	})
+}
+
+func (i *Interpreter) httpAddrBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.addr() expects 1 argument, got %d", len(args))
+		}
+		server, ok := args[0].(*HTTPServerValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.addr() requires HttpServer, got %s", typeNameOf(args[0]))
+		}
+		return server.Addr, nil
+	})
+}
+
+func (i *Interpreter) httpWaitBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.wait() expects 1 argument, got %d", len(args))
+		}
+		server, ok := args[0].(*HTTPServerValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.wait() requires HttpServer, got %s", typeNameOf(args[0]))
+		}
+		err, ok := <-server.ErrCh
+		if !ok || err == nil {
+			return &OkValue{Value: int64(0)}, nil
+		}
+		return &ErrValue{Value: err.Error()}, nil
+	})
+}
+
+func (i *Interpreter) httpCloseBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.close() expects 1 argument, got %d", len(args))
+		}
+		server, ok := args[0].(*HTTPServerValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.close() requires HttpServer, got %s", typeNameOf(args[0]))
+		}
+		if err := server.Server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: int64(0)}, nil
+	})
+}
+
+func (i *Interpreter) httpMethodBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.method() expects 1 argument, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.method() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		return request.Method, nil
+	})
+}
+
+func (i *Interpreter) httpPathBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.path() expects 1 argument, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.path() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		return request.Path, nil
+	})
+}
+
+func (i *Interpreter) httpRequestBodyBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.requestbody() expects 1 argument, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestbody() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		return request.Body, nil
+	})
+}
+
+func (i *Interpreter) httpRequestHeaderBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.requestheader() expects 3 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestheader() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		key, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestheader() requires string key, got %s", typeNameOf(args[1]))
+		}
+		fallback, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestheader() requires string fallback, got %s", typeNameOf(args[2]))
+		}
+		value, err := lookupHTTPHeader(request.Headers, key, fallback)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return value, nil
+	})
+}
+
+func (i *Interpreter) httpRequestCookieBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.requestcookie() expects 3 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestcookie() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		name, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestcookie() requires string name, got %s", typeNameOf(args[1]))
+		}
+		fallback, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.requestcookie() requires string fallback, got %s", typeNameOf(args[2]))
+		}
+		value, err := lookupHTTPCookie(request.Cookies, name, fallback)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return value, nil
+	})
+}
+
+func (i *Interpreter) httpResponseBodyBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "http.responsebody() expects 1 argument, got %d", len(args))
+		}
+		response, ok := args[0].(*HTTPResponseValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.responsebody() requires HttpResponse, got %s", typeNameOf(args[0]))
+		}
+		return response.Body, nil
+	})
+}
+
+func (i *Interpreter) httpResponseHeaderBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.responseheader() expects 3 arguments, got %d", len(args))
+		}
+		response, ok := args[0].(*HTTPResponseValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.responseheader() requires HttpResponse, got %s", typeNameOf(args[0]))
+		}
+		key, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.responseheader() requires string key, got %s", typeNameOf(args[1]))
+		}
+		fallback, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.responseheader() requires string fallback, got %s", typeNameOf(args[2]))
+		}
+		value, err := lookupHTTPHeader(response.Headers, key, fallback)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return value, nil
+	})
+}
+
+func (i *Interpreter) httpQueryBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.query() expects 3 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.query() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		key, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.query() requires string key, got %s", typeNameOf(args[1]))
+		}
+		fallback, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.query() requires string fallback, got %s", typeNameOf(args[2]))
+		}
+		if value, ok := request.Query[key]; ok {
+			return value, nil
+		}
+		return fallback, nil
+	})
+}
+
+func (i *Interpreter) httpRouteBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.route() expects 2 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.route() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		pattern, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.route() requires string pattern, got %s", typeNameOf(args[1]))
+		}
+		matched, params := routeRequestPath(request.Path, pattern)
+		return []any{matched, params}, nil
+	})
+}
+
+func (i *Interpreter) httpTextBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.text() expects 2 arguments, got %d", len(args))
+		}
+		status, ok := args[0].(int64)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.text() requires int status, got %s", typeNameOf(args[0]))
+		}
+		body, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.text() requires string body, got %s", typeNameOf(args[1]))
+		}
+		reply, err := makeHTTPReplyValue("http.text()", status, "text/plain; charset=utf-8", body)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return reply, nil
+	})
+}
+
+func (i *Interpreter) httpHTMLBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.html() expects 2 arguments, got %d", len(args))
+		}
+		status, ok := args[0].(int64)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.html() requires int status, got %s", typeNameOf(args[0]))
+		}
+		body, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.html() requires string body, got %s", typeNameOf(args[1]))
+		}
+		reply, err := makeHTTPReplyValue("http.html()", status, "text/html; charset=utf-8", body)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return reply, nil
+	})
+}
+
+func (i *Interpreter) httpJSONBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.json() expects 2 arguments, got %d", len(args))
+		}
+		status, ok := args[0].(int64)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.json() requires int status, got %s", typeNameOf(args[0]))
+		}
+		reply, err := makeJSONHTTPReply(status, args[1])
+		if err != nil {
+			if strings.HasPrefix(err.Error(), "http.json() status must") {
+				return nil, runtimeErrorf(0, "%s", err.Error())
+			}
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: reply}, nil
+	})
+}
+
+func (i *Interpreter) httpRedirectBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "http.redirect() expects 2 arguments, got %d", len(args))
+		}
+		status, ok := args[0].(int64)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.redirect() requires int status, got %s", typeNameOf(args[0]))
+		}
+		if status < 300 || status > 399 {
+			return nil, runtimeErrorf(0, "http.redirect() status must be between 300 and 399")
+		}
+		location, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.redirect() requires string location, got %s", typeNameOf(args[1]))
+		}
+		reply, err := makeHTTPReplyValue("http.redirect()", status, "", "")
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		if err := setHTTPReplyHeader(reply, "Location", location); err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return reply, nil
+	})
+}
+
+func (i *Interpreter) httpWithHeaderBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.withheader() expects 3 arguments, got %d", len(args))
+		}
+		reply, ok := args[0].(*HTTPReplyValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withheader() requires HttpReply, got %s", typeNameOf(args[0]))
+		}
+		key, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withheader() requires string key, got %s", typeNameOf(args[1]))
+		}
+		value, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withheader() requires string value, got %s", typeNameOf(args[2]))
+		}
+		cloned := cloneHTTPReplyValue(reply)
+		if err := setHTTPReplyHeader(cloned, key, value); err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) httpWithCookieBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.withcookie() expects 3 arguments, got %d", len(args))
+		}
+		reply, ok := args[0].(*HTTPReplyValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withcookie() requires HttpReply, got %s", typeNameOf(args[0]))
+		}
+		name, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withcookie() requires string name, got %s", typeNameOf(args[1]))
+		}
+		value, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.withcookie() requires string value, got %s", typeNameOf(args[2]))
+		}
+		cloned := cloneHTTPReplyValue(reply)
+		if err := appendHTTPReplyCookie(cloned, name, value); err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) httpStaticBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 3 {
+			return nil, runtimeErrorf(0, "http.static() expects 3 arguments, got %d", len(args))
+		}
+		request, ok := args[0].(*HTTPRequestValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.static() requires HttpRequest, got %s", typeNameOf(args[0]))
+		}
+		prefix, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.static() requires string prefix, got %s", typeNameOf(args[1]))
+		}
+		root, ok := args[2].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "http.static() requires string root, got %s", typeNameOf(args[2]))
+		}
+		if !matchesHTTPPathPrefix(request.Path, prefix) {
+			return []any{false, &ErrValue{Value: fmt.Sprintf("path %q is not under prefix %q", request.Path, prefix)}}, nil
+		}
+		reply, err := loadStaticHTTPReply(request.Path, prefix, root)
+		if err != nil {
+			return []any{true, &ErrValue{Value: err.Error()}}, nil
+		}
+		return []any{true, &OkValue{Value: reply}}, nil
+	})
+}
+
+func (i *Interpreter) invokeHTTPHandler(handler any, request *http.Request) (*HTTPReplyValue, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read request body: %w", err)
+	}
+	query := map[string]string{}
+	for key, values := range request.URL.Query() {
+		if len(values) > 0 {
+			query[key] = values[0]
+		}
+	}
+	cookies := map[string]string{}
+	for _, cookie := range request.Cookies() {
+		cookies[cookie.Name] = cookie.Value
+	}
+	gwenRequest := &HTTPRequestValue{
+		Method:  request.Method,
+		Path:    request.URL.Path,
+		Body:    string(body),
+		Query:   query,
+		Headers: copyHTTPHeaders(request.Header),
+		Cookies: cookies,
+	}
+
+	taskInterp, _, clonedHandler := i.forkValueForParallel(i.GlobalEnv, handler)
+	if clonedHandler == nil {
+		clonedHandler = handler
+	}
+	value, err := taskInterp.callCallable(clonedHandler, []any{gwenRequest}, 0)
+	if err != nil {
+		return nil, err
+	}
+	return normalizeHTTPHandlerReply(value)
+}
+
+func normalizeHTTPHandlerReply(value any) (*HTTPReplyValue, error) {
+	switch value := value.(type) {
+	case *HTTPReplyValue:
+		return value, nil
+	case *OkValue:
+		reply, ok := value.Value.(*HTTPReplyValue)
+		if !ok {
+			return nil, fmt.Errorf("http.listen() handler ok(...) must wrap HttpReply, got %s", typeNameOf(value.Value))
+		}
+		return reply, nil
+	case *ErrValue:
+		return makeHTTPReplyValue("http.listen()", 500, "text/plain; charset=utf-8", formatDisplayValue(value.Value))
+	case nil:
+		return nil, fmt.Errorf("http.listen() handler returned nil; expected HttpReply or result[HttpReply]")
+	default:
+		return nil, fmt.Errorf("http.listen() handler must return HttpReply or result[HttpReply], got %s", typeNameOf(value))
+	}
+}
+
+func makeHTTPReplyValue(label string, status int64, contentType string, body string) (*HTTPReplyValue, error) {
+	if status < 100 || status > 999 {
+		return nil, fmt.Errorf("%s status must be between 100 and 999", label)
+	}
+	return &HTTPReplyValue{
+		Status:      status,
+		ContentType: contentType,
+		Body:        body,
+		Headers:     map[string][]string{},
+	}, nil
+}
+
+func makeJSONHTTPReply(status int64, value any) (*HTTPReplyValue, error) {
+	encoded, err := encodeJSONValue(value)
+	if err != nil {
+		return nil, err
+	}
+	data, err := stdjson.Marshal(encoded)
+	if err != nil {
+		return nil, err
+	}
+	return makeHTTPReplyValue("http.json()", status, "application/json; charset=utf-8", string(data))
+}
+
+func performHTTPRequest(label string, method string, url string, body string, headers map[string]string, timeoutMS int64) (any, error) {
+	method = strings.TrimSpace(method)
+	if method == "" {
+		return nil, runtimeErrorf(0, "%s method must not be empty", label)
+	}
+	client := &http.Client{Timeout: time.Duration(timeoutMS) * time.Millisecond}
+	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		return &ErrValue{Value: err.Error()}, nil
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return &ErrValue{Value: err.Error()}, nil
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &ErrValue{Value: err.Error()}, nil
+	}
+
+	return &OkValue{Value: &HTTPResponseValue{
+		Status:  int64(resp.StatusCode),
+		Body:    string(data),
+		Headers: copyHTTPHeaders(resp.Header),
+	}}, nil
+}
+
+func writeHTTPReply(writer http.ResponseWriter, reply *HTTPReplyValue) error {
+	if reply == nil {
+		return fmt.Errorf("http.listen() cannot write nil HttpReply")
+	}
+	for key, values := range reply.Headers {
+		for _, value := range values {
+			writer.Header().Add(key, value)
+		}
+	}
+	if reply.ContentType != "" {
+		writer.Header().Set("Content-Type", reply.ContentType)
+	}
+	writer.WriteHeader(int(reply.Status))
+	_, err := io.WriteString(writer, reply.Body)
+	return err
+}
+
+func copyHTTPHeaders(headers http.Header) map[string][]string {
+	copied := map[string][]string{}
+	for key, values := range headers {
+		if len(values) == 0 {
+			continue
+		}
+		canonical := textproto.CanonicalMIMEHeaderKey(key)
+		cloned := make([]string, 0, len(values))
+		cloned = append(cloned, values...)
+		copied[canonical] = cloned
+	}
+	return copied
+}
+
+func canonicalHTTPHeaderKey(key string) string {
+	return textproto.CanonicalMIMEHeaderKey(strings.TrimSpace(key))
+}
+
+func convertHTTPHeaderDict(label string, value any) (map[string]string, error) {
+	if value == nil {
+		return nil, fmt.Errorf("%s requires dict[string, string] headers, got nil", label)
+	}
+	headers, ok := value.(map[any]any)
+	if !ok {
+		return nil, fmt.Errorf("%s requires dict[string, string] headers, got %s", label, typeNameOf(value))
+	}
+	converted := map[string]string{}
+	for rawKey, rawValue := range headers {
+		key, ok := rawKey.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s header key must be string, got %s", label, typeNameOf(rawKey))
+		}
+		headerValue, ok := rawValue.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s header '%s' must be string, got %s", label, key, typeNameOf(rawValue))
+		}
+		canonical := canonicalHTTPHeaderKey(key)
+		if canonical == "" {
+			return nil, fmt.Errorf("%s header key must not be empty", label)
+		}
+		converted[canonical] = headerValue
+	}
+	return converted, nil
+}
+
+func lookupHTTPHeader(headers map[string][]string, key string, fallback string) (string, error) {
+	canonical := canonicalHTTPHeaderKey(key)
+	if canonical == "" {
+		return "", fmt.Errorf("http header key must not be empty")
+	}
+	if values, ok := headers[canonical]; ok && len(values) > 0 {
+		return values[0], nil
+	}
+	return fallback, nil
+}
+
+func lookupHTTPCookie(cookies map[string]string, name string, fallback string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("http cookie name must not be empty")
+	}
+	if value, ok := cookies[name]; ok {
+		return value, nil
+	}
+	return fallback, nil
+}
+
+func cloneHTTPReplyValue(reply *HTTPReplyValue) *HTTPReplyValue {
+	if reply == nil {
+		return nil
+	}
+	cloned := &HTTPReplyValue{
+		Status:      reply.Status,
+		ContentType: reply.ContentType,
+		Body:        reply.Body,
+		Headers:     map[string][]string{},
+	}
+	for key, values := range reply.Headers {
+		cloned.Headers[key] = append([]string{}, values...)
+	}
+	return cloned
+}
+
+func setHTTPReplyHeader(reply *HTTPReplyValue, key string, value string) error {
+	canonical := canonicalHTTPHeaderKey(key)
+	if canonical == "" {
+		return fmt.Errorf("http header key must not be empty")
+	}
+	if canonical == "Content-Type" {
+		delete(reply.Headers, canonical)
+		reply.ContentType = value
+		return nil
+	}
+	if reply.Headers == nil {
+		reply.Headers = map[string][]string{}
+	}
+	reply.Headers[canonical] = []string{value}
+	return nil
+}
+
+func appendHTTPReplyHeader(reply *HTTPReplyValue, key string, value string) error {
+	canonical := canonicalHTTPHeaderKey(key)
+	if canonical == "" {
+		return fmt.Errorf("http header key must not be empty")
+	}
+	if canonical == "Content-Type" {
+		delete(reply.Headers, canonical)
+		reply.ContentType = value
+		return nil
+	}
+	if reply.Headers == nil {
+		reply.Headers = map[string][]string{}
+	}
+	reply.Headers[canonical] = append(reply.Headers[canonical], value)
+	return nil
+}
+
+func appendHTTPReplyCookie(reply *HTTPReplyValue, name string, value string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("http cookie name must not be empty")
+	}
+	encoded := (&http.Cookie{Name: name, Value: value, Path: "/"}).String()
+	if encoded == "" {
+		return fmt.Errorf("http.withcookie() could not encode cookie %q", name)
+	}
+	return appendHTTPReplyHeader(reply, "Set-Cookie", encoded)
+}
+
+func responseHeaderValues(reply *HTTPReplyValue, key string) []string {
+	if reply == nil {
+		return nil
+	}
+	canonical := canonicalHTTPHeaderKey(key)
+	if canonical == "" {
+		return nil
+	}
+	if canonical == "Content-Type" && reply.ContentType != "" {
+		return []string{reply.ContentType}
+	}
+	return reply.Headers[canonical]
+}
+
+func responseHasHeaderValue(reply *HTTPReplyValue, key string, value string) bool {
+	for _, current := range responseHeaderValues(reply, key) {
+		if current == value {
+			return true
+		}
+	}
+	return false
+}
+
+func routeRequestPath(requestPath string, pattern string) (bool, map[any]any) {
+	pathSegments := splitRouteSegments(requestPath)
+	patternSegments := splitRouteSegments(pattern)
+	if len(pathSegments) != len(patternSegments) {
+		return false, map[any]any{}
+	}
+
+	params := map[any]any{}
+	for idx, current := range patternSegments {
+		if strings.HasPrefix(current, ":") && len(current) > 1 {
+			params[current[1:]] = pathSegments[idx]
+			continue
+		}
+		if current != pathSegments[idx] {
+			return false, map[any]any{}
+		}
+	}
+	return true, params
+}
+
+func splitRouteSegments(value string) []string {
+	trimmed := strings.Trim(value, "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
+}
+
+func matchesHTTPPathPrefix(requestPath string, prefix string) bool {
+	if prefix == "/" {
+		return strings.HasPrefix(requestPath, "/")
+	}
+	return strings.HasPrefix(requestPath, prefix)
+}
+
+func loadStaticHTTPReply(requestPath string, prefix string, root string) (*HTTPReplyValue, error) {
+	if !matchesHTTPPathPrefix(requestPath, prefix) {
+		return nil, fmt.Errorf("path %q is not under prefix %q", requestPath, prefix)
+	}
+
+	relative := strings.TrimPrefix(requestPath, prefix)
+	relative = strings.TrimPrefix(relative, "/")
+	if relative == "" {
+		relative = "index.html"
+	}
+	cleaned := strings.TrimPrefix(path.Clean("/"+relative), "/")
+	fullPath := filepath.Join(root, filepath.FromSlash(cleaned))
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil, err
+	}
+	contentType := mime.TypeByExtension(filepath.Ext(fullPath))
+	if contentType == "" {
+		contentType = http.DetectContentType(data)
+	}
+	if strings.HasPrefix(contentType, "text/") && !strings.Contains(contentType, "charset=") {
+		contentType += "; charset=utf-8"
+	}
+	return makeHTTPReplyValue("http.static()", 200, contentType, string(data))
+}
+
+func (i *Interpreter) pathBasenameBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "path.basename() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "path.basename() requires string path, got %s", typeNameOf(args[0]))
+		}
+		if value == "" {
+			return "", nil
+		}
+		return path.Base(value), nil
+	})
+}
+
+func (i *Interpreter) pathDirnameBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "path.dirname() expects 1 argument, got %d", len(args))
+		}
+		value, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "path.dirname() requires string path, got %s", typeNameOf(args[0]))
+		}
+		if value == "" {
+			return "", nil
+		}
+		return path.Dir(value), nil
+	})
+}
+
+func (i *Interpreter) pathJoinBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "path.joinpath() expects 2 arguments, got %d", len(args))
+		}
+		left, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "path.joinpath() requires string left path, got %s", typeNameOf(args[0]))
+		}
+		right, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "path.joinpath() requires string right path, got %s", typeNameOf(args[1]))
+		}
+		return path.Join(left, right), nil
+	})
+}
+
+func (i *Interpreter) jsonParseObjectBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "json.parseobject() expects 1 argument, got %d", len(args))
+		}
+		text, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "json.parseobject() requires string text, got %s", typeNameOf(args[0]))
+		}
+		value, err := decodeJSONText(text)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		object, ok := value.(map[any]any)
+		if !ok {
+			return &ErrValue{Value: "json.parseobject() requires top-level object"}, nil
+		}
+		return &OkValue{Value: object}, nil
+	})
+}
+
+func (i *Interpreter) jsonParseArrayBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "json.parsearray() expects 1 argument, got %d", len(args))
+		}
+		text, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "json.parsearray() requires string text, got %s", typeNameOf(args[0]))
+		}
+		value, err := decodeJSONText(text)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		array, ok := value.(*ListValue)
+		if !ok {
+			return &ErrValue{Value: "json.parsearray() requires top-level array"}, nil
+		}
+		return &OkValue{Value: array}, nil
+	})
+}
+
+func (i *Interpreter) jsonStringifyBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "json.stringify() expects 1 argument, got %d", len(args))
+		}
+		value, err := encodeJSONValue(args[0])
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		data, err := stdjson.Marshal(value)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: string(data)}, nil
+	})
+}
+
+func (i *Interpreter) jsonObjectBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args)%2 != 0 {
+			return nil, runtimeErrorf(0, "json.objectof() expects even number of arguments, got %d", len(args))
+		}
+		object := make(map[any]any, len(args)/2)
+		for idx := 0; idx < len(args); idx += 2 {
+			key, ok := args[idx].(string)
+			if !ok {
+				return nil, runtimeErrorf(0, "json.objectof() key %d must be string, got %s", idx/2+1, typeNameOf(args[idx]))
+			}
+			object[key] = args[idx+1]
+		}
+		return object, nil
+	})
+}
+
+func (i *Interpreter) jsonArrayBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		items := make([]any, len(args))
+		copy(items, args)
+		return newListValue(items), nil
+	})
+}
+
+func (i *Interpreter) jsonNullBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 0 {
+			return nil, runtimeErrorf(0, "json.null() expects 0 arguments, got %d", len(args))
+		}
+		return jsonNullValue, nil
+	})
+}
+
+func (i *Interpreter) jsonIsNullBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "json.isnull() expects 1 argument, got %d", len(args))
+		}
+		_, ok := args[0].(*JSONNullValue)
+		return ok, nil
+	})
+}
+
+func (i *Interpreter) stateCellBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "state.cell() expects 1 argument, got %d", len(args))
+		}
+		cloned, err := cloneStateValue("state.cell()", args[0])
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return &CellValue{Value: cloned}, nil
+	})
+}
+
+func (i *Interpreter) stateGetBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "state.get() expects 1 argument, got %d", len(args))
+		}
+		cell, ok := args[0].(*CellValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "state.get() requires cell, got %s", typeNameOf(args[0]))
+		}
+		cell.mu.Lock()
+		snapshot := cell.Value
+		cell.mu.Unlock()
+
+		cloned, err := cloneStateValue("state.get()", snapshot)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) stateSetBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "state.set() expects 2 arguments, got %d", len(args))
+		}
+		cell, ok := args[0].(*CellValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "state.set() requires cell, got %s", typeNameOf(args[0]))
+		}
+		stored, err := cloneStateValue("state.set()", args[1])
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+
+		cell.mu.Lock()
+		cell.Value = stored
+		cell.mu.Unlock()
+
+		cloned, err := cloneStateValue("state.set()", stored)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) stateUpdateBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 {
+			return nil, runtimeErrorf(0, "state.update() expects 2 arguments, got %d", len(args))
+		}
+		cell, ok := args[0].(*CellValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "state.update() requires cell, got %s", typeNameOf(args[0]))
+		}
+
+		cell.mu.Lock()
+		current := cell.Value
+		working, err := cloneStateValue("state.update()", current)
+		if err != nil {
+			cell.mu.Unlock()
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		next, err := i.callCallable(args[1], []any{working}, 0)
+		if err != nil {
+			cell.mu.Unlock()
+			return nil, err
+		}
+		stored, err := cloneStateValue("state.update()", next)
+		if err != nil {
+			cell.mu.Unlock()
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		cell.Value = stored
+		cell.mu.Unlock()
+
+		cloned, err := cloneStateValue("state.update()", stored)
+		if err != nil {
+			return nil, runtimeErrorf(0, "%s", err.Error())
+		}
+		return cloned, nil
+	})
+}
+
+func (i *Interpreter) sqliteOpenBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "sqlite.open() expects 1 argument, got %d", len(args))
+		}
+		path, ok := args[0].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.open() requires string path, got %s", typeNameOf(args[0]))
+		}
+
+		db, err := sql.Open("sqlite", path)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		if err := db.Ping(); err != nil {
+			_ = db.Close()
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: &SqliteDBValue{DB: db, Path: path}}, nil
+	})
+}
+
+func (i *Interpreter) sqliteCloseBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 1 {
+			return nil, runtimeErrorf(0, "sqlite.close() expects 1 argument, got %d", len(args))
+		}
+		db, ok := args[0].(*SqliteDBValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.close() requires SqliteDB, got %s", typeNameOf(args[0]))
+		}
+		if err := db.DB.Close(); err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: int64(0)}, nil
+	})
+}
+
+func (i *Interpreter) sqliteExecBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 && len(args) != 3 {
+			return nil, runtimeErrorf(0, "sqlite.exec() expects 2 or 3 arguments, got %d", len(args))
+		}
+		db, ok := args[0].(*SqliteDBValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.exec() requires SqliteDB, got %s", typeNameOf(args[0]))
+		}
+		statement, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.exec() requires string sql, got %s", typeNameOf(args[1]))
+		}
+
+		params := []any{}
+		if len(args) == 3 {
+			var err error
+			params, err = convertSQLiteParams("sqlite.exec()", args[2])
+			if err != nil {
+				return nil, runtimeErrorf(0, "%s", err.Error())
+			}
+		}
+
+		result, err := db.DB.Exec(statement, params...)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: affected}, nil
+	})
+}
+
+func (i *Interpreter) sqliteQueryBuiltin() Builtin {
+	return Builtin(func(args []any) (any, error) {
+		if len(args) != 2 && len(args) != 3 {
+			return nil, runtimeErrorf(0, "sqlite.query() expects 2 or 3 arguments, got %d", len(args))
+		}
+		db, ok := args[0].(*SqliteDBValue)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.query() requires SqliteDB, got %s", typeNameOf(args[0]))
+		}
+		statement, ok := args[1].(string)
+		if !ok {
+			return nil, runtimeErrorf(0, "sqlite.query() requires string sql, got %s", typeNameOf(args[1]))
+		}
+
+		params := []any{}
+		if len(args) == 3 {
+			var err error
+			params, err = convertSQLiteParams("sqlite.query()", args[2])
+			if err != nil {
+				return nil, runtimeErrorf(0, "%s", err.Error())
+			}
+		}
+
+		rows, err := db.DB.Query(statement, params...)
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		defer rows.Close()
+
+		columns, err := rows.Columns()
+		if err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+
+		items := []any{}
+		for rows.Next() {
+			rawValues := make([]any, len(columns))
+			dest := make([]any, len(columns))
+			for idx := range rawValues {
+				dest[idx] = &rawValues[idx]
+			}
+			if err := rows.Scan(dest...); err != nil {
+				return &ErrValue{Value: err.Error()}, nil
+			}
+
+			row := map[any]any{}
+			for idx, name := range columns {
+				converted, err := convertSQLiteRowValue(rawValues[idx])
+				if err != nil {
+					return &ErrValue{Value: err.Error()}, nil
+				}
+				row[name] = converted
+			}
+			items = append(items, row)
+		}
+		if err := rows.Err(); err != nil {
+			return &ErrValue{Value: err.Error()}, nil
+		}
+		return &OkValue{Value: newListValue(items)}, nil
+	})
+}
+
+func convertSQLiteParams(label string, value any) ([]any, error) {
+	items, ok := listLikeItems(value)
+	if !ok {
+		return nil, fmt.Errorf("%s requires list params, got %s", label, typeNameOf(value))
+	}
+	params := make([]any, len(items))
+	for idx, item := range items {
+		converted, err := convertSQLiteParamValue(label, idx, item)
+		if err != nil {
+			return nil, err
+		}
+		params[idx] = converted
+	}
+	return params, nil
+}
+
+func convertSQLiteParamValue(label string, idx int, value any) (any, error) {
+	switch value := value.(type) {
+	case int64, float64, string, bool:
+		return value, nil
+	case *JSONNullValue:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("%s param %d only supports int/float/string/bool/json.null(), got %s", label, idx+1, typeNameOf(value))
+	}
+}
+
+func convertSQLiteRowValue(value any) (any, error) {
+	switch value := value.(type) {
+	case nil:
+		return jsonNullValue, nil
+	case int64:
+		return value, nil
+	case float64:
+		return value, nil
+	case bool:
+		return value, nil
+	case string:
+		return value, nil
+	case []byte:
+		return string(value), nil
+	case int:
+		return int64(value), nil
+	case int8:
+		return int64(value), nil
+	case int16:
+		return int64(value), nil
+	case int32:
+		return int64(value), nil
+	case uint8:
+		return int64(value), nil
+	case uint16:
+		return int64(value), nil
+	case uint32:
+		return int64(value), nil
+	case uint:
+		if uint64(value) > math.MaxInt64 {
+			return nil, fmt.Errorf("sqlite.query() unsigned integer %d exceeds Gwen int range", value)
+		}
+		return int64(value), nil
+	case uint64:
+		if value > math.MaxInt64 {
+			return nil, fmt.Errorf("sqlite.query() unsigned integer %d exceeds Gwen int range", value)
+		}
+		return int64(value), nil
+	case float32:
+		return float64(value), nil
+	case time.Time:
+		return value.Format(time.RFC3339Nano), nil
+	default:
+		return nil, fmt.Errorf("sqlite.query() cannot convert column value of type %T", value)
+	}
+}
+
+type stateCloneContext struct {
+	lists        map[*ListValue]*ListValue
+	slices       map[uintptr][]any
+	dicts        map[uintptr]map[any]any
+	okValues     map[*OkValue]*OkValue
+	errValues    map[*ErrValue]*ErrValue
+	objectValues map[*ObjectValue]*ObjectValue
+}
+
+func cloneStateValue(label string, value any) (any, error) {
+	return newStateCloneContext().clone(label, value)
+}
+
+func newStateCloneContext() *stateCloneContext {
+	return &stateCloneContext{
+		lists:        map[*ListValue]*ListValue{},
+		slices:       map[uintptr][]any{},
+		dicts:        map[uintptr]map[any]any{},
+		okValues:     map[*OkValue]*OkValue{},
+		errValues:    map[*ErrValue]*ErrValue{},
+		objectValues: map[*ObjectValue]*ObjectValue{},
+	}
+}
+
+func (c *stateCloneContext) clone(label string, value any) (any, error) {
+	switch value := value.(type) {
+	case nil, int64, float64, string, bool, uninitialized:
+		return value, nil
+	case *MoneyValue:
+		return &MoneyValue{Raw: value.Raw, Currency: value.Currency}, nil
+	case *JSONNullValue:
+		return jsonNullValue, nil
+	case *CellValue:
+		return value, nil
+	case *ListValue:
+		if cloned, ok := c.lists[value]; ok {
+			return cloned, nil
+		}
+		cloned := &ListValue{Items: make([]any, len(value.Items))}
+		c.lists[value] = cloned
+		for idx, item := range value.Items {
+			next, err := c.clone(label, item)
+			if err != nil {
+				return nil, err
+			}
+			cloned.Items[idx] = next
+		}
+		return cloned, nil
+	case []any:
+		ptr := reflect.ValueOf(value).Pointer()
+		if ptr != 0 {
+			if cloned, ok := c.slices[ptr]; ok {
+				return cloned, nil
+			}
+		}
+		cloned := make([]any, len(value))
+		if ptr != 0 {
+			c.slices[ptr] = cloned
+		}
+		for idx, item := range value {
+			next, err := c.clone(label, item)
+			if err != nil {
+				return nil, err
+			}
+			cloned[idx] = next
+		}
+		return cloned, nil
+	case map[any]any:
+		ptr := reflect.ValueOf(value).Pointer()
+		if ptr != 0 {
+			if cloned, ok := c.dicts[ptr]; ok {
+				return cloned, nil
+			}
+		}
+		cloned := make(map[any]any, len(value))
+		if ptr != 0 {
+			c.dicts[ptr] = cloned
+		}
+		for key, item := range value {
+			nextKey, err := c.clone(label, key)
+			if err != nil {
+				return nil, err
+			}
+			nextValue, err := c.clone(label, item)
+			if err != nil {
+				return nil, err
+			}
+			cloned[nextKey] = nextValue
+		}
+		return cloned, nil
+	case *OkValue:
+		if cloned, ok := c.okValues[value]; ok {
+			return cloned, nil
+		}
+		cloned := &OkValue{}
+		c.okValues[value] = cloned
+		next, err := c.clone(label, value.Value)
+		if err != nil {
+			return nil, err
+		}
+		cloned.Value = next
+		return cloned, nil
+	case *ErrValue:
+		if cloned, ok := c.errValues[value]; ok {
+			return cloned, nil
+		}
+		cloned := &ErrValue{}
+		c.errValues[value] = cloned
+		next, err := c.clone(label, value.Value)
+		if err != nil {
+			return nil, err
+		}
+		cloned.Value = next
+		return cloned, nil
+	case *ObjectValue:
+		if cloned, ok := c.objectValues[value]; ok {
+			return cloned, nil
+		}
+		cloned := &ObjectValue{
+			TypeName: value.TypeName,
+			Fields:   map[string]any{},
+			Object:   value.Object,
+		}
+		c.objectValues[value] = cloned
+		for name, fieldValue := range value.Fields {
+			next, err := c.clone(label, fieldValue)
+			if err != nil {
+				return nil, err
+			}
+			cloned.Fields[name] = next
+		}
+		return cloned, nil
+	default:
+		return nil, fmt.Errorf("%s only supports data values, got %s", label, typeNameOf(value))
+	}
+}
+
+func decodeJSONText(text string) (any, error) {
+	decoder := stdjson.NewDecoder(strings.NewReader(text))
+	decoder.UseNumber()
+
+	var raw any
+	if err := decoder.Decode(&raw); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err == io.EOF {
+		return convertDecodedJSON(raw)
+	} else if err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("extra data after JSON value")
+}
+
+func convertDecodedJSON(value any) (any, error) {
+	switch value := value.(type) {
+	case nil:
+		return jsonNullValue, nil
+	case bool, string:
+		return value, nil
+	case float64:
+		return value, nil
+	case stdjson.Number:
+		if intValue, err := value.Int64(); err == nil {
+			return intValue, nil
+		}
+		floatValue, err := value.Float64()
+		if err != nil {
+			return nil, err
+		}
+		return floatValue, nil
+	case []any:
+		items := make([]any, len(value))
+		for idx, item := range value {
+			converted, err := convertDecodedJSON(item)
+			if err != nil {
+				return nil, err
+			}
+			items[idx] = converted
+		}
+		return newListValue(items), nil
+	case map[string]any:
+		object := make(map[any]any, len(value))
+		for key, item := range value {
+			converted, err := convertDecodedJSON(item)
+			if err != nil {
+				return nil, err
+			}
+			object[key] = converted
+		}
+		return object, nil
+	default:
+		return nil, fmt.Errorf("unsupported JSON value of type %T", value)
+	}
+}
+
+func encodeJSONValue(value any) (any, error) {
+	switch value := value.(type) {
+	case bool, string, float64:
+		return value, nil
+	case int64:
+		return value, nil
+	case *JSONNullValue:
+		return nil, nil
+	case *ListValue:
+		items := make([]any, len(value.Items))
+		for idx, item := range value.Items {
+			encoded, err := encodeJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			items[idx] = encoded
+		}
+		return items, nil
+	case []any:
+		items := make([]any, len(value))
+		for idx, item := range value {
+			encoded, err := encodeJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			items[idx] = encoded
+		}
+		return items, nil
+	case map[any]any:
+		object := make(map[string]any, len(value))
+		for key, item := range value {
+			keyString, ok := key.(string)
+			if !ok {
+				return nil, fmt.Errorf("json.stringify() requires string dict keys, got %s", typeNameOf(key))
+			}
+			encoded, err := encodeJSONValue(item)
+			if err != nil {
+				return nil, err
+			}
+			object[keyString] = encoded
+		}
+		return object, nil
+	case nil:
+		return nil, fmt.Errorf("json.stringify() cannot encode None; use json.null() explicitly")
+	default:
+		return nil, fmt.Errorf("json.stringify() cannot encode %s", typeNameOf(value))
+	}
+}
+
+func (i *Interpreter) callCallable(callee any, args []any, line int) (any, error) {
+	switch fn := callee.(type) {
+	case Builtin:
+		return fn(args)
+	case *Function:
+		return i.callFunction(fn, args, line)
+	case *Lambda:
+		return i.callLambda(fn, args, line)
+	case *BoundMethod:
+		return i.callMethod(fn, args, line)
+	default:
+		return nil, runtimeErrorf(line, "%s is not callable", formatDisplayValue(callee))
+	}
+}
+
+func (i *Interpreter) moduleCandidatePaths(moduleName string) []string {
+	searchPaths := i.moduleSearchPaths
+	if len(searchPaths) == 0 {
+		searchPaths = []string{"."}
+	}
+	seen := map[string]struct{}{}
+	paths := make([]string, 0, len(searchPaths)*2)
+	for _, base := range searchPaths {
+		candidates := []string{
+			filepath.Join(base, moduleName+".gw"),
+			filepath.Join(base, moduleName, "main.gw"),
+		}
+		for _, candidate := range candidates {
+			absPath, err := filepath.Abs(candidate)
+			if err != nil {
+				continue
+			}
+			if _, ok := seen[absPath]; ok {
+				continue
+			}
+			seen[absPath] = struct{}{}
+			paths = append(paths, absPath)
+		}
+	}
+	return paths
+}
+
+func (i *Interpreter) loadModuleFromFile(moduleName string, line int) error {
+	if _, ok := i.Modules[moduleName]; ok {
+		return nil
+	}
+	if _, loading := i.loadingModules[moduleName]; loading {
+		return runtimeErrorf(line, "Cyclic module import detected while loading '%s'", moduleName)
+	}
+
+	for _, candidate := range i.moduleCandidatePaths(moduleName) {
+		source, err := os.ReadFile(candidate)
+		if err != nil {
+			continue
+		}
+		program, err := parser.Parse(string(source))
+		if err != nil {
+			return err
+		}
+		if len(program.Statements) != 1 {
+			return runtimeErrorf(line, "Module file '%s' must contain exactly one top-level module definition for '%s'", candidate, moduleName)
+		}
+		moduleDef, ok := program.Statements[0].(*ast.ModuleDef)
+		if !ok || moduleDef.Name != moduleName {
+			return runtimeErrorf(line, "Module file '%s' must contain exactly one top-level module definition for '%s'", candidate, moduleName)
+		}
+
+		i.loadingModules[moduleName] = struct{}{}
+		i.AddModuleSearchPath(filepath.Dir(candidate))
+		_, execErr := i.execStmt(moduleDef, i.GlobalEnv)
+		delete(i.loadingModules, moduleName)
+		return execErr
+	}
+
+	return runtimeErrorf(line, "Module not found: %s", moduleName)
+}
+
+func bindParams(args []any, params []*ast.Param, callEnv, defaultEnv *Environment, line int, label string, interp *Interpreter) error {
+	required := 0
+	for _, param := range params {
+		if param.Default == nil {
+			required++
+		}
+	}
+	if len(args) < required {
+		for idx, param := range params {
+			if idx >= len(args) && param.Default == nil {
+				return runtimeErrorf(line, "Missing argument: %s", param.Name)
+			}
+		}
+	}
+	if len(args) > len(params) {
+		return runtimeErrorf(line, "Too many arguments for '%s': expected at most %d, got %d", label, len(params), len(args))
+	}
+
+	for idx, param := range params {
+		typeName, err := resolveRuntimeType(param.TypeName, callEnv, param.Line)
+		if err != nil {
+			return err
+		}
+		var value any
+		switch {
+		case idx < len(args):
+			value = args[idx]
+		case param.Default != nil:
+			value, err = interp.evalExpr(param.Default, defaultEnv)
+			if err != nil {
+				return err
+			}
+		default:
+			return runtimeErrorf(line, "Missing argument: %s", param.Name)
+		}
+		value, err = coerceIfTyped(value, typeName, param.Line)
+		if err != nil {
+			return err
+		}
+		callEnv.Set(param.Name, value)
+		callEnv.SetType(param.Name, typeName)
+	}
+	return nil
+}
+
+func resolveRuntimeType(typeNode any, env *Environment, line int) (string, error) {
+	switch node := typeNode.(type) {
+	case nil:
+		return "", nil
+	case *ast.TypeName:
+		return resolveAlias(node.Name, env, line)
+	case *ast.GenericType:
+		if node.Base == "money" && len(node.Params) == 1 {
+			switch param := node.Params[0].(type) {
+			case *ast.TypeName:
+				return "money[" + param.Name + "]", nil
+			default:
+				inner, err := resolveRuntimeType(node.Params[0], env, line)
+				if err != nil {
+					return "", err
+				}
+				return "money[" + inner + "]", nil
+			}
+		}
+		_, err := resolveAlias(node.Base, env, line)
+		if err != nil {
+			return "", err
+		}
+		return node.Base, nil
+	case *ast.FuncType:
+		return "func", nil
+	default:
+		return "", runtimeErrorf(line, "Invalid type annotation")
+	}
+}
+
+func resolveAlias(typeName string, env *Environment, line int) (string, error) {
+	if typeName == "" {
+		return "", nil
+	}
+	seen := map[string]struct{}{}
+	current := typeName
+	for {
+		if _, ok := seen[current]; ok {
+			break
+		}
+		seen[current] = struct{}{}
+		next, ok := env.GetAlias(current)
+		if !ok {
+			break
+		}
+		current = next
+	}
+	if !isKnownType(current) {
+		if value, err := env.Get(current); err == nil {
+			if _, ok := value.(*ObjectType); ok {
+				return current, nil
+			}
+		}
+		return "", runtimeErrorf(line, "Unknown type: %s", current)
+	}
+	return current, nil
+}
+
+func isKnownType(typeName string) bool {
+	if typeName == "" {
+		return true
+	}
+	switch typeName {
+	case "int", "float", "string", "bool", "list", "dict", "func", "result", "float32", "float64", "HttpRequest", "HttpReply", "HttpResponse", "HttpServer", "JsonNull", "SqliteDB", "cell":
+		return true
+	}
+	if strings.HasPrefix(typeName, "money[") && strings.HasSuffix(typeName, "]") {
+		return true
+	}
+	_, ok := intRanges[typeName]
+	return ok
+}
+
+func coerceIfTyped(value any, typeName string, line int) (any, error) {
+	if typeName == "" || value == uninitializedValue {
+		return value, nil
+	}
+	switch typeName {
+	case "int":
+		if _, ok := value.(int64); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected int, got %s", typeNameOf(value))
+	case "float":
+		switch value := value.(type) {
+		case int64:
+			return float64(value), nil
+		case float64:
+			return value, nil
+		default:
+			return nil, runtimeErrorf(line, "Type mismatch: expected float, got %s", typeNameOf(value))
+		}
+	case "float32", "float64":
+		switch value := value.(type) {
+		case int64:
+			return float64(value), nil
+		case float64:
+			return value, nil
+		default:
+			return nil, runtimeErrorf(line, "Type mismatch: expected %s, got %s", typeName, typeNameOf(value))
+		}
+	case "string":
+		if _, ok := value.(string); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected string, got %s", typeNameOf(value))
+	case "bool":
+		if _, ok := value.(bool); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected bool, got %s", typeNameOf(value))
+	case "list", "dict", "func", "result":
+		return value, nil
+	case "cell":
+		if _, ok := value.(*CellValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected cell, got %s", typeNameOf(value))
+	case "HttpRequest":
+		if _, ok := value.(*HTTPRequestValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected HttpRequest, got %s", typeNameOf(value))
+	case "HttpReply":
+		if _, ok := value.(*HTTPReplyValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected HttpReply, got %s", typeNameOf(value))
+	case "HttpResponse":
+		if _, ok := value.(*HTTPResponseValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected HttpResponse, got %s", typeNameOf(value))
+	case "HttpServer":
+		if _, ok := value.(*HTTPServerValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected HttpServer, got %s", typeNameOf(value))
+	case "JsonNull":
+		if _, ok := value.(*JSONNullValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected JsonNull, got %s", typeNameOf(value))
+	case "SqliteDB":
+		if _, ok := value.(*SqliteDBValue); ok {
+			return value, nil
+		}
+		return nil, runtimeErrorf(line, "Type mismatch: expected SqliteDB, got %s", typeNameOf(value))
+	default:
+		if objectValue, ok := value.(*ObjectValue); ok && objectValue.TypeName == typeName {
+			return value, nil
+		}
+		if isMoneyType(typeName) {
+			return coerceMoney(value, typeName, line)
+		}
+		if _, ok := intRanges[typeName]; ok {
+			return coerceIntRange(value, typeName, line)
+		}
+		return nil, runtimeErrorf(line, "Unknown type: %s", typeName)
+	}
+}
+
+func coerceIntRange(value any, typeName string, line int) (any, error) {
+	intValue, err := toInt64(value, line)
+	if err != nil {
+		return nil, runtimeErrorf(line, "Type mismatch: expected %s, got %s", typeName, typeNameOf(value))
+	}
+	info := intRanges[typeName]
+	if info.min == 0 {
+		if intValue < 0 || uint64(intValue) > info.max {
+			return nil, runtimeErrorf(line, "Overflow: %d out of range for %s", intValue, typeName)
+		}
+		return intValue, nil
+	}
+	if intValue < info.min || intValue > int64(info.max) {
+		return nil, runtimeErrorf(line, "Overflow: %d out of range for %s", intValue, typeName)
+	}
+	return intValue, nil
+}
+
+func newListValue(items []any) *ListValue {
+	if items == nil {
+		items = []any{}
+	}
+	return &ListValue{Items: items}
+}
+
+func listLikeItems(value any) ([]any, bool) {
+	switch value := value.(type) {
+	case *ListValue:
+		return value.Items, true
+	case []any:
+		return value, true
+	default:
+		return nil, false
+	}
+}
+
+func requireMutableList(value any, line int, name string) (*ListValue, error) {
+	list, ok := value.(*ListValue)
+	if ok {
+		return list, nil
+	}
+	if _, ok := value.([]any); ok {
+		return nil, runtimeErrorf(line, "%s() requires mutable list, got multi-value result", name)
+	}
+	return nil, runtimeErrorf(line, "%s() requires list, got %s", name, typeNameOf(value))
+}
+
+func zeroValue(typeName string, line int) (any, error) {
+	switch typeName {
+	case "int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32":
+		return int64(0), nil
+	case "float", "float32", "float64":
+		return float64(0), nil
+	case "string":
+		return "", nil
+	case "bool":
+		return false, nil
+	case "list":
+		return newListValue(nil), nil
+	case "dict":
+		return map[any]any{}, nil
+	default:
+		if isMoneyType(typeName) {
+			return &MoneyValue{Raw: 0, Currency: moneyCurrency(typeName)}, nil
+		}
+		return nil, runtimeErrorf(line, "No default zero value for type '%s'", typeName)
+	}
+}
+
+func evalBinary(op string, left, right any, line int) (any, error) {
+	if isMoneyValue(left) || isMoneyValue(right) {
+		return evalMoneyBinary(op, left, right, line)
+	}
+	switch op {
+	case "+":
+		switch {
+		case isNumber(left) && isNumber(right):
+			return addNumbers(left, right), nil
+		case isString(left) && isString(right):
+			return left.(string) + right.(string), nil
+		default:
+			return nil, runtimeErrorf(line, "operator + is not defined for %s and %s", typeNameOf(left), typeNameOf(right))
+		}
+	case "-":
+		return arithmeticNumbers(left, right, line, func(a, b float64) float64 { return a - b }, func(a, b int64) int64 { return a - b })
+	case "*":
+		return arithmeticNumbers(left, right, line, func(a, b float64) float64 { return a * b }, func(a, b int64) int64 { return a * b })
+	case "/":
+		if isZero(right) {
+			return nil, runtimeErrorf(line, "Division by zero")
+		}
+		if leftInt, ok := left.(int64); ok {
+			if rightInt, ok := right.(int64); ok {
+				return leftInt / rightInt, nil
+			}
+		}
+		leftFloat, rightFloat, ok := promoteNumbers(left, right)
+		if !ok {
+			return nil, runtimeErrorf(line, "operator / is not defined for %s and %s", typeNameOf(left), typeNameOf(right))
+		}
+		return leftFloat / rightFloat, nil
+	case "mod":
+		leftInt, leftOK := left.(int64)
+		rightInt, rightOK := right.(int64)
+		if !leftOK || !rightOK {
+			return nil, runtimeErrorf(line, "operator mod requires int operands")
+		}
+		if rightInt == 0 {
+			return nil, runtimeErrorf(line, "Division by zero")
+		}
+		return leftInt % rightInt, nil
+	case "^":
+		leftFloat, rightFloat, ok := promoteNumbers(left, right)
+		if !ok {
+			return nil, runtimeErrorf(line, "operator ^ is not defined for %s and %s", typeNameOf(left), typeNameOf(right))
+		}
+		if leftInt, okLeft := left.(int64); okLeft {
+			if rightInt, okRight := right.(int64); okRight && rightInt >= 0 {
+				result := int64(1)
+				for count := int64(0); count < rightInt; count++ {
+					result *= leftInt
+				}
+				return result, nil
+			}
+		}
+		return math.Pow(leftFloat, rightFloat), nil
+	case "=":
+		return valuesEqual(left, right), nil
+	case "!=":
+		return !valuesEqual(left, right), nil
+	case "<", ">", "<=", ">=":
+		return compareValues(op, left, right, line)
+	default:
+		return nil, runtimeErrorf(line, "Unknown operator: %s", op)
+	}
+}
+
+func arithmeticNumbers(left, right any, line int, floatOp func(float64, float64) float64, intOp func(int64, int64) int64) (any, error) {
+	if leftInt, ok := left.(int64); ok {
+		if rightInt, ok := right.(int64); ok {
+			return intOp(leftInt, rightInt), nil
+		}
+	}
+	leftFloat, rightFloat, ok := promoteNumbers(left, right)
+	if !ok {
+		return nil, runtimeErrorf(line, "operator is not defined for %s and %s", typeNameOf(left), typeNameOf(right))
+	}
+	return floatOp(leftFloat, rightFloat), nil
+}
+
+func compareValues(op string, left, right any, line int) (bool, error) {
+	if leftFloat, rightFloat, ok := promoteNumbers(left, right); ok {
+		switch op {
+		case "<":
+			return leftFloat < rightFloat, nil
+		case ">":
+			return leftFloat > rightFloat, nil
+		case "<=":
+			return leftFloat <= rightFloat, nil
+		case ">=":
+			return leftFloat >= rightFloat, nil
+		}
+	}
+	switch left := left.(type) {
+	case string:
+		rightString, ok := right.(string)
+		if !ok {
+			return false, runtimeErrorf(line, "comparison '%s' is not defined for %s and %s", op, typeNameOf(left), typeNameOf(right))
+		}
+		switch op {
+		case "<":
+			return left < rightString, nil
+		case ">":
+			return left > rightString, nil
+		case "<=":
+			return left <= rightString, nil
+		case ">=":
+			return left >= rightString, nil
+		}
+	case bool:
+		rightBool, ok := right.(bool)
+		if !ok {
+			return false, runtimeErrorf(line, "comparison '%s' is not defined for %s and %s", op, typeNameOf(left), typeNameOf(right))
+		}
+		leftInt := 0
+		if left {
+			leftInt = 1
+		}
+		rightInt := 0
+		if rightBool {
+			rightInt = 1
+		}
+		switch op {
+		case "<":
+			return leftInt < rightInt, nil
+		case ">":
+			return leftInt > rightInt, nil
+		case "<=":
+			return leftInt <= rightInt, nil
+		case ">=":
+			return leftInt >= rightInt, nil
+		}
+	}
+	return false, runtimeErrorf(line, "comparison '%s' is not defined for %s and %s", op, typeNameOf(left), typeNameOf(right))
+}
+
+func indexValue(object, index any, line int) (any, error) {
+	switch object := object.(type) {
+	case *ListValue:
+		intIndex, ok := index.(int64)
+		if !ok {
+			return nil, runtimeErrorf(line, "List index must be int, got %s", typeNameOf(index))
+		}
+		if intIndex < 0 || intIndex >= int64(len(object.Items)) {
+			return nil, runtimeErrorf(line, "Index out of range: %d", intIndex)
+		}
+		return object.Items[intIndex], nil
+	case []any:
+		intIndex, ok := index.(int64)
+		if !ok {
+			return nil, runtimeErrorf(line, "List index must be int, got %s", typeNameOf(index))
+		}
+		if intIndex < 0 || intIndex >= int64(len(object)) {
+			return nil, runtimeErrorf(line, "Index out of range: %d", intIndex)
+		}
+		return object[intIndex], nil
+	case string:
+		intIndex, ok := index.(int64)
+		if !ok {
+			return nil, runtimeErrorf(line, "String index must be int, got %s", typeNameOf(index))
+		}
+		if intIndex < 0 || intIndex >= int64(len(object)) {
+			return nil, runtimeErrorf(line, "Index out of range: %d", intIndex)
+		}
+		return string(object[intIndex]), nil
+	case map[any]any:
+		value, ok := object[index]
+		if !ok {
+			return nil, runtimeErrorf(line, "Key not found: %v", index)
+		}
+		return value, nil
+	default:
+		return nil, runtimeErrorf(line, "Cannot index type %s", typeNameOf(object))
+	}
+}
+
+func assignIndex(object, index, value any, line int) error {
+	switch object := object.(type) {
+	case *ListValue:
+		intIndex, ok := index.(int64)
+		if !ok {
+			return runtimeErrorf(line, "List index must be int, got %s", typeNameOf(index))
+		}
+		if intIndex < 0 || intIndex >= int64(len(object.Items)) {
+			return runtimeErrorf(line, "Index out of range: %d", intIndex)
+		}
+		object.Items[intIndex] = value
+		return nil
+	case []any:
+		intIndex, ok := index.(int64)
+		if !ok {
+			return runtimeErrorf(line, "List index must be int, got %s", typeNameOf(index))
+		}
+		if intIndex < 0 || intIndex >= int64(len(object)) {
+			return runtimeErrorf(line, "Index out of range: %d", intIndex)
+		}
+		object[intIndex] = value
+		return nil
+	case map[any]any:
+		object[index] = value
+		return nil
+	default:
+		return runtimeErrorf(line, "Cannot assign into type %s", typeNameOf(object))
+	}
+}
+
+func toSlice(value any, line int) ([]any, error) {
+	switch value := value.(type) {
+	case *ListValue:
+		return value.Items, nil
+	case []any:
+		return value, nil
+	case string:
+		items := make([]any, 0, len(value))
+		for _, ch := range value {
+			items = append(items, string(ch))
+		}
+		return items, nil
+	default:
+		return nil, runtimeErrorf(line, "Cannot iterate over %s", typeNameOf(value))
+	}
+}
+
+func compareRange(current, end, step int64) bool {
+	if step > 0 {
+		return current <= end
+	}
+	return current >= end
+}
+
+func consumeLoopSignal(signal *execSignal, loopName string) (consumed bool, exitLoop bool) {
+	if signal == nil || loopName == "" || signal.Name != loopName {
+		return false, false
+	}
+	switch signal.Kind {
+	case "leave":
+		return true, true
+	case "next":
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+func requireBool(value any, context string, line int) error {
+	if _, ok := value.(bool); !ok {
+		return runtimeErrorf(line, "%s must be bool, got %s", context, typeNameOf(value))
+	}
+	return nil
+}
+
+func runtimeErrorf(line int, format string, args ...any) error {
+	return &RuntimeError{
+		Message: fmt.Sprintf(format, args...),
+		Line:    line,
+	}
+}
+
+func typeNameOf(value any) string {
+	switch value := value.(type) {
+	case int64:
+		return "int"
+	case float64:
+		return "float"
+	case string:
+		return "string"
+	case bool:
+		return "bool"
+	case *ListValue:
+		return "list"
+	case []any:
+		return "list"
+	case map[any]any:
+		return "dict"
+	case *OkValue:
+		return "ok"
+	case *ErrValue:
+		return "err"
+	case *MoneyValue:
+		return "money[" + value.Currency + "]"
+	case *CellValue:
+		return "cell"
+	case *HTTPRequestValue:
+		return "HttpRequest"
+	case *HTTPReplyValue:
+		return "HttpReply"
+	case *HTTPResponseValue:
+		return "HttpResponse"
+	case *HTTPServerValue:
+		return "HttpServer"
+	case *JSONNullValue:
+		return "JsonNull"
+	case *SqliteDBValue:
+		return "SqliteDB"
+	case Builtin, *Function, *Lambda:
+		return "func"
+	case *Environment:
+		return "module"
+	case *ObjectType:
+		return "object"
+	case *ObjectValue:
+		return value.TypeName
+	case *BoundMethod, *StaticMethodRef, *ConstructorRef:
+		return "func"
+	case nil:
+		return "nil"
+	default:
+		return fmt.Sprintf("%T", value)
+	}
+}
+
+func formatValue(value any) string {
+	switch value := value.(type) {
+	case nil:
+		return "None"
+	case int64:
+		return strconv.FormatInt(value, 10)
+	case float64:
+		return formatFloat(value)
+	case string:
+		return formatJSONString(value)
+	case bool:
+		if value {
+			return "true"
+		}
+		return "false"
+	case *ListValue:
+		parts := make([]string, 0, len(value.Items))
+		for _, item := range value.Items {
+			parts = append(parts, formatValue(item))
+		}
+		return "[" + strings.Join(parts, ",") + "]"
+	case []any:
+		parts := make([]string, 0, len(value))
+		for _, item := range value {
+			parts = append(parts, formatValue(item))
+		}
+		return "[" + strings.Join(parts, ",") + "]"
+	case map[any]any:
+		parts := make([]string, 0, len(value))
+		for key, item := range value {
+			parts = append(parts, fmt.Sprintf("%s:%s", formatValue(key), formatValue(item)))
+		}
+		sort.Strings(parts)
+		return "{" + strings.Join(parts, ",") + "}"
+	case *OkValue:
+		return value.String()
+	case *ErrValue:
+		return value.String()
+	case *MoneyValue:
+		return formatMoney(value)
+	case *CellValue:
+		return "<cell>"
+	case *HTTPRequestValue:
+		return fmt.Sprintf("<HttpRequest %s %s>", value.Method, value.Path)
+	case *HTTPReplyValue:
+		return fmt.Sprintf("<HttpReply %d>", value.Status)
+	case *HTTPResponseValue:
+		return fmt.Sprintf("<HttpResponse %d>", value.Status)
+	case *HTTPServerValue:
+		return fmt.Sprintf("<HttpServer %s>", value.Addr)
+	case *JSONNullValue:
+		return "null"
+	case *SqliteDBValue:
+		return fmt.Sprintf("<SqliteDB %s>", value.Path)
+	case *Function:
+		return "<func " + value.Node.Name + ">"
+	case *Lambda:
+		return "<lambda>"
+	case *ObjectType:
+		return "<object " + value.Name + ">"
+	case *ObjectValue:
+		return "<" + value.TypeName + ">"
+	default:
+		return fmt.Sprint(value)
+	}
+}
+
+func formatJSONString(value string) string {
+	encoded, err := stdjson.Marshal(value)
+	if err != nil {
+		return strconv.Quote(value)
+	}
+	return string(encoded)
+}
+
+func formatDisplayValue(value any) string {
+	if str, ok := value.(string); ok {
+		return str
+	}
+	return formatValue(value)
+}
+
+func formatFloat(value float64) string {
+	text := strconv.FormatFloat(value, 'f', -1, 64)
+	if !strings.ContainsAny(text, ".eE") {
+		return text + ".0"
+	}
+	return text
+}
+
+func isString(value any) bool {
+	_, ok := value.(string)
+	return ok
+}
+
+func isNumber(value any) bool {
+	switch value.(type) {
+	case int64, float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func promoteNumbers(left, right any) (float64, float64, bool) {
+	switch left := left.(type) {
+	case int64:
+		switch right := right.(type) {
+		case int64:
+			return float64(left), float64(right), true
+		case float64:
+			return float64(left), right, true
+		}
+	case float64:
+		switch right := right.(type) {
+		case int64:
+			return left, float64(right), true
+		case float64:
+			return left, right, true
+		}
+	}
+	return 0, 0, false
+}
+
+func addNumbers(left, right any) any {
+	if leftInt, ok := left.(int64); ok {
+		if rightInt, ok := right.(int64); ok {
+			return leftInt + rightInt
+		}
+	}
+	leftFloat, rightFloat, _ := promoteNumbers(left, right)
+	return leftFloat + rightFloat
+}
+
+func isZero(value any) bool {
+	switch value := value.(type) {
+	case int64:
+		return value == 0
+	case float64:
+		return value == 0
+	default:
+		return false
+	}
+}
+
+func valuesEqual(left, right any) bool {
+	leftMoney, leftIsMoney := left.(*MoneyValue)
+	rightMoney, rightIsMoney := right.(*MoneyValue)
+	if leftIsMoney || rightIsMoney {
+		return leftIsMoney && rightIsMoney && leftMoney.Raw == rightMoney.Raw && leftMoney.Currency == rightMoney.Currency
+	}
+	if leftFloat, rightFloat, ok := promoteNumbers(left, right); ok {
+		return leftFloat == rightFloat
+	}
+	return reflect.DeepEqual(left, right)
+}
+
+func toInt64(value any, line int) (int64, error) {
+	switch value := value.(type) {
+	case int64:
+		return value, nil
+	case float64:
+		return int64(value), nil
+	case string:
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return 0, runtimeErrorf(line, "Cannot convert string to int: %q", value)
+		}
+		return parsed, nil
+	default:
+		return 0, runtimeErrorf(line, "Cannot convert %s to int", typeNameOf(value))
+	}
+}
+
+func isMoneyType(typeName string) bool {
+	return strings.HasPrefix(typeName, "money[") && strings.HasSuffix(typeName, "]")
+}
+
+func moneyCurrency(typeName string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(typeName, "money["), "]")
+}
+
+func isMoneyValue(value any) bool {
+	_, ok := value.(*MoneyValue)
+	return ok
+}
+
+func coerceMoney(value any, typeName string, line int) (any, error) {
+	currency := moneyCurrency(typeName)
+	switch value := value.(type) {
+	case *MoneyValue:
+		if value.Currency != currency {
+			return nil, runtimeErrorf(line, "Currency mismatch: cannot assign money[%s] to money[%s]", value.Currency, currency)
+		}
+		return value, nil
+	case int64:
+		return &MoneyValue{Raw: value * moneyScale, Currency: currency}, nil
+	case float64:
+		return &MoneyValue{Raw: int64(math.Round(value * float64(moneyScale))), Currency: currency}, nil
+	default:
+		return nil, runtimeErrorf(line, "Cannot convert %s to money[%s]", typeNameOf(value), currency)
+	}
+}
+
+func convertAs(value any, target string, line int) (any, error) {
+	if moneyValue, ok := value.(*MoneyValue); ok {
+		switch {
+		case target == "float" || target == "float32" || target == "float64":
+			return float64(moneyValue.Raw) / float64(moneyScale), nil
+		case target == "int":
+			return moneyValue.Raw / moneyScale, nil
+		case isMoneyType(target):
+			if moneyValue.Currency != moneyCurrency(target) {
+				return nil, runtimeErrorf(line, "Cannot convert money[%s] to money[%s] (explicit exchange rate required)", moneyValue.Currency, moneyCurrency(target))
+			}
+			return moneyValue, nil
+		}
+	}
+	return coerceIfTyped(value, target, line)
+}
+
+func evalMoneyBinary(op string, left, right any, line int) (any, error) {
+	leftMoney, leftIsMoney := left.(*MoneyValue)
+	rightMoney, rightIsMoney := right.(*MoneyValue)
+
+	switch op {
+	case "+", "-":
+		if !leftIsMoney || !rightIsMoney {
+			return nil, runtimeErrorf(line, "Cannot %s money with non-money value", op)
+		}
+		if leftMoney.Currency != rightMoney.Currency {
+			return nil, runtimeErrorf(line, "Currency mismatch: money[%s] %s money[%s]", leftMoney.Currency, op, rightMoney.Currency)
+		}
+		raw := leftMoney.Raw + rightMoney.Raw
+		if op == "-" {
+			raw = leftMoney.Raw - rightMoney.Raw
+		}
+		return &MoneyValue{Raw: raw, Currency: leftMoney.Currency}, nil
+	case "*":
+		if leftIsMoney == rightIsMoney {
+			return nil, runtimeErrorf(line, "Cannot multiply money by money")
+		}
+		money := leftMoney
+		scalar := right
+		if !leftIsMoney {
+			money = rightMoney
+			scalar = left
+		}
+		switch scalar := scalar.(type) {
+		case int64:
+			return &MoneyValue{Raw: money.Raw * scalar, Currency: money.Currency}, nil
+		default:
+			return nil, runtimeErrorf(line, "Cannot multiply money by %s", typeNameOf(scalar))
+		}
+	case "/":
+		if leftIsMoney && rightIsMoney {
+			if leftMoney.Currency != rightMoney.Currency {
+				return nil, runtimeErrorf(line, "Currency mismatch in division: money[%s] / money[%s]", leftMoney.Currency, rightMoney.Currency)
+			}
+			if rightMoney.Raw == 0 {
+				return nil, runtimeErrorf(line, "Division by zero")
+			}
+			return float64(leftMoney.Raw) / float64(rightMoney.Raw), nil
+		}
+		if !leftIsMoney || rightIsMoney {
+			return nil, runtimeErrorf(line, "Cannot divide non-money by money")
+		}
+		switch scalar := right.(type) {
+		case int64:
+			if scalar == 0 {
+				return nil, runtimeErrorf(line, "Division by zero")
+			}
+			return &MoneyValue{Raw: int64(math.Round(float64(leftMoney.Raw) / float64(scalar))), Currency: leftMoney.Currency}, nil
+		case float64:
+			if scalar == 0 {
+				return nil, runtimeErrorf(line, "Division by zero")
+			}
+			return &MoneyValue{Raw: int64(math.Round(float64(leftMoney.Raw) / scalar)), Currency: leftMoney.Currency}, nil
+		default:
+			return nil, runtimeErrorf(line, "Money can only be divided by int or float")
+		}
+	case "=", "!=", "<", ">", "<=", ">=":
+		if !leftIsMoney || !rightIsMoney {
+			return nil, runtimeErrorf(line, "Cannot compare money with non-money value (%s)", op)
+		}
+		if leftMoney.Currency != rightMoney.Currency {
+			return nil, runtimeErrorf(line, "Currency mismatch: money[%s] %s money[%s]", leftMoney.Currency, op, rightMoney.Currency)
+		}
+		switch op {
+		case "=":
+			return leftMoney.Raw == rightMoney.Raw, nil
+		case "!=":
+			return leftMoney.Raw != rightMoney.Raw, nil
+		case "<":
+			return leftMoney.Raw < rightMoney.Raw, nil
+		case ">":
+			return leftMoney.Raw > rightMoney.Raw, nil
+		case "<=":
+			return leftMoney.Raw <= rightMoney.Raw, nil
+		case ">=":
+			return leftMoney.Raw >= rightMoney.Raw, nil
+		}
+	}
+	return nil, runtimeErrorf(line, "Operator %s not supported on money values", op)
+}
+
+func formatMoney(value *MoneyValue) string {
+	text := strconv.FormatFloat(float64(value.Raw)/float64(moneyScale), 'f', 4, 64)
+	if strings.Contains(text, ".") {
+		text = strings.TrimRight(text, "0")
+		if strings.HasSuffix(text, ".") {
+			text += "00"
+		}
+		if parts := strings.Split(text, "."); len(parts) == 2 && len(parts[1]) == 1 {
+			text += "0"
+		}
+	}
+	return text + " " + value.Currency
+}

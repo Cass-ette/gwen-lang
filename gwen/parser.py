@@ -146,6 +146,20 @@ class Parser:
             self.advance()
             return None
 
+        if tok.type == TokenType.IDENTIFIER:
+            if tok.value == "pass":
+                next_tok = self._peek_next()
+                if next_tok is None or next_tok.type in (TokenType.NEWLINE, TokenType.EOF):
+                    return self.parse_pass()
+            if tok.value == "leave":
+                next_tok = self._peek_next()
+                if next_tok and next_tok.type == TokenType.IDENTIFIER:
+                    return self.parse_leave()
+            if tok.value == "next":
+                next_tok = self._peek_next()
+                if next_tok and next_tok.type == TokenType.IDENTIFIER:
+                    return self.parse_next()
+
         return self.parse_assignment_or_expr()
 
     def parse_assignment_or_expr(self) -> Any:
@@ -586,9 +600,13 @@ class Parser:
         tok = self.expect(TokenType.WHILE)
         condition = self.parse_expr()
         self.expect(TokenType.DO)
+        name = self._parse_optional_line_label()
         body = self.parse_block_until(TokenType.ENDWHILE)
         self.expect(TokenType.ENDWHILE)
-        return ast.WhileStmt(condition=condition, body=body, line=tok.line)
+        end_name = self._parse_optional_loop_end_name()
+        if name and end_name and name != end_name:
+            raise ParseError(f"Loop name mismatch: started '{name}', ended '{end_name}'", self.peek())
+        return ast.WhileStmt(condition=condition, name=name or end_name or "", body=body, line=tok.line)
 
     def parse_for(self) -> ast.ForRangeStmt:
         tok = self.expect(TokenType.FOR)
@@ -618,10 +636,15 @@ class Parser:
                 step = self.parse_expr()
 
             self.expect(TokenType.DO)
+            loop_name = self._parse_optional_line_label()
             body = self.parse_block_until(TokenType.ENDFOR)
             self.expect(TokenType.ENDFOR)
+            end_name = self._parse_optional_loop_end_name()
+            if loop_name and end_name and loop_name != end_name:
+                raise ParseError(f"Loop name mismatch: started '{loop_name}', ended '{end_name}'", self.peek())
             return ast.ForRangeStmt(var=var, start=start, end=end, step=step,
-                                     direction=direction, body=body, line=tok.line)
+                                     direction=direction, name=loop_name or end_name or "",
+                                     body=body, line=tok.line)
         else:
             # For-each
             self.expect(TokenType.DO) if not self.at(TokenType.WITH) else None
@@ -634,10 +657,14 @@ class Parser:
             else:
                 if not self.tokens[self.pos - 1].type == TokenType.DO:
                     self.expect(TokenType.DO)
+            loop_name = self._parse_optional_line_label()
             body = self.parse_block_until(TokenType.ENDFOR)
             self.expect(TokenType.ENDFOR)
+            end_name = self._parse_optional_loop_end_name()
+            if loop_name and end_name and loop_name != end_name:
+                raise ParseError(f"Loop name mismatch: started '{loop_name}', ended '{end_name}'", self.peek())
             return ast.ForEachStmt(var=var, iterable=start, index_var=index_var,
-                                    body=body, line=tok.line)
+                                    name=loop_name or end_name or "", body=body, line=tok.line)
 
     def parse_match(self) -> ast.MatchStmt:
         tok = self.expect(TokenType.MATCH)
@@ -723,6 +750,29 @@ class Parser:
         value = values if len(values) > 1 else (values[0] if values else None)
         return ast.ReturnStmt(value=value, line=tok.line)
 
+    def parse_pass(self) -> ast.PassStmt:
+        tok = self.peek()
+        if tok.type != TokenType.IDENTIFIER or tok.value != "pass":
+            raise ParseError("Expected 'pass'", tok)
+        self.advance()
+        return ast.PassStmt(line=tok.line)
+
+    def parse_leave(self) -> ast.LeaveStmt:
+        tok = self.peek()
+        if tok.type != TokenType.IDENTIFIER or tok.value != "leave":
+            raise ParseError("Expected 'leave'", tok)
+        self.advance()
+        name = self.expect(TokenType.IDENTIFIER).value
+        return ast.LeaveStmt(name=name, line=tok.line)
+
+    def parse_next(self) -> ast.NextStmt:
+        tok = self.peek()
+        if tok.type != TokenType.IDENTIFIER or tok.value != "next":
+            raise ParseError("Expected 'next'", tok)
+        self.advance()
+        name = self.expect(TokenType.IDENTIFIER).value
+        return ast.NextStmt(name=name, line=tok.line)
+
     def parse_global(self) -> ast.GlobalStmt:
         """Parse global x := value - force assignment to module/global scope."""
         tok = self.expect(TokenType.GLOBAL)
@@ -730,6 +780,22 @@ class Parser:
         self.expect(TokenType.ASSIGN)
         value = self.parse_expr()
         return ast.GlobalStmt(name=name, value=value, line=tok.line)
+
+    def _parse_optional_line_label(self) -> str:
+        if not self.at(TokenType.IDENTIFIER):
+            return ""
+        next_tok = self._peek_next()
+        if next_tok is None or next_tok.type not in (TokenType.NEWLINE, TokenType.EOF):
+            return ""
+        return self.advance().value
+
+    def _parse_optional_loop_end_name(self) -> str:
+        if not self.at(TokenType.IDENTIFIER):
+            return ""
+        next_tok = self._peek_next()
+        if next_tok is not None and next_tok.type not in (TokenType.NEWLINE, TokenType.EOF):
+            raise ParseError("Expected newline after loop name", self.peek())
+        return self.advance().value
 
     def parse_const(self) -> ast.VarDecl:
         """Parse const NAME [: type] := value - immutable binding."""

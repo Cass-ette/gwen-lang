@@ -25,6 +25,8 @@ OFFICIAL_STDLIB_MODULES = {
         "split",
         "join",
         "substring",
+        "startswith",
+        "endswith",
         "contains",
         "trim",
         "replace",
@@ -46,7 +48,9 @@ OFFICIAL_STDLIB_MODULES = {
     ],
     "io": [
         "readfile",
+        "readdir",
         "writefile",
         "appendfile",
     ],
+    "path": [],
 }

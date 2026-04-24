@@ -28,6 +28,8 @@ BUILTIN_RUNTIME_RETURNS = {
     "filter": "list",
     "range": "list[int]",
     "enumerate": "list",
+    "startswith": "bool",
+    "endswith": "bool",
     "contains": "bool",
     "haskey": "bool",
     "abs": "float",
@@ -44,7 +46,8 @@ BUILTIN_RUNTIME_NAMES = {
     "split", "join", "pop", "removeat",
     "insert", "concat", "substring", "contains", "trim", "replace", "abs",
     "min", "max", "sqrt", "floor", "ceil", "haskey", "get", "keys",
-    "values", "items", "readfile", "writefile", "appendfile",
+    "values", "items", "readfile", "readdir", "writefile", "appendfile",
+    "startswith", "endswith",
 }
 
 
@@ -116,6 +119,12 @@ class CallableInfo:
     definition_scope: Optional["Scope"] = field(default=None, repr=False)
 
 
+@dataclass
+class ControlSignal:
+    kind: str
+    name: str = ""
+
+
 BUILTIN_SIGNATURES = {
     "write": CallableInfo(label="write", variadic=True),
     "read": CallableInfo(label="read", params=[ParamInfo(name="prompt", has_default=True)]),
@@ -140,6 +149,8 @@ BUILTIN_SIGNATURES = {
     "insert": CallableInfo(label="insert", params=[ParamInfo(name="lst"), ParamInfo(name="idx"), ParamInfo(name="item")]),
     "concat": CallableInfo(label="concat", params=[ParamInfo(name="a"), ParamInfo(name="b")]),
     "substring": CallableInfo(label="substring", params=[ParamInfo(name="s"), ParamInfo(name="start"), ParamInfo(name="end")]),
+    "startswith": CallableInfo(label="startswith", params=[ParamInfo(name="s", type_name="string"), ParamInfo(name="prefix", type_name="string")], return_type_name="bool"),
+    "endswith": CallableInfo(label="endswith", params=[ParamInfo(name="s", type_name="string"), ParamInfo(name="suffix", type_name="string")], return_type_name="bool"),
     "contains": CallableInfo(label="contains", params=[ParamInfo(name="s"), ParamInfo(name="substr")], return_type_name="bool"),
     "trim": CallableInfo(label="trim", params=[ParamInfo(name="s")]),
     "replace": CallableInfo(label="replace", params=[ParamInfo(name="s"), ParamInfo(name="old"), ParamInfo(name="new")]),
@@ -155,6 +166,7 @@ BUILTIN_SIGNATURES = {
     "values": CallableInfo(label="values", params=[ParamInfo(name="d")]),
     "items": CallableInfo(label="items", params=[ParamInfo(name="d")]),
     "readfile": CallableInfo(label="readfile", params=[ParamInfo(name="path")]),
+    "readdir": CallableInfo(label="readdir", params=[ParamInfo(name="path")]),
     "writefile": CallableInfo(label="writefile", params=[ParamInfo(name="path"), ParamInfo(name="content")]),
     "appendfile": CallableInfo(label="appendfile", params=[ParamInfo(name="path"), ParamInfo(name="content")]),
 }
@@ -183,6 +195,12 @@ def _module_stmt_label(stmt: Any) -> str:
         return "var block"
     if isinstance(stmt, ast.IfStmt):
         return "if"
+    if isinstance(stmt, ast.PassStmt):
+        return "pass"
+    if isinstance(stmt, ast.LeaveStmt):
+        return "leave"
+    if isinstance(stmt, ast.NextStmt):
+        return "next"
     if isinstance(stmt, ast.WhileStmt):
         return "while"
     if isinstance(stmt, (ast.ForRangeStmt, ast.ForEachStmt)):
@@ -210,6 +228,7 @@ class Scope:
         parent: Optional["Scope"] = None,
         method_self_type: Optional[str] = None,
         expected_return_types: Optional[List[str]] = None,
+        inherit_loops: bool = True,
     ):
         self.parent = parent
         self.values: Dict[str, ValueInfo] = {}
@@ -220,6 +239,7 @@ class Scope:
         if expected_return_types is None and parent is not None:
             expected_return_types = parent.expected_return_types
         self.expected_return_types = expected_return_types
+        self.loop_names: List[str] = list(parent.loop_names) if parent is not None and inherit_loops else []
 
     def define_value(self, name: str, value: ValueInfo):
         self.values[name] = value
@@ -246,6 +266,9 @@ class Scope:
 
     def resolve_local_alias(self, name: str) -> Optional[str]:
         return self.aliases.get(name)
+
+    def has_loop_name(self, name: str) -> bool:
+        return name in self.loop_names
 
 
 def _split_top_level(text: str, sep: str) -> List[str]:
@@ -347,6 +370,52 @@ class SemanticChecker:
                 if value is not None:
                     module_info.runtime_exports[export_name] = value
             self.modules[module_name] = module_info
+        self._add_stdlib_module_callable(
+            "path",
+            "basename",
+            ValueInfo(
+                kind="builtin",
+                return_type_name="string",
+                callable_info=CallableInfo(
+                    label="basename",
+                    params=[ParamInfo(name="path", type_name="string")],
+                    return_type_name="string",
+                ),
+            ),
+        )
+        self._add_stdlib_module_callable(
+            "path",
+            "dirname",
+            ValueInfo(
+                kind="builtin",
+                return_type_name="string",
+                callable_info=CallableInfo(
+                    label="dirname",
+                    params=[ParamInfo(name="path", type_name="string")],
+                    return_type_name="string",
+                ),
+            ),
+        )
+        self._add_stdlib_module_callable(
+            "path",
+            "joinpath",
+            ValueInfo(
+                kind="builtin",
+                return_type_name="string",
+                callable_info=CallableInfo(
+                    label="joinpath",
+                    params=[ParamInfo(name="left", type_name="string"), ParamInfo(name="right", type_name="string")],
+                    return_type_name="string",
+                ),
+            ),
+        )
+
+    def _add_stdlib_module_callable(self, module_name: str, export_name: str, value: ValueInfo):
+        module = self.modules.get(module_name)
+        if module is None:
+            module = ModuleInfo(name=module_name)
+            self.modules[module_name] = module
+        module.runtime_exports[export_name] = value
 
     def add_module_search_path(self, path: Optional[str]):
         if not path:
@@ -865,6 +934,19 @@ class SemanticChecker:
                 self._validate_return_stmt([value], scope, stmt.line)
             return
 
+        if isinstance(stmt, ast.PassStmt):
+            return
+
+        if isinstance(stmt, ast.LeaveStmt):
+            if not scope.has_loop_name(stmt.name):
+                raise SemanticError(f"leave targets unknown loop '{stmt.name}'", stmt.line)
+            return
+
+        if isinstance(stmt, ast.NextStmt):
+            if not scope.has_loop_name(stmt.name):
+                raise SemanticError(f"next targets unknown loop '{stmt.name}'", stmt.line)
+            return
+
         if isinstance(stmt, ast.IfStmt):
             self._check_expr(stmt.condition, scope, deferred)
             then_scope = Scope(parent=scope)
@@ -881,6 +963,8 @@ class SemanticChecker:
         if isinstance(stmt, ast.WhileStmt):
             self._check_expr(stmt.condition, scope, deferred)
             loop_scope = Scope(parent=scope)
+            if stmt.name:
+                loop_scope.loop_names.append(stmt.name)
             self._check_block(stmt.body, loop_scope, deferred)
             return
 
@@ -890,6 +974,8 @@ class SemanticChecker:
             if stmt.step is not None:
                 self._check_expr(stmt.step, scope, deferred)
             loop_scope = Scope(parent=scope)
+            if stmt.name:
+                loop_scope.loop_names.append(stmt.name)
             loop_scope.define_value(stmt.var, self._variable_value(None, loop_scope))
             self._check_block(stmt.body, loop_scope, deferred)
             return
@@ -897,6 +983,8 @@ class SemanticChecker:
         if isinstance(stmt, ast.ForEachStmt):
             self._check_expr(stmt.iterable, scope, deferred)
             loop_scope = Scope(parent=scope)
+            if stmt.name:
+                loop_scope.loop_names.append(stmt.name)
             loop_scope.define_value(stmt.var, self._variable_value(None, loop_scope))
             if stmt.index_var:
                 loop_scope.define_value(stmt.index_var, self._variable_value("int", loop_scope))
@@ -996,7 +1084,7 @@ class SemanticChecker:
             return
 
         if isinstance(stmt, ast.ParallelStmt):
-            parallel_scope = Scope(parent=scope)
+            parallel_scope = Scope(parent=scope, inherit_loops=False)
             self._check_block(stmt.body, parallel_scope, deferred)
             if stmt.result_var:
                 scope.define_value(stmt.result_var, self._variable_value("list", scope))
@@ -1064,7 +1152,7 @@ class SemanticChecker:
     def _check_function_body(self, stmt: ast.FuncDef, closure_scope: Scope):
         self._validate_return_annotation(stmt.return_type, closure_scope, stmt.line)
         expected_return_types = self._resolve_return_type_names(stmt.return_type, closure_scope, stmt.line)
-        body_scope = Scope(parent=closure_scope, expected_return_types=expected_return_types)
+        body_scope = Scope(parent=closure_scope, expected_return_types=expected_return_types, inherit_loops=False)
         for param in stmt.params:
             if param.type_name is not None:
                 self._resolve_type_node(param.type_name, closure_scope, param.line)
@@ -1104,6 +1192,7 @@ class SemanticChecker:
             parent=closure_scope,
             method_self_type=obj_info.name,
             expected_return_types=expected_return_types,
+            inherit_loops=False,
         )
         body_scope.define_value("self", self._variable_value(obj_info.name, closure_scope, callable_label="self"))
         for param in method.params[1:]:
@@ -1126,7 +1215,7 @@ class SemanticChecker:
         if ctor.return_type is not None:
             self._resolve_type_node(ctor.return_type, closure_scope, ctor.line)
         expected_return_types = [obj_info.name]
-        body_scope = Scope(parent=closure_scope, expected_return_types=expected_return_types)
+        body_scope = Scope(parent=closure_scope, expected_return_types=expected_return_types, inherit_loops=False)
         for param in ctor.params:
             if param.type_name is not None:
                 self._resolve_type_node(param.type_name, closure_scope, param.line)
@@ -1490,6 +1579,27 @@ class SemanticChecker:
             return expected == actual
         return False
 
+    def _is_explicit_precision_type(self, type_name: str) -> bool:
+        return type_name in {
+            "int8", "int16", "int32", "int64",
+            "uint8", "uint16", "uint32", "uint64",
+            "float32", "float64",
+        }
+
+    def _is_arithmetic_op(self, op: str) -> bool:
+        return op in {"+", "-", "*", "/", "mod", "^"}
+
+    def _is_mixed_explicit_precision(self, left_type: str, right_type: str) -> bool:
+        int_types = {"int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
+        float_types = {"float", "float32", "float64"}
+        return (
+            left_type != right_type
+            and self._is_explicit_precision_type(left_type)
+            and self._is_explicit_precision_type(right_type)
+            and (left_type in int_types or left_type in float_types)
+            and (right_type in int_types or right_type in float_types)
+        )
+
     def _check_expr(
         self,
         expr: Any,
@@ -1553,10 +1663,20 @@ class SemanticChecker:
         if isinstance(expr, ast.BinaryOp):
             left = self._check_expr(expr.left, scope, deferred)
             right = self._check_expr(expr.right, scope, deferred)
-            if expr.op in ("=", "!=", "<", ">", "<=", ">=", "and", "or"):
-                return ValueInfo(kind="literal", type_name="bool")
             left_type = self._value_type_name(left, scope)
             right_type = self._value_type_name(right, scope)
+            if (
+                self._is_arithmetic_op(expr.op)
+                and left_type is not None
+                and right_type is not None
+                and self._is_mixed_explicit_precision(left_type, right_type)
+            ):
+                raise SemanticError(
+                    f"mixed precision operation '{expr.op}' requires explicit conversion: {left_type} and {right_type}",
+                    expr.line,
+                )
+            if expr.op in ("=", "!=", "<", ">", "<=", ">=", "and", "or"):
+                return ValueInfo(kind="literal", type_name="bool")
             if left_type is not None and right_type is not None:
                 int_types = {"int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
                 float_types = {"float", "float32", "float64"}
@@ -1666,7 +1786,7 @@ class SemanticChecker:
         raise SemanticError(f"Unknown expression type: {type(expr).__name__}", getattr(expr, "line", 0))
 
     def _check_lambda_body(self, expr: ast.Lambda, closure_scope: Scope):
-        body_scope = Scope(parent=closure_scope)
+        body_scope = Scope(parent=closure_scope, inherit_loops=False)
         body_scope.expected_return_types = None
         for param in expr.params:
             if param.type_name is not None:

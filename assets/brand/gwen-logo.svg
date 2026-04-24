@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Gwen language logo">
+  <title>Gwen</title>
+
+  <defs>
+    <style type="text/css"><![CDATA[
+      @import url('https://fonts.googleapis.com/css2?family=Anton&display=swap');
+      .gwen-mark { font-family: 'Anton', Impact, 'Haettenschweiler', 'Arial Narrow Bold', sans-serif; }
+    ]]></style>
+  </defs>
+
+  <rect x="56" y="346" width="296" height="22" fill="#DC052D" transform="rotate(4 56 357)"/>
+
+  <text x="256" y="300"
+        class="gwen-mark"
+        font-weight="400"
+        font-size="230"
+        letter-spacing="-2"
+        text-anchor="middle">
+    <tspan fill="#0066B2">GW</tspan><tspan fill="#DC052D">E</tspan><tspan fill="#0066B2">N</tspan>
+  </text>
+</svg>

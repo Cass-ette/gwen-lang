@@ -3,19 +3,19 @@
 // Module-level counter
 call_count: int := 0
 
-func increment()
+func increment() -> int
   // Without global: creates local variable (same name as module-level)
   call_count := call_count + 1  // local call_count = 0 + 1 = 1
   return call_count
 endfunc
 
-func counter_maker()
+func counter_maker() -> int
   // Create a counter using global to modify shared state
   global call_count := call_count + 1  // modifies module-level
   return call_count
 endfunc
 
-func outer()
+func outer() -> int
   // Local variable shadowing module-level
   shared: int := 10
 

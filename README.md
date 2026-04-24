@@ -1,62 +1,45 @@
+[中文 README](README.zh.md)
+
 # Gwen
 
-Gwen is an audit-friendly, math-intuitive programming language designed for backend development and DevOps automation.
+Gwen is a language project for backend and automation work.
 
-Current implementation status: Python reference implementation for the frozen `v0.1` front-end surface.
+This repository currently has two active tracks:
 
-## Design Philosophy
+- a runnable Go bootstrap implementation
+- a compiler path that can already produce native executables
 
-- **Audit-first** — In the age of AI-generated code, readability and auditability come first
-- **Math-intuitive** — Syntax follows mathematical conventions; accessible with math and English basics
-- **Explicit over implicit** — Errors must be handled, interfaces must be marked, parallelism must be declared
-- **Natural but not verbose** — More concise than Pascal, more natural than C
+## Current State
+
+- `cmd/gwen` is the main CLI
+- `gwen run/check/repl/build/emit-c` are available
+- the interpreter, checker, frontend, and C emitter all live in this repo
+- `examples/` already contains real programs: HTTP, SQLite, docs site, rules app, ledger app
+- the older Python reference implementation is still kept in-tree, but the main line is now the Go implementation
 
 ## Quick Start
 
 ```bash
-python3 -m pip install -e .
-
-gwen --version
-gwen examples/hello.gw
-gwen check examples/hello.gw
-gwen repl
-
-# legacy invocation still works
-python3 -m gwen examples/hello.gw
+go run ./cmd/gwen --version
+go run ./cmd/gwen run examples/hello.gw
+go run ./cmd/gwen check examples/hello.gw
+go run ./cmd/gwen repl
 ```
 
-## Share With A Friend
-
-If you want someone else to try Gwen quickly and read a real project, send them the repo and point them to [TRY_GWEN.md](TRY_GWEN.md).
-
-- macOS / Linux: `./scripts/try_ledger_app.sh`
-- Windows PowerShell: `powershell -ExecutionPolicy Bypass -File .\scripts\try_ledger_app.ps1`
-
-### VSCode Extension
-
-Gwen has a VSCode extension for syntax highlighting and snippets:
+If you want to go through the compiled path, you need `cc` in `PATH`:
 
 ```bash
-cd vscode-extension
-./install.sh
+go run ./cmd/gwen build examples/hello.gw -o /tmp/gwen-hello
+/tmp/gwen-hello
 ```
 
-Features:
-- Syntax highlighting for `.gw` files
-- Code snippets (func, if, while, for, match, etc.)
-- Auto-indentation based on block structure
-- Comment toggling with `Cmd+/` / `Ctrl+/`
+If you only want to inspect generated C:
 
-## Language Features
-
-### Variables & Types
-
-```gwen
-x := 42            // inferred
-x: int := 42       // explicit type
+```bash
+go run ./cmd/gwen emit-c examples/hello.gw
 ```
 
-### Functions
+## Small Example
 
 ```gwen
 func gcd(a: int, b: int) -> int
@@ -65,152 +48,108 @@ func gcd(a: int, b: int) -> int
   endwhile
   return a
 endfunc
-```
 
-### Control Flow
-
-```gwen
-if x > 0 then
-  do_a()
-elif x = 0 then
-  do_b()
-else
-  do_c()
-endif
-
-while b != 0 do
-  b := b - 1
-endwhile
-
-for i in 1 to 10 do
-  write(i)
-endfor
-
-for i in 1 to 10 step 2 do
-  write(i)
-endfor
-
-for item in list with index i do
-  write(i, item)
-endfor
-```
-
-### Pattern Matching
-
-```gwen
-match x
-  when 1 => do_a()
-  when 2, 3 => do_b()
-  when 4 to 10 => do_c()
-  else do_d()
-endmatch
-```
-
-### Error Handling (Result type)
-
-```gwen
-match readfile("config.txt")
-  when ok(data) =>
-    write(data)
-  when err(e) =>
-    write("Error:", e)
-endmatch
-```
-
-### Modules
-
-```gwen
-module math_utils
-
-export func gcd(a: int, b: int) -> int
-  // ...
-endfunc
-
-endmodule
-
-use gcd from math_utils
-use math_utils
-```
-
-### Parallel Syntax
-
-```gwen
-parallel do
-  deploy(server1)
-  deploy(server2)
-endparallel
-
-parallel allowfail => results do
-  check(server1)
-  check(server2)
-endparallel
-```
-
-In the current Python reference implementation, `parallel` syntax and failure handling are frozen, but execution is still sequential. Real parallel runtime behavior is a later compiler/runtime-stage feature.
-
-### Navigation Tags
-
-```gwen
-func deploy(config: Config)
-
-  @validate
-  check_config(config)
-
-  @build
-  build_project()
-
-  @push
-  push_to_server()
-
+func main()
+  write(gcd(48, 18))
 endfunc
 ```
 
-## Implementation
+Some basic Gwen surface rules:
 
-Gwen is implemented in Python as a tree-walk interpreter:
+- blocks close explicitly: `endif/endwhile/endfor/endfunc`
+- errors use `result[...]` with `match ok/err`
+- scope is local by default; outer mutation must use `global`
+- concurrency must be written explicitly as `parallel`
 
-- `gwen/lexer.py` — Tokenizer
-- `gwen/ast_nodes.py` — AST node definitions
-- `gwen/parser.py` — Recursive descent parser
-- `gwen/checker.py` — Pre-execution semantic checker
-- `gwen/interpreter.py` — Tree-walk interpreter
-- `gwen/stdlib_catalog.py` — Official stdlib module surface
+## What To Try First
 
-## Running Tests
+### Hello
 
 ```bash
+go run ./cmd/gwen run examples/hello.gw
+```
+
+### HTTP Example
+
+```bash
+go run ./cmd/gwen run examples/http_server.gw
+```
+
+Then open:
+
+- `http://127.0.0.1:8080/`
+- `http://127.0.0.1:8080/api/hello/Ada?lang=zh`
+- `http://127.0.0.1:8080/assets/app.css`
+
+### Session Notes
+
+```bash
+go run ./cmd/gwen run examples/session_notes.gw
+```
+
+Then open:
+
+- `http://127.0.0.1:8082/`
+- `http://127.0.0.1:8082/login/Ada`
+- `http://127.0.0.1:8082/api/me`
+
+### Docs Site Prototype
+
+```bash
+go run ./cmd/gwen run examples/docs_site/main.gw
+```
+
+Then open:
+
+- `http://127.0.0.1:8090/`
+- `http://127.0.0.1:8090/api/health`
+- `http://127.0.0.1:8090/api/site/en`
+
+The site reads repository Markdown and Gwen source files directly.
+
+## VSCode
+
+The repository includes a minimal VSCode extension with:
+
+- `.gw` syntax highlighting
+- basic snippets
+- block-aware indentation and comment config
+
+See [vscode-extension/README.md](vscode-extension/README.md) for installation.
+
+## How To Read This Repo
+
+- [docs/README.en.md](docs/README.en.md)
+  docs index for readers who want an English entry page
+- [docs/syntax.md](docs/syntax.md)
+  language surface
+- [docs/types.md](docs/types.md)
+  type system
+- [docs/stdlib.md](docs/stdlib.md)
+  current stdlib boundary
+- [docs/compiler.en.md](docs/compiler.en.md)
+  compiler path and current backend boundary
+- [docs/philosophy.en.md](docs/philosophy.en.md)
+  the design filter Gwen uses for new features
+- [docs/tracking.md](docs/tracking.md)
+  implementation tracking
+
+## Layout
+
+```text
+gwen-lang/
+├── cmd/gwen/           # CLI
+├── internal/           # Go implementation
+├── gwen/               # Older Python reference implementation
+├── docs/               # Language docs
+├── examples/           # Example programs
+├── tests/              # Python-side tests and self-checks
+└── vscode-extension/   # VSCode extension
+```
+
+## Tests
+
+```bash
+go test ./...
 pytest
 ```
-
-## File Extension
-
-`.gw`
-
-## Project Structure
-
-```
-gwen-lang/
-├── gwen/              # Interpreter implementation
-│   ├── lexer.py
-│   ├── parser.py
-│   ├── interpreter.py
-│   └── ast_nodes.py
-├── docs/              # Language documentation
-│   ├── syntax.md
-│   ├── types.md
-│   ├── scope.md
-│   └── ...
-├── examples/          # Example programs
-├── tests/             # Test suite
-└── vscode-extension/  # VSCode extension
-```
-
-## Documentation
-
-- [docs/README.md](docs/README.md) — Documentation index
-- [docs/syntax.md](docs/syntax.md) — Syntax reference
-- [docs/types.md](docs/types.md) — Type system
-- [docs/scope.md](docs/scope.md) — Variable scoping
-- [docs/modules.md](docs/modules.md) — Module system
-- [docs/stdlib.md](docs/stdlib.md) — Stdlib boundary and import shape
-- [docs/tracking.md](docs/tracking.md) — Implementation status
