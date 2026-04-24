@@ -2,6 +2,14 @@
 
 VSCode extension for the current Gwen `v0.1` language surface.
 
+Gwen itself is currently in this state:
+
+- the main implementation is written in Go
+- `gwen run/check/repl` use the Go frontend and runtime
+- `gwen build` lowers Gwen through HIR and MIR, emits C, then calls the host C compiler
+
+This extension does not change that pipeline. It only provides editor support.
+
 ## Features
 
 - Syntax highlighting for current Gwen keywords and block forms:
@@ -32,6 +40,26 @@ code --install-extension gwen-lang-0.1.0.vsix
 1. Open `vscode-extension/` in VSCode
 2. Press `F5` to launch an Extension Development Host
 3. Open any `.gw` file and verify highlighting/snippets
+
+## Running Gwen Files
+
+The extension itself does not contribute a debugger or runtime adapter.
+
+In this repository, the checked-in workspace config exposes these commands in VSCode:
+
+- `Run Gwen File`
+- `Check Gwen File`
+- `Build Gwen File`
+
+They currently run the Go CLI:
+
+```bash
+go run ./cmd/gwen run <file>
+go run ./cmd/gwen check <file>
+go run ./cmd/gwen build <file>
+```
+
+That repository-level `.vscode/` setup is separate from the extension package.
 
 ## Snippets
 
@@ -79,4 +107,5 @@ endfunc
 
 - This extension currently provides syntax highlighting, comments, snippets, and indentation rules.
 - It does **not** ship a language server, formatter, or debugger.
+- It does **not** mean Gwen is already a pure C implementation. The current shipped toolchain is Go frontend/runtime plus a C-emitting build path.
 - Gwen still allows many stdlib-style builtins to be used directly, but the extension also highlights the recommended `use ... from list/string/math/dict/io` style.

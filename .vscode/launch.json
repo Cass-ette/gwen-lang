@@ -5,7 +5,21 @@
       "name": "Run Gwen File",
       "type": "node-terminal",
       "request": "launch",
-      "command": "python -m gwen ${file}",
+      "command": "go run ./cmd/gwen run \"${file}\"",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Check Gwen File",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "go run ./cmd/gwen check \"${file}\"",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Build Gwen File",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "go run ./cmd/gwen build \"${file}\"",
       "cwd": "${workspaceFolder}"
     }
   ]

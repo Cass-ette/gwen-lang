@@ -1,6 +1,6 @@
 {
   "code-runner.executorMap": {
-    "gwen": "cd $dir && python -m gwen $fileName"
+    "gwen": "cd $workspaceRoot && go run ./cmd/gwen run \"$fullFileName\""
   },
   "code-runner.runInTerminal": true
 }
