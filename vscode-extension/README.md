@@ -1,6 +1,6 @@
 # Gwen Language Support for VSCode
 
-VSCode extension for the current Gwen `v0.1` language surface.
+VSCode extension for the current Gwen `v0.2` language surface.
 
 Gwen itself is currently in this state:
 
@@ -32,7 +32,7 @@ This extension does not change that pipeline. It only provides editor support.
 cd vscode-extension
 npm install -g @vscode/vsce
 vsce package
-code --install-extension gwen-lang-0.1.0.vsix
+code --install-extension gwen-lang-0.2.0.vsix
 ```
 
 ### Development Mode
