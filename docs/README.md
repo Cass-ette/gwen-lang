@@ -26,6 +26,8 @@
 
 - [compiler.md](./compiler.md)
 - [tracking.md](./tracking.md)
+- [release.md](./release.md)
+  release checklist，给维护者和 agent 使用
 
 ## 文档列表
 

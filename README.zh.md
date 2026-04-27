@@ -4,7 +4,7 @@
 
 Gwen 是一门面向后端与自动化场景的语言。
 
-这个仓库里现在有两条主线：
+这个仓库里现在保留两条实现线：
 
 - 一套可运行的 Go bootstrap 实现
 - 一条能产出原生可执行文件的编译路径
@@ -16,6 +16,24 @@ Gwen 是一门面向后端与自动化场景的语言。
 - 解释器、checker、前端、C emitter 都在仓库内
 - `examples/` 里已经有 HTTP、SQLite、docs site、rules app、ledger app 等真实示例
 - 旧的 Python 参考实现仍保留在仓库里，但当前主线是 Go 实现
+
+## 版本线
+
+| 版本线 | 实现 | 含义 |
+|--------|------|------|
+| `v0.1.0` | Python | 参考实现，保留用于历史对照。 |
+| `v0.2.x` | Go | 当前主线实现，同时有解释路径和编译路径。 |
+
+## 给 AI Agent
+
+如果你是刚进入这个仓库的 AI coding agent，先读 [AGENTS.md](AGENTS.md)。
+
+默认判断是：
+
+- 当前主线工作优先看 Go 实现
+- Python 实现是 `v0.1.0` 参考线
+- 改语言行为前先读 [docs/philosophy.md](docs/philosophy.md)
+- 声称完成前先跑最小相关验证
 
 ## 快速开始
 

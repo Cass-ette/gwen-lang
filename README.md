@@ -4,7 +4,7 @@
 
 Gwen is a language project for backend and automation work.
 
-This repository currently has two active tracks:
+This repository currently contains two implementation lines:
 
 - a runnable Go bootstrap implementation
 - a compiler path that can already produce native executables
@@ -16,6 +16,24 @@ This repository currently has two active tracks:
 - the interpreter, checker, frontend, and C emitter all live in this repo
 - `examples/` already contains real programs: HTTP, SQLite, docs site, rules app, ledger app
 - the older Python reference implementation is still kept in-tree, but the main line is now the Go implementation
+
+## Release Lines
+
+| Version line | Implementation | Meaning |
+|--------------|----------------|---------|
+| `v0.1.0` | Python | Reference implementation kept for history and comparison. |
+| `v0.2.x` | Go | Current mainline implementation with interpreter and compiler paths. |
+
+## For AI Agents
+
+If you are an AI coding agent entering this repository, start with [AGENTS.md](AGENTS.md).
+
+The important defaults are:
+
+- use the Go implementation for current-line work
+- treat the Python implementation as the `v0.1.0` reference line
+- read [docs/philosophy.en.md](docs/philosophy.en.md) before changing language behavior
+- run the smallest relevant validation before claiming success
 
 ## Quick Start
 

@@ -28,6 +28,8 @@ If you care about the implementation and compiler path, read:
 
 - [compiler.en.md](./compiler.en.md)
 - [tracking.md](./tracking.md)
+- [release.md](./release.md)
+  release checklist for maintainers and agents
 
 ## What Each File Is For
 
