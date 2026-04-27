@@ -32,7 +32,7 @@ This extension does not change that pipeline. It only provides editor support.
 cd vscode-extension
 npm install -g @vscode/vsce
 vsce package
-code --install-extension gwen-lang-0.2.0.vsix
+code --install-extension gwen-lang-0.2.1.vsix
 ```
 
 ### Development Mode

@@ -2,9 +2,9 @@
 
 ## Unreleased
 
-### v0.2.1 - AI onboarding and release hygiene
+## v0.2.1 - AI onboarding and release hygiene
 
-Planned patch release focused on documentation and repository confidence:
+Patch release focused on documentation and repository confidence:
 
 - add an AI agent guide for first-contact repository navigation
 - document the Python `v0.1.0` reference line versus the Go `v0.2.x` mainline
